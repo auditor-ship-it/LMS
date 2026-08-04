@@ -1,0 +1,56 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-md);
+  font-family: var(--f-display);
+  font-weight: 700;
+  line-height: 1;
+  min-height: 40px;
+  position: relative;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-instant) var(--ease-out);
+  white-space: nowrap;
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled:not(.loading) { cursor: not-allowed; background: var(--surface-2); color: var(--text-3); border-color: transparent; }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--focus); }
+
+.loading { color: transparent !important; pointer-events: none; }
+.loading::after {
+  content: '';
+  position: absolute;
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  color: var(--on-accent);
+  animation: btnspin .7s linear infinite;
+}
+.secondary.loading::after, .ghost.loading::after { color: var(--accent); }
+.accent.loading::after { color: var(--on-amber); }
+@keyframes btnspin { to { transform: rotate(360deg); } }
+
+.md { padding: 11px 17px; font-size: 13px; }
+.sm { padding: 8px 13px; font-size: 12px; min-height: 32px; }
+.lg { padding: 14px 22px; font-size: 14.5px; min-height: 48px; }
+
+.primary { background: var(--accent); color: var(--on-accent); }
+.primary:not(:disabled):hover { background: var(--accent-hover); box-shadow: var(--shadow-2); }
+.primary:not(:disabled):active { background: var(--accent-press); }
+
+.secondary { background: transparent; color: var(--accent); border-color: var(--accent); }
+.secondary:not(:disabled):hover { background: var(--accent-soft); }
+.secondary:not(:disabled):active { background: var(--accent-soft-2); }
+
+.ghost { background: transparent; color: var(--accent); }
+.ghost:not(:disabled):hover { background: var(--accent-soft); }
+
+.accent { background: var(--amber-c); color: var(--on-amber); }
+.accent:not(:disabled):hover { background: #E8B30C; box-shadow: var(--shadow-2); }
+.accent:not(:disabled):active { background: #D2A20A; }
+
+.danger { background: var(--error); color: var(--on-accent); }
+.danger:not(:disabled):hover { filter: brightness(.93); box-shadow: var(--shadow-2); }

@@ -1,0 +1,15 @@
+.body { display: flex; align-items: flex-start; gap: 12px; }
+.message { font-size: 13px; color: var(--text-2); margin: 0 0 4px; line-height: 1.55; }
+.footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+.warnMark {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--error-bg);
+  color: var(--error);
+}

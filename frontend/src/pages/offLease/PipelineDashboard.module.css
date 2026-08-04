@@ -1,0 +1,80 @@
+/* KPI band uses the shared StatCard component — this row only sets the grid. */
+.kpiRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+
+.table thead th {
+  text-align: left;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--f-display);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+
+.table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover td { background: var(--surface-2); }
+
+.leaseId { font-family: var(--f-mono); color: var(--text-2); }
+.container { font-family: var(--f-mono); font-weight: 600; }
+
+.actionCell { text-align: right; white-space: nowrap; }
+.doneTag { color: var(--success); font-weight: 600; font-size: 12.5px; }
+.rejectedTag { color: var(--error); font-weight: 600; font-size: 12.5px; }
+
+/* Compact inline stepper — 9 segments (Stage 1, Approval gate, Stage 2..8)
+   joined by a thin connector line, same status language (done/current/
+   future) as LookupResult's full-size StageCard/GateCard board — but as a
+   real connected track (dot + fill line), not colored text pills, and no
+   visible labels so the table row stays single-line/dense (full stage name
+   is on hover via title=""). */
+.pipeline {
+  display: inline-flex;
+  align-items: center;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.dotDone { border-color: var(--success); background: var(--success); }
+.dotCurrent { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dotFuture { border-color: var(--line); background: var(--surface); }
+.dotRejected { border-color: var(--error); background: var(--error); }
+
+.line {
+  width: 12px;
+  height: 2px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+
+.lineDone { background: var(--success); }

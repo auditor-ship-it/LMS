@@ -1,0 +1,50 @@
+.overlay {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--navy);
+  padding: 20px;
+}
+.card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-4);
+  border: 1px solid var(--line);
+  padding: 36px;
+  width: 100%;
+  max-width: 400px;
+}
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; }
+.brandIcon {
+  width: 34px; height: 34px;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.brand h1 { font-family: var(--f-display); font-size: 17px; font-weight: 800; color: var(--text); }
+.form { display: flex; flex-direction: column; gap: 6px; }
+.form label {
+  font-family: var(--f-display);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 10px;
+}
+.form input {
+  padding: 10px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.form button[type='submit'] { margin-top: 18px; }
+.error { color: var(--error); font-size: 12px; font-weight: 600; margin-top: 8px; }
+.hint { font-size: 12px; color: var(--text-2); margin-bottom: 4px; }
+.linkBtn { background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 700; margin-top: 12px; text-align: center; }

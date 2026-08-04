@@ -1,0 +1,10 @@
+.bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.filter { display: flex; flex-direction: column; gap: 6px; }
+.label {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  font-weight: 500;
+  color: var(--text-3);
+}

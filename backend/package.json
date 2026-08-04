@@ -1,0 +1,23 @@
+{
+  "name": "lease-management-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lease Management System — standalone Express/Node backend (independent of the shared backend/ and frontend/ apps).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "googleapis": "^144.0.0",
+    "mongodb": "^6.11.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

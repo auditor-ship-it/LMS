@@ -1,0 +1,15 @@
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+/* Stat tiles use the shared StatCard component (design system section 25
+   "Cards" — tinted stat-card variant) — this grid only sets the layout. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.paginationWrap { margin-top: 16px; }

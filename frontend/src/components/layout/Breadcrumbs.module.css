@@ -1,0 +1,13 @@
+.wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-family: var(--f-body);
+  font-size: 12.5px;
+  margin-bottom: 14px;
+}
+.segment { display: inline-flex; align-items: center; }
+.homeIcon { color: var(--text-3); }
+.sep { margin: 0 5px; color: var(--text-3); }
+.crumb { color: var(--text-2); font-weight: 500; margin-left: 5px; }
+.current { color: var(--accent); font-weight: 700; margin-left: 5px; }

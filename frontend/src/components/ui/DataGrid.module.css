@@ -1,0 +1,31 @@
+.scrollWrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+}
+.table { width: 100%; font-size: 12.5px; white-space: nowrap; }
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--f-mono);
+  text-transform: uppercase;
+  font-size: 9.5px;
+  letter-spacing: 0.9px;
+  font-weight: 700;
+  padding: 10px 13px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.table tbody td {
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+.table tbody tr { transition: background var(--dur-fast) var(--ease-out); }
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover td { background: var(--surface-2); }
+.actionsCol { white-space: nowrap; width: 1%; text-align: center; }

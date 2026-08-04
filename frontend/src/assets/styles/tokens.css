@@ -1,0 +1,122 @@
+/**
+ * Crystal Design System tokens, ported from crystal-design-system.html.
+ * Legacy variable names (--slate-*, --blue-*, --bg-app, --radius-sm, etc.)
+ * are kept and aliased onto the new tokens so every existing CSS module
+ * picks up the new palette/type/radii without edits — components get
+ * migrated to reference the new names directly in later passes.
+ */
+:root {
+  /* brand */
+  --navy: #052379;
+  --amber: #FBC213;
+  --black: #010101;
+  --white: #FFFFFF;
+  --navy-lift: #6E86D6; /* dark-mode navy */
+
+  /* radius */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-full: 999px;
+
+  /* spacing — 8px base */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+
+  /* motion */
+  --dur-instant: 80ms; --dur-fast: 140ms; --dur-base: 220ms; --dur-slow: 340ms;
+  --ease-out: cubic-bezier(.22,.75,.28,1);
+  --ease-in-out: cubic-bezier(.6,0,.35,1);
+  --ease-spring: cubic-bezier(.34,1.4,.5,1);
+
+  /* z-index scale */
+  --z-base: 0; --z-sticky: 100; --z-dropdown: 400; --z-drawer: 700;
+  --z-modal: 800; --z-toast: 900; --z-tooltip: 1000;
+
+  /* type */
+  --f-display: 'Manrope', system-ui, sans-serif;
+  --f-body: 'Inter', system-ui, sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+[data-theme="light"] {
+  --bg: #F7F8FB; --surface: #FFFFFF; --surface-2: #F2F4F8; --surface-3: #EAECF2;
+  --text: #010101; --text-2: #6B7280; --text-3: #9CA3AF; --text-inv: #FFFFFF;
+  --line: #E4E7EE; --line-strong: #C9CFDC;
+  --accent: #052379; --accent-hover: #031A5C; --accent-press: #02123F;
+  --accent-soft: #EAF0FB; --accent-soft-2: #DCE5F7; --on-accent: #FFFFFF;
+  --amber-c: #FBC213; --amber-soft: #FFF6DD; --on-amber: #010101;
+  --success: #1E8E3E; --success-bg: #E8F5EA;
+  --error: #D93025; --error-bg: #FDECEA;
+  --warn: #B8860B; --warn-bg: #FFF6DD;
+  --info: #1A73E8; --info-bg: #E8F0FE;
+  --shadow-1: 0 1px 2px rgba(5,35,121,.06);
+  --shadow-2: 0 2px 8px rgba(5,35,121,.08);
+  --shadow-3: 0 6px 16px rgba(5,35,121,.12);
+  --shadow-4: 0 12px 28px rgba(5,35,121,.16);
+  --skel-a: #E7EAF1; --skel-b: #F3F5F9;
+  --scrim: rgba(5,35,121,.34);
+  --focus: #052379;
+}
+[data-theme="dark"] {
+  --bg: #0B1330; --surface: #131B3E; --surface-2: #1B2450; --surface-3: #232D63;
+  --text: #F2F4FA; --text-2: rgba(242,244,250,.64); --text-3: rgba(242,244,250,.40); --text-inv: #0B1330;
+  --line: rgba(255,255,255,.11); --line-strong: rgba(255,255,255,.22);
+  --accent: #6E86D6; --accent-hover: #8298DF; --accent-press: #5C74C6;
+  --accent-soft: rgba(110,134,214,.17); --accent-soft-2: rgba(110,134,214,.28); --on-accent: #0B1330;
+  --amber-c: #FBC213; --amber-soft: rgba(251,194,19,.16); --on-amber: #010101;
+  --success: #81C995; --success-bg: rgba(30,142,62,.18);
+  --error: #F28B82; --error-bg: rgba(217,48,37,.18);
+  --warn: #FDD663; --warn-bg: rgba(251,194,19,.15);
+  --info: #8AB4F8; --info-bg: rgba(26,115,232,.18);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 2px 8px rgba(0,0,0,.40);
+  --shadow-3: 0 6px 16px rgba(0,0,0,.48);
+  --shadow-4: 0 12px 28px rgba(0,0,0,.55);
+  --skel-a: #1E2748; --skel-b: #2A3563;
+  --scrim: rgba(2,6,20,.62);
+  --focus: #8DA2E8;
+}
+
+/* index.html sets data-theme on <html> before first paint (see useTheme.js for the toggle). */
+html[data-theme] { color-scheme: light dark; }
+
+:root {
+  /* ---- legacy names every existing component still references ----
+     Aliased onto the tokens above so the whole app re-themes from here. */
+  --slate-50: var(--bg);
+  --slate-100: var(--surface-2);
+  --slate-200: var(--surface-3);
+  --slate-300: var(--line-strong);
+  --slate-400: var(--text-3);
+  --slate-500: var(--text-2);
+  --slate-600: var(--text-2);
+  --slate-700: var(--text);
+  --slate-800: var(--text);
+  --slate-900: var(--navy);
+
+  --blue-500: var(--accent);
+  --blue-600: var(--accent);
+  --green-500: var(--success);
+  --green-600: var(--success);
+  --red-500: var(--error);
+  --red-600: var(--error);
+  --amber-500: var(--warn);
+  --amber-600: var(--warn);
+  --orange-600: var(--warn);
+  --violet-600: var(--accent);
+
+  --font-sans: var(--f-body);
+
+  --bg-app: var(--bg);
+  --bg-card: var(--surface);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-2);
+  --text-muted: var(--text-3);
+  --border-color: var(--line);
+
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --shadow-card: var(--shadow-1);
+  --shadow-modal: var(--shadow-4);
+}

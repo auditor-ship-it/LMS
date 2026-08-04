@@ -1,0 +1,106 @@
+.wrap { display: flex; flex-direction: column; gap: 18px; }
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.container { font-size: 20px; font-weight: 800; color: var(--text); }
+.client { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+.stagePill {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px;
+}
+.item { display: flex; flex-direction: column; gap: 3px; }
+.label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 700; color: var(--text-3); }
+.value { font-size: 13px; font-weight: 600; color: var(--text); word-break: break-word; }
+
+.sectionTitle { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-3); margin: 4px 0 0; }
+
+/* Off-Lease Progress — one card per stage + the Intimation Approval gate. */
+.progressRow {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.stageCard {
+  flex: 0 0 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.gateCard { flex-basis: 150px; }
+.stageCardLabel { font-family: var(--f-mono); font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-3); }
+.stageCardTitle { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.stageCardStatus { font-size: 11px; font-weight: 600; }
+.stageCardMeta { font-size: 10px; color: var(--text-3); word-break: break-word; }
+
+.cardDone { border-color: var(--success); background: var(--success-bg); }
+.cardDone .stageCardLabel, .cardDone .stageCardStatus { color: var(--success); }
+.cardCurrent { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cardCurrent .stageCardLabel, .cardCurrent .stageCardStatus { color: var(--accent); }
+.cardRejected { border-color: var(--error); background: var(--error-bg); }
+.cardRejected .stageCardLabel, .cardRejected .stageCardStatus { color: var(--error); }
+.cardLocked { opacity: 0.6; }
+.cardLocked .stageCardStatus { color: var(--text-3); }
+
+/* Filled Stage Data — one expanded card per completed stage. */
+.filledStack { display: flex; flex-direction: column; gap: 12px; }
+.filledCard {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.filledHeader {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.filledBadge {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.filledTitle { font-size: 13px; font-weight: 800; color: var(--text); }
+.filledStatus {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  background: var(--success-bg);
+  color: var(--success);
+}
+.filledMeta { margin-left: auto; font-size: 11px; color: var(--text-3); }
+.filledGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 14px;
+  padding: 14px;
+}
+.filledEmpty { padding: 14px; margin: 0; font-size: 12px; color: var(--text-3); }

@@ -1,0 +1,12 @@
+.ic {
+  width: 20px; height: 20px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+.sm { width: 15px; height: 15px; }
+.lg { width: 24px; height: 24px; }
+.xl { width: 30px; height: 30px; }

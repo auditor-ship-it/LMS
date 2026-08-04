@@ -1,0 +1,71 @@
+/* Design system section 25 (Cards) — "Stat cards" / "Tinted cards" anatomy.
+   Card padding 15px, grid gap 12px (grid lives in each page's own CSS since
+   column counts differ per page), hover lifts 3px to elevation 3 and only
+   applies to cards that act as a button. Tinted cards never take a border —
+   the fill does that job instead. */
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 15px;
+  font-family: inherit;
+  color: inherit;
+  transition: box-shadow var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
+}
+.hoverable:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-3);
+  border-color: var(--line-strong);
+  cursor: pointer;
+}
+.tint { border: none; }
+.tint.hoverable:hover { border-color: transparent; }
+.tint-navy { background: var(--accent-soft); }
+.tint-amber { background: var(--amber-soft); }
+.tint-success { background: var(--success-bg); }
+.tint-error { background: var(--error-bg); }
+.tint-warn { background: var(--warn-bg); }
+.tint-info { background: var(--info-bg); }
+.tint-neutral { background: var(--surface-2); }
+
+.active { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+
+.klabel {
+  font-size: 11px;
+  color: var(--text-2);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.kval {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: 22px;
+  color: var(--text);
+  margin: 7px 0 4px;
+  letter-spacing: -0.5px;
+}
+.kfoot {
+  font-size: 11px;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.trend {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.trend.up { color: var(--success); }
+.trend.down { color: var(--error); }
+.trend.flat { color: var(--text-3); }
