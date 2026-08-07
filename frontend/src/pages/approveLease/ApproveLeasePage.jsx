@@ -11,7 +11,7 @@ import { ApproveConfirmDialog } from './ApproveConfirmDialog.jsx';
 import styles from './ApproveLeasePage.module.css';
 
 // Kept out of the compact table view and shown only in the row detail panel.
-const DETAIL_ONLY_HEADERS = /^(location|size|type|city|dispatch address|no\.? of container|billing cycle|no\.? of billing days|billing range)$/i;
+const DETAIL_ONLY_HEADERS = /^(location|size|type|product type|product code|order type|city|dispatch address\b.*|no\.? of container|billing cycle|no\.? of billing days|billing range|po no\.?|po validity|deployed date|agreement date valid upto)$/i;
 
 /**
  * Approve Lease — the pending "New Lease" approval queue (GET /approve).

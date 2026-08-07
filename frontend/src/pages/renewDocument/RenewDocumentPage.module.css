@@ -1,3 +1,11 @@
+/* KPI band uses the shared StatCard component — this row only sets the grid. */
+.kpiRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .tabRow { display: flex; gap: 20px; border-bottom: 1.5px solid var(--line); margin-bottom: 12px; }
 .tab {
   padding: 8px 0;

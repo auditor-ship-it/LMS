@@ -277,7 +277,7 @@ export async function getVerifyData() {
   const hdr = padWidth(rawHeaders, 36);
   const allRows = rawRows.map((r) => padWidth(r, 36));
 
-  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 24];
   const displayHeaders = displayIndices.map((ci) => hdr[ci]);
 
   /* Locate the Agreement / Client Code / Order No columns in "New Lease" by header name */

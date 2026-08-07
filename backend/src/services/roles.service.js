@@ -12,7 +12,9 @@ import {
   getSheetData,
   insertSheetIfMissing,
   deleteSheetIfExists,
-  appendRow
+  appendRow,
+  updateRange,
+  colLetter
 } from './googleSheets.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { writeThrough } from './writeThrough.service.js';
@@ -77,9 +79,29 @@ function accessSeedData() {
 }
 
 let seeded = false;
+let sidebarHeaderChecked = false;
+
+/**
+ * SIDEBAR_KEYS grew (renewDocument/offLease appended) after the live
+ * "Sidebar Access" sheet was already seeded in production — insertSheetIfMissing
+ * only writes a header row when the sheet doesn't exist yet, so a plain config
+ * change here would never reach the live sheet. Same self-heal pattern as
+ * offlease.service.js's _ensureOffLeaseSheet: compare live header width to
+ * SIDEBAR_HEADER.length, append whatever's missing. Runs once per process.
+ */
+async function _ensureSidebarHeaderWidth() {
+  if (sidebarHeaderChecked) return;
+  sidebarHeaderChecked = true;
+  const { headers } = await getSheetData(SIDEBAR_SHEET, undefined, 'A1:ZZ1').catch(() => ({ headers: [] }));
+  if (!headers.length) return; // sheet doesn't exist yet — insertSheetIfMissing above handles that case
+  if (headers.length >= SIDEBAR_HEADER.length) return;
+  const missing = SIDEBAR_HEADER.slice(headers.length);
+  await updateRange(SIDEBAR_SHEET, `${colLetter(headers.length)}1:${colLetter(SIDEBAR_HEADER.length - 1)}1`, [missing]);
+}
 
 /** Seeds the two sheets once (only if Team Accounts has no data rows yet). */
 export async function ensureRolesSeeded() {
+  await _ensureSidebarHeaderWidth();
   if (seeded) return;
 
   // Migration guard: an old ROLE-based schema (Email | Name | Role) may exist.
@@ -185,6 +207,33 @@ export async function dynamicSidebarVisible(email, tabId) {
 
 /* ==== Admin-facing CRUD — every call re-asserts admin; every write clears the cache. ==== */
 
+/**
+ * SIDEBAR_KEYS (permissions.config.js) is the FULL 15-column schema shared
+ * with the original app (Dashboard/Billing Sales/Pending Billing/Receivables/
+ * Monthly Statement/Outstanding View/Report/Billing Approval/Dispute
+ * Approval/Approval Summary — Accounts & Collection's pages, not this app's).
+ * Lease Management's own Sidebar.jsx only ever reads 4 of these keys
+ * (myTask/verify/approve/expiry — see constants/nav.js's sidebarKey fields);
+ * every other column in the admin's Sidebar grid toggled something with no
+ * effect here, which is exactly what was reported as confusing/broken.
+ *
+ * Fix is display-only, on purpose: this filters what the ADMIN UI *shows*,
+ * not SIDEBAR_KEYS itself — loadSidebarTable()/saveEmailSidebar() below still
+ * index into the full, unfiltered array, so the live Sheet's column
+ * positions (fixed by the original app's schema) are untouched. Filtering
+ * the source array instead would shift every later key onto the wrong
+ * column and silently corrupt Sidebar Access data.
+ *
+ * Same problem, same fix, on the action-permissions grid: PERMISSION_KEYS'
+ * last two entries (billing/receivables) gate Accounts & Collection's own
+ * pages — confirmed unused anywhere in this app's frontend (no
+ * canAct('billing')/canAct('receivables') call exists here) — so they're
+ * excluded from display the same way, leaving saveEmailPermission's column
+ * math against the full array untouched.
+ */
+const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'approve', 'expiry', 'renewDocument', 'offLease', 'deployedSummary']);
+const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables']);
+
 export async function getRolesAndAccessData(callerEmail) {
   assertRolesAdmin(callerEmail);
   await ensureRolesSeeded();
@@ -192,7 +241,9 @@ export async function getRolesAndAccessData(callerEmail) {
   const sidebar = await loadSidebarTable();
   const emails = Object.keys(team).sort();
   const teamList = emails.map((e) => ({ email: e, name: team[e].name }));
-  return { emails, permKeys: PERMISSION_KEYS, sidebarKeys: SIDEBAR_KEYS, emailPerms: team, emailSidebar: sidebar, team: teamList };
+  const visibleSidebarKeys = SIDEBAR_KEYS.filter((k) => RELEVANT_SIDEBAR_KEYS.has(k.key));
+  const visiblePermKeys = PERMISSION_KEYS.filter((k) => !IRRELEVANT_PERMISSION_KEYS.has(k.key));
+  return { emails, permKeys: visiblePermKeys, sidebarKeys: visibleSidebarKeys, emailPerms: team, emailSidebar: sidebar, team: teamList };
 }
 
 export async function saveEmailPermission(callerEmail, email, key, value) {

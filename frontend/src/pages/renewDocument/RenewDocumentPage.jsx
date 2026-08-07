@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { PageHeader, Card, Button, SearchBar, Pagination, DataGrid, renderCellValue } from '../../components/ui/index.js';
+import { PageHeader, Card, Button, StatCard, SearchBar, Pagination, DataGrid, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -18,7 +18,7 @@ const TABS = [
 ];
 
 // Kept out of the compact table view and shown only in the row detail panel.
-const DETAIL_ONLY_HEADERS = /^(location|size|type|city)$/i;
+const DETAIL_ONLY_HEADERS = /^(location|size|type|city|po)$/i;
 
 /**
  * Renew & Document — the main app's Lease Expiry "Renewed"/"Documents"
@@ -28,10 +28,22 @@ const DETAIL_ONLY_HEADERS = /^(location|size|type|city)$/i;
  * Clicking a row opens the full record first (same pattern as Verify Lease /
  * Approve Lease / Lease Expiry), with the same action available from there.
  */
+// Both tabs' counts, independent of which one is active — a real "how much
+// is pending" summary, same treatment as every other page's KPI band.
+// Mockup called these "Not started/In discussion/Renewed/Lost" — this page's
+// actual data only has two real states (renewed-pending-a-period-update,
+// documents-pending-upload), so it gets two honest cards, not four
+// placeholder ones this data can't back up.
+async function fetchPipelineCounts() {
+  const [renewed, documents] = await Promise.all([fetchRenewList(), fetchDocumentList()]);
+  return { renewed: renewed?.data?.length ?? 0, documents: documents?.data?.length ?? 0 };
+}
+
 export function RenewDocumentPage() {
   const [tab, setTab] = useState('renewed');
   const fetcher = useMemo(() => (tab === 'renewed' ? fetchRenewList : fetchDocumentList), [tab]);
   const { data, loading, error, reload } = useAsync(fetcher, [tab]);
+  const { data: counts, reload: reloadCounts } = useAsync(fetchPipelineCounts, []);
   const { canAct } = usePermission();
   const { user } = useAuth();
   const canActRenew = canAct('renew');
@@ -102,6 +114,7 @@ export function RenewDocumentPage() {
       setRenewItem(null);
       setSelectedContainer(null);
       reload();
+      reloadCounts();
     } catch (e) {
       setRenewError(apiErrorMessage(e));
     } finally {
@@ -135,7 +148,7 @@ export function RenewDocumentPage() {
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else if (result === 'MISSING_PO') setDocError('A PO number/file URL is required first.');
       else if (result === 'MISSING_AGR') setDocError('A signed agreement copy URL is required first.');
-      else { setDocItem(null); setSelectedContainer(null); reload(); }
+      else { setDocItem(null); setSelectedContainer(null); reload(); reloadCounts(); }
     } catch (e) {
       setDocError(apiErrorMessage(e));
     } finally {
@@ -150,6 +163,19 @@ export function RenewDocumentPage() {
         subtitle="Update lease periods for renewed containers and complete post-renewal documentation"
         actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}
       />
+
+      <div className={styles.kpiRow}>
+        <StatCard
+          icon="clock" label="Renew Pending" value={counts?.renewed ?? '—'} tint="warn"
+          footnote={counts?.renewed > 0 ? 'Needs a lease-period update' : undefined}
+          active={tab === 'renewed'} onClick={() => switchTab('renewed')}
+        />
+        <StatCard
+          icon="edit" label="Documents Pending" value={counts?.documents ?? '—'} tint="amber"
+          footnote={counts?.documents > 0 ? 'Needs agreement/PO upload' : undefined}
+          active={tab === 'documents'} onClick={() => switchTab('documents')}
+        />
+      </div>
 
       <div className={styles.tabRow}>
         {TABS.map((t) => (

@@ -13,6 +13,7 @@
 import crypto from 'crypto';
 import { getSheetData, updateCell, appendRow } from './googleSheets.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { getCollection } from './mongo.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { cacheGet, cachePut, cacheRemove } from '../utils/memoryCache.js';
@@ -29,6 +30,30 @@ const AUTH_OTP_SECS = 600; // 10 min
 const AUTH_MAX_FAILED = 5;
 const AUTH_LOCK_SECS = 900; // 15 min lockout
 const AUTH_OTP_MAX_TRIES = 5;
+
+/**
+ * Login sessions live in Mongo, not the in-process cache (utils/memoryCache.js)
+ * that lock/fail/OTP state still uses — a session is the one piece of auth
+ * state that must survive a backend restart. Before this, every restart
+ * (deploy, crash, or just `node --watch` picking up a save during dev) wiped
+ * every session's session invisibly: requireAuth() would 401 instead of
+ * showing real data, and pages with a bare empty-state (Lease Expiry) showed
+ * "no data" with nothing telling the user to log back in. Confirmed
+ * 2026-08-05. TTL index does the 6h sliding expiry — same lifetime semantics
+ * as the old cachePut(..., AUTH_SESSION_SECS), just durable.
+ */
+const SESSION_COLLECTION = '_auth_sessions';
+let sessionIndexEnsured = false;
+async function _ensureSessionIndex() {
+  if (sessionIndexEnsured) return;
+  sessionIndexEnsured = true;
+  try {
+    await getCollection(SESSION_COLLECTION).createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+  } catch (e) { logger.error('[AUTH] Failed to ensure session TTL index:', e?.message || e); }
+}
+function _sessionExpiry() {
+  return new Date(Date.now() + AUTH_SESSION_SECS * 1000);
+}
 
 function authEq(a, b) {
   a = String(a == null ? '' : a);
@@ -129,35 +154,37 @@ export async function empLogin(empId, password) {
   logger.info('[AUTH] Password validation successful');
 
   cacheRemove(`auth:fail:${empId}`);
+  await _ensureSessionIndex();
   const token = authToken();
-  const sess = { empId: emp.empId, name: emp.name, email: emp.email, at: new Date().toISOString() };
-  cachePut(`auth:sess:${token}`, JSON.stringify(sess), AUTH_SESSION_SECS);
+  const nowIso = new Date().toISOString();
+  await getCollection(SESSION_COLLECTION).insertOne({
+    _id: token, empId: emp.empId, name: emp.name, email: emp.email, at: nowIso, srow: null, expiresAt: _sessionExpiry()
+  });
   await authLogEvent('login', emp);
   await authStartSession(token, emp);
   logger.info('[AUTH] Login successful');
-  return { ok: true, token, name: emp.name, email: emp.email, empId: emp.empId, at: sess.at };
+  return { ok: true, token, name: emp.name, email: emp.email, empId: emp.empId, at: nowIso };
 }
 
-export function empSession(token) {
+export async function empSession(token) {
   if (!token) return null;
-  const raw = cacheGet(`auth:sess:${token}`);
-  if (!raw) return null;
-  try {
-    const s = JSON.parse(raw);
-    cachePut(`auth:sess:${token}`, raw, AUTH_SESSION_SECS); // sliding refresh
-    return { empId: s.empId, name: s.name, email: s.email, at: s.at };
-  } catch (e) { return null; }
+  const doc = await getCollection(SESSION_COLLECTION).findOneAndUpdate(
+    { _id: token },
+    { $set: { expiresAt: _sessionExpiry() } }, // sliding refresh
+    { returnDocument: 'after' }
+  );
+  if (!doc) return null;
+  return { empId: doc.empId, name: doc.name, email: doc.email, at: doc.at };
 }
 
 export async function empLogout(token) {
   if (token) {
     try { await empHeartbeat(token); } catch (e) { /* finalize minutes-on-site best-effort */ }
     try {
-      const raw = cacheGet(`auth:sess:${token}`);
-      if (raw) await authLogEvent('logout', JSON.parse(raw));
+      const doc = await getCollection(SESSION_COLLECTION).findOne({ _id: token });
+      if (doc) await authLogEvent('logout', doc);
     } catch (e) { /* logging must never break logout */ }
-    cacheRemove(`auth:sess:${token}`);
-    cacheRemove(`auth:srow:${token}`);
+    await getCollection(SESSION_COLLECTION).deleteOne({ _id: token }).catch(() => {});
   }
   return { ok: true };
 }
@@ -172,18 +199,16 @@ async function authStartSession(token, emp) {
     await authSessionSheetEnsured();
     const now = new Date().toISOString();
     const { rowNum } = await appendRow(SHEETS.AUTH_SESSION_LOG, [emp.empId, emp.name, emp.email, now, now, 0]);
-    if (rowNum) cachePut(`auth:srow:${token}`, String(rowNum), AUTH_SESSION_SECS);
+    if (rowNum) await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { srow: rowNum } }).catch(() => {});
   } catch (e) { /* never break login */ }
 }
 
 export async function empHeartbeat(token) {
   try {
     if (!token) return false;
-    const raw = cacheGet(`auth:sess:${token}`);
-    if (!raw) return false;
-    const rowStr = cacheGet(`auth:srow:${token}`);
-    if (!rowStr) return false;
-    const row = parseInt(rowStr, 10);
+    const doc = await getCollection(SESSION_COLLECTION).findOne({ _id: token });
+    if (!doc) return false;
+    const row = doc.srow;
     if (!(row > 1)) return false;
 
     const { getRange } = await import('./googleSheets.service.js');
@@ -195,7 +220,7 @@ export async function empHeartbeat(token) {
 
     await updateCell(SHEETS.AUTH_SESSION_LOG, row, 4, now.toISOString());
     await updateCell(SHEETS.AUTH_SESSION_LOG, row, 5, mins);
-    cachePut(`auth:sess:${token}`, raw, AUTH_SESSION_SECS); // keep session alive
+    await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { expiresAt: _sessionExpiry() } }).catch(() => {}); // keep session alive
     return true;
   } catch (e) { return false; }
 }
@@ -301,9 +326,9 @@ export async function addUserToLogin(name, empId, password, email) {
   return `Added: ${name} | ID ${empId} | ${email}`;
 }
 
-export function getCurrentUserFromToken(token) {
+export async function getCurrentUserFromToken(token) {
   if (!token) return 'unknown';
-  const sess = empSession(token);
+  const sess = await empSession(token);
   if (sess && sess.email) return String(sess.email).trim().toLowerCase();
   return 'unknown';
 }

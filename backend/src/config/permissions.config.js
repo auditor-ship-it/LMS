@@ -66,5 +66,11 @@ export const SIDEBAR_KEYS = [
   { key: 'report', label: 'Report' },
   { key: 'billingApproval', label: 'Billing Approval' },
   { key: 'disputeApproval', label: 'Dispute Approval' },
-  { key: 'approvalSummary', label: 'Approval Summary' }
+  { key: 'approvalSummary', label: 'Approval Summary' },
+  // Appended (not inserted) — new columns land at the END of the live
+  // "Sidebar Access" sheet so no existing column shifts position. Added for
+  // Lease Management's own Renew & Document / Off-Lease pages, which had no
+  // dedicated sidebar toggle before (see nav.js's requireBoth wiring).
+  { key: 'renewDocument', label: 'Renew & Document' },
+  { key: 'offLease', label: 'Off-Lease' }
 ];

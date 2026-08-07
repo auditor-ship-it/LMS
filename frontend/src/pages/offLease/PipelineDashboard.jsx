@@ -112,11 +112,11 @@ export function PipelineDashboard({ onOpenTab }) {
 }
 
 /**
- * A real connected step-tracker, not a row of colored badges: a dot per
- * stage (+ the approval gate between Stage 1 and 2), joined by a line that
- * fills in behind everything already done. No visible text — the table stays
- * single-line/dense (matches every other DataGrid in this app); each dot's
- * full stage name is available via title="" on hover.
+ * A real connected step-tracker: a numbered dot per stage (1-8, + the
+ * approval gate "A" between Stage 1 and 2), joined by a line that fills in
+ * behind everything already done. Numbers stay inside the dot so the row
+ * stays single-line (matches every other DataGrid in this app) — full stage
+ * name is still available via title="" on hover.
  */
 function MiniPipeline({ item }) {
   const { stages, approvalStatus, currentStageNum, stageClass } = item;
@@ -133,7 +133,9 @@ function MiniPipeline({ item }) {
   stages.forEach((s, i) => {
     if (i !== 0) nodes.push(<span key={`l${s.stage}`} className={lineClass(stages[i - 1].done)} />);
     nodes.push(
-      <span key={`s${s.stage}`} className={dotClass(s.done, s.stage === currentStageNum)} title={`Stage ${s.stage} · ${s.label}${s.done ? ' — Completed' : s.stage === currentStageNum ? ' — In progress' : ''}`} />
+      <span key={`s${s.stage}`} className={dotClass(s.done, s.stage === currentStageNum)} title={`Stage ${s.stage} · ${s.label}${s.done ? ' — Completed' : s.stage === currentStageNum ? ' — In progress' : ''}`}>
+        {s.stage}
+      </span>
     );
     if (i === 0) {
       const gateDone = approvalLower === 'approved';
@@ -144,7 +146,9 @@ function MiniPipeline({ item }) {
           key="gate"
           className={dotClass(gateDone, stageClass === 'approval', gateRejected)}
           title={`Intimation Approval — ${gateRejected ? 'Rejected' : gateDone ? 'Approved' : 'Pending'}`}
-        />
+        >
+          A
+        </span>
       );
     }
   });

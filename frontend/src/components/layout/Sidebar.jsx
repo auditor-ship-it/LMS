@@ -39,22 +39,15 @@ function Branch({ item, visibleChildren, onNavigate }) {
 }
 
 /**
- * Role-based menu visibility, matching the real app's Roles & Access system:
- * an item with a `sidebarKey` (My Task/Verify/Approve/Lease Expiry — the ones
- * the admin's "Sidebar" grid has an explicit per-email toggle for) uses
- * canView(), same as the main app. An item with only a `permKey` (Renew &
- * Document, Off-Lease, each Stage — no dedicated sidebar toggle exists for
- * these) falls back to canAct(), the same action permission its own buttons
- * already gate on. An item with neither is always visible. A branch (Stages)
- * is hidden entirely once none of its children are visible to this user.
+ * Menu visibility: the Roles & Access "Sidebar" grid checkbox is the sole
+ * source of truth for every item with a `sidebarKey` — checked there means
+ * visible, independent of the separate Permissions grid. An item with no
+ * sidebarKey (Roles & Access) is always visible. A branch is hidden entirely
+ * once none of its children are visible to this user.
  */
 export function Sidebar({ open, onNavigate }) {
-  const { canView, canAct } = usePermission();
-  const visible = (item) => {
-    if (item.sidebarKey) return canView(item.sidebarKey);
-    if (item.permKey) return canAct(item.permKey);
-    return true;
-  };
+  const { canView } = usePermission();
+  const visible = (item) => (item.sidebarKey ? canView(item.sidebarKey) : true);
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.open : ''}`}>

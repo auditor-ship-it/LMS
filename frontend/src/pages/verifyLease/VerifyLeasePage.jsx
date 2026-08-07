@@ -18,7 +18,7 @@ function splitLog(str) {
 // Columns that stay in the detail view only — same "trim the list, keep it in
 // the detail page" treatment already applied to Lease Expiry / Approve Lease
 // / Renew & Document.
-const DETAIL_ONLY_HEADERS = /^(dispatch address|size|product type|billing cycle|no\.? of billing days|billing range)$/i;
+const DETAIL_ONLY_HEADERS = /^(dispatch add(ress)?\b.*|product code|size|product type|order type|billing cycle|no\.? of billing days|billing range|po no\.?|po validity|deployed date|agreement date valid upto)$/i;
 
 /**
  * Verify Lease — pending "New Lease" rows awaiting the billing/invoice

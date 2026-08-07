@@ -11,17 +11,30 @@ import { fetchExpiryList, actionExpiryRow } from '../../services/expiry.service.
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import styles from './LeaseExpiryPage.module.css';
 
+// The KPI row shows one card per bucket. Critical/Warning/Safe are combined
+// into a single "Upcoming" card (breakdown shown in its footnote) — Overdue
+// stays separate since it's the actionable/urgent one, with its own 30/60d
+// footnote breakdown.
 const BAND_OPTIONS = [
   { value: 'overdue', label: 'Overdue', icon: 'alert', tint: 'error' },
-  { value: 'critical', label: 'Critical (≤7d)', icon: 'alert', tint: 'error' },
-  { value: 'warning', label: 'Warning (≤30d)', icon: 'clock', tint: 'warn' },
-  { value: 'safe', label: 'Safe (30d+)', icon: 'check-circle', tint: 'success' }
+  { value: 'upcoming', label: 'Upcoming', icon: 'clock', tint: 'warn' }
 ];
 
 const BAND_LABEL = { overdue: 'Overdue', critical: 'Critical', warning: 'Warning', safe: 'Safe' };
 
+/** Backend only classifies "overdue" as one band (days < 0) — the 30d/60d
+ *  split shown inside that one card's footnote is computed here from the
+ *  same daysLeft value it already sends, no backend change and no extra
+ *  cards (one Overdue scorecard total, not three). */
+function overdueMagnitudeBucket(item) {
+  const magnitude = -item.daysLeft;
+  if (magnitude <= 30) return 'le30';
+  if (magnitude <= 60) return 'le60';
+  return 'over60';
+}
+
 // Kept out of the compact table view and shown only in the row detail panel.
-const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle)$/i;
+const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle|po)$/i;
 
 /**
  * Lease Expiry — deployed containers approaching/past their lease expiry
@@ -39,10 +52,15 @@ export function LeaseExpiryPage() {
   const [band, setBand] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
-  const [selectedContainer, setSelectedContainer] = useState(null);
+  const [selectedIdx, setSelectedIdx] = useState(null);
 
   const headers = data?.headers || [];
-  const rows = data?.data || [];
+  // Container No. alone isn't a unique row identifier — the same container
+  // legitimately recurs across multiple orders/billing cycles (see
+  // mongoSheetMapping.js's fullRefresh note on the Deployed sheet), so
+  // selecting a row by container number could open a DIFFERENT row with the
+  // same container. _idx (position in this load) is always unique per row.
+  const rows = useMemo(() => (data?.data || []).map((r, i) => ({ ...r, _idx: i })), [data]);
 
   // System-wide: rate/amount/pricing columns are hidden from every data grid.
   const visibleColIdx = useMemo(
@@ -62,9 +80,37 @@ export function LeaseExpiryPage() {
     return c;
   }, [rows]);
 
+  const overdueBuckets = useMemo(() => {
+    const b = { le30: 0, le60: 0, over60: 0 };
+    for (const r of rows) if (r.band === 'overdue') b[overdueMagnitudeBucket(r)] += 1;
+    return b;
+  }, [rows]);
+
+  const upcomingCount = bandCounts.critical + bandCounts.warning + bandCounts.safe;
+  const bandValue = { overdue: bandCounts.overdue, upcoming: upcomingCount };
+
+  const OVERDUE_BUCKET_LABEL = { le30: '≤30d', le60: '31-60d', over60: '60d+' };
+  const bandSegments = {
+    overdue: Object.entries(OVERDUE_BUCKET_LABEL).map(([bucket, label]) => ({
+      key: bucket,
+      label: `${label}: ${overdueBuckets[bucket]}`,
+      active: band === `overdue-${bucket}`,
+      onClick: () => handleBandChange(band === `overdue-${bucket}` ? '' : `overdue-${bucket}`)
+    })),
+    upcoming: [
+      { key: 'critical', label: `Critical (≤7d): ${bandCounts.critical}`, active: band === 'critical', onClick: () => handleBandChange(band === 'critical' ? '' : 'critical') },
+      { key: 'warning', label: `Warning (≤30d): ${bandCounts.warning}`, active: band === 'warning', onClick: () => handleBandChange(band === 'warning' ? '' : 'warning') },
+      { key: 'safe', label: `Safe: ${bandCounts.safe}`, active: band === 'safe', onClick: () => handleBandChange(band === 'safe' ? '' : 'safe') }
+    ]
+  };
+
   const filtered = useMemo(() => {
     let list = rows;
-    if (band) list = list.filter((r) => r.band === band);
+    if (band === 'upcoming') list = list.filter((r) => r.band !== 'overdue');
+    else if (band.startsWith('overdue-')) {
+      const bucket = band.slice('overdue-'.length);
+      list = list.filter((r) => r.band === 'overdue' && overdueMagnitudeBucket(r) === bucket);
+    } else if (band) list = list.filter((r) => r.band === band);
     const term = debouncedSearch.trim().toLowerCase();
     if (term) list = list.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
     return list;
@@ -72,7 +118,7 @@ export function LeaseExpiryPage() {
 
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filtered, 10);
 
-  const selected = selectedContainer != null ? filtered.find((it) => it.row?.[0] === selectedContainer) : null;
+  const selected = selectedIdx != null ? filtered.find((it) => it._idx === selectedIdx) : null;
 
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
   const handleBandChange = (v) => { setBand(v); resetPage(); };
@@ -85,7 +131,7 @@ export function LeaseExpiryPage() {
     try {
       const result = await actionExpiryRow(containerNo, new Date().toISOString(), status);
       if (result === 'ALREADY_PROCESSED') setActionError(`${containerNo} was already actioned by someone else.`);
-      setSelectedContainer(null);
+      setSelectedIdx(null);
       reload();
     } catch (e) {
       setActionError(apiErrorMessage(e));
@@ -109,8 +155,9 @@ export function LeaseExpiryPage() {
             icon={b.icon}
             tint={b.tint}
             label={b.label}
-            value={bandCounts[b.value]}
-            active={band === b.value}
+            value={bandValue[b.value]}
+            footnoteSegments={bandSegments[b.value]}
+            active={band === b.value || band.startsWith(`${b.value}-`) || (b.value === 'upcoming' && ['critical', 'warning', 'safe'].includes(band))}
             onClick={() => handleBandChange(band === b.value ? '' : b.value)}
           />
         ))}
@@ -132,20 +179,21 @@ export function LeaseExpiryPage() {
               className={styles.wrapTable}
               headers={[...tableHeaders, 'Ageing', 'Days Left']}
               rows={pageRows}
+              rowKey={(r) => r._idx}
               loading={loading}
               error={error}
               onRetry={reload}
               emptyMessage="No pending lease expiries"
               renderRow={(values, item) => [
                 ...tableColIdx.map((ci) => (
-                  <td key={ci} className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
+                  <td key={ci} className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                     {renderCellValue(values[ci])}
                   </td>
                 )),
-                <td key="band" className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
+                <td key="band" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   <StatusBadge status={BAND_LABEL[item.band] || '—'} />
                 </td>,
-                <td key="days" className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
+                <td key="days" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   {formatDays(item.daysLeft)}
                 </td>
               ]}
@@ -161,7 +209,7 @@ export function LeaseExpiryPage() {
             total={filtered.length}
             canAct={canActExpiry}
             busyKey={busyKey}
-            onBack={() => setSelectedContainer(null)}
+            onBack={() => setSelectedIdx(null)}
             onRenew={() => runAction(selected, 'Renewed')}
             onOffLease={() => runAction(selected, 'Off-Lease')}
           />

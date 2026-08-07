@@ -14,26 +14,25 @@ import { ROUTES } from './routes.js';
  *       the separate "Stages" sidebar branch was removed in favor of this)
  *
  * `sidebarKey` matches the real app's Roles & Access "Sidebar" grid (the
- * per-email menu-visibility toggles, e.g. "Dashboard/My Task/Verify Lease/…"
- * in the admin's Sidebar tab) — an admin's explicit on/off there wins.
- * `permKey` matches the action-permission grid (the same checkActionPermission
- * types every page's own action buttons already gate on). Renew & Document,
- * Off-Lease and the Stages have no dedicated sidebar toggle in that system —
- * for those, the action permission is the only signal, so it doubles as the
- * menu-visibility gate. See Sidebar.jsx for how the two combine.
+ * per-email menu-visibility toggles) — this is the SOLE source of truth for
+ * menu visibility, for every item below, no exceptions. The separate
+ * Permissions grid controls what a user can actually DO on a page (each
+ * page gates its own action buttons on that independently) — it has no say
+ * in whether the menu item itself appears. Settled 2026-08-05 after going
+ * back and forth on Renew & Document / Off-Lease specifically — do not
+ * reintroduce a `requireBoth`/permKey-gated-visibility variant without the
+ * user explicitly asking again.
  */
 export const NAV_TREE = {
   label: 'Lease Management System',
   items: [
     { key: 'myTask', label: 'My Task', path: ROUTES.MY_TASK, icon: 'check-circle', sidebarKey: 'myTask' },
-    { key: 'verify', label: 'Verify Lease', path: ROUTES.VERIFY_LEASE, icon: 'search', sidebarKey: 'verify', permKey: 'verify' },
-    { key: 'approve', label: 'Approve Lease', path: ROUTES.APPROVE_LEASE, icon: 'check', sidebarKey: 'approve', permKey: 'approve' },
-    { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', permKey: 'expiry' },
-    { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', permKey: 'renew' },
-    { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', permKey: 'offleaseapproval' },
-    // Read-only summary, no write action to gate — always shown, same as
-    // Roles & Access below.
-    { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid' },
+    { key: 'verify', label: 'Verify Lease', path: ROUTES.VERIFY_LEASE, icon: 'search', sidebarKey: 'verify' },
+    { key: 'approve', label: 'Approve Lease', path: ROUTES.APPROVE_LEASE, icon: 'check', sidebarKey: 'approve' },
+    { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry' },
+    { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', sidebarKey: 'renewDocument' },
+    { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease' },
+    { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary' },
     // No sidebarKey/permKey — always shown, same as the main app's own nav
     // (navConfig.js's `adminOnly: true` is decorative there too); real access
     // control is the server-side 403 (roles.service.js's assertRolesAdmin),

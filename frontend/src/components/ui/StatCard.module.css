@@ -35,6 +35,21 @@
 
 .active { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
 
+.hitArea {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+button.hitArea { cursor: pointer; }
+
 .klabel {
   font-size: 11px;
   color: var(--text-2);
@@ -69,3 +84,24 @@
 .trend.up { color: var(--success); }
 .trend.down { color: var(--error); }
 .trend.flat { color: var(--text-3); }
+
+.kfootSegments {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.segBtn {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out);
+}
+.segBtn:hover { border-color: var(--line-strong); }
+.segBtnActive { background: var(--text); color: var(--text-inv); border-color: var(--text); }
