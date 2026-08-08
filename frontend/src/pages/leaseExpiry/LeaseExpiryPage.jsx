@@ -8,6 +8,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchExpiryList, actionExpiryRow } from '../../services/expiry.service.js';
+import { trackContainer } from '../../services/offlease.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import styles from './LeaseExpiryPage.module.css';
 
@@ -140,6 +141,29 @@ export function LeaseExpiryPage() {
     }
   };
 
+  // Off-Lease is its own workflow (Off-Lease Tracking sheet, 8 stages) — not
+  // a plain status flag on this sheet. This must call the same function the
+  // Off-Lease page itself uses to add a container, which both creates the
+  // tracking row AND marks Deployed sheet Off-Lease in one step; calling the
+  // generic runAction here only did the second half, so the container never
+  // actually entered the tracking workflow (confirmed 2026-08-08, GESU6329868).
+  const runOffLease = async (item) => {
+    const containerNo = item.row?.[0];
+    const key = `${containerNo}-Off-Lease`;
+    setBusyKey(key);
+    setActionError('');
+    try {
+      const result = await trackContainer(containerNo);
+      if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
+      setSelectedIdx(null);
+      reload();
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setBusyKey('');
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -211,7 +235,7 @@ export function LeaseExpiryPage() {
             busyKey={busyKey}
             onBack={() => setSelectedIdx(null)}
             onRenew={() => runAction(selected, 'Renewed')}
-            onOffLease={() => runAction(selected, 'Off-Lease')}
+            onOffLease={() => runOffLease(selected)}
           />
         )}
       </Card>

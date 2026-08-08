@@ -16,8 +16,8 @@ export const renewWithAgreement = ({ containerNo, newDateString, agreementUrl = 
 
 /** POST /api/expiry/renewal/complete-document-stage — "Complete Document Stage" action. */
 export const completeRenewalDocStage = ({
-  containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle
+  containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity
 }) =>
   apiClient.post('/expiry/renewal/complete-document-stage', {
-    containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle
+    containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity
   }).then((r) => r.data.result);

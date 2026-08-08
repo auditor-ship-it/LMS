@@ -72,5 +72,9 @@ export const SIDEBAR_KEYS = [
   // Lease Management's own Renew & Document / Off-Lease pages, which had no
   // dedicated sidebar toggle before (see nav.js's requireBoth wiring).
   { key: 'renewDocument', label: 'Renew & Document' },
-  { key: 'offLease', label: 'Off-Lease' }
+  { key: 'offLease', label: 'Off-Lease' },
+  // Appended (not inserted) — same "land at the END so no existing column
+  // shifts position" rule as renewDocument/offLease above.
+  { key: 'returnDashboard', label: 'Return Dashboard' },
+  { key: 'agreementForm', label: 'Agreement Form' }
 ];

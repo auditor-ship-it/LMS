@@ -149,8 +149,14 @@ const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
 
 /* FIXED, not derived — see LMS.js's long comment on this constant. A prior
    derived value (OL_HEADERS.length + 1) collided with real data whenever a
-   field was added. Do not change this back to a derived value. */
-export const OL_MARKED_COL_1BASED = 250;
+   field was added. Do not change this back to a derived value (a formula
+   like OL_HEADERS.length + 1) — that's what this warning is about.
+   The VALUE itself was wrong, though: 250 has no header at all (a stray,
+   unused column) — confirmed 2026-08-08 against the live sheet, "Marked"
+   was silently landing there while the real, documented column (134 = ED
+   = "Move to Container master", see the comment on OL_STAGE3_EXTRA_COLS
+   above) stayed blank. 134 is still a fixed literal, not a derived one. */
+export const OL_MARKED_COL_1BASED = 134;
 
 const OL_LEASE_ID_PREFIX = 'LEASE';
 const OL_LEASE_ID_START = 28; // first new Lease ID = LEASE0028
@@ -767,7 +773,6 @@ export async function addToOffLeaseTracking(containerNo) {
       else if (hdr.indexOf('deployed') !== -1 && hdr.indexOf('date') !== -1 && colMap.deployedDate === undefined) colMap.deployedDate = h;
       else if ((hdr.indexOf('valid') !== -1 || hdr.indexOf('agreement') !== -1) && (hdr.indexOf('upto') !== -1 || hdr.indexOf('till') !== -1 || hdr.indexOf('date') !== -1) && colMap.validUpto === undefined) colMap.validUpto = h;
       else if (hdr.indexOf('rate') !== -1 && colMap.rate === undefined) colMap.rate = h;
-      else if (hdr.indexOf('lease id') !== -1 && colMap.leaseId === undefined) colMap.leaseId = h;
     }
     if (colMap.container === undefined) colMap.container = 0;
     if (colMap.clientName === undefined) colMap.clientName = 0;
@@ -778,7 +783,6 @@ export async function addToOffLeaseTracking(containerNo) {
     if (colMap.deployedDate === undefined) colMap.deployedDate = 6;
     if (colMap.validUpto === undefined) colMap.validUpto = 7;
     if (colMap.rate === undefined) colMap.rate = 13;
-    if (colMap.leaseId === undefined) colMap.leaseId = 8;
 
     let found = null, deployedTargetRow = -1;
     for (let j = 0; j < dRows.length; j++) {
@@ -793,7 +797,14 @@ export async function addToOffLeaseTracking(containerNo) {
 
     const newRow = new Array(10).fill('');
     newRow[0] = found[colMap.container] || containerNo;
-    newRow[1] = safeStr(found[colMap.leaseId]);
+    // Column B (Lease ID) stays blank here — Deployed sheet has no per-row
+    // Lease ID to copy from at all (there's no such column; the header
+    // search here never matched, so this used to silently fall back to a
+    // hardcoded index that happened to land on "Agreement PDF", writing a
+    // Drive link into the Lease ID column). saveOffLeaseStage already
+    // generates and writes the real LEASE00XX id here itself, but only once
+    // Stage 1 completes (see its "STAGE 1 -> assign the Lease ID" block) —
+    // that's the single source of truth for this column, by design.
     newRow[2] = safeStr(found[colMap.size]);
     newRow[3] = safeStr(found[colMap.type]);
     newRow[4] = safeStr(found[colMap.clientCode]);
@@ -1401,13 +1412,15 @@ export async function _syncOffLeaseRowToMaster(rn, status) {
   console.log(`[OL-SYNC] MATCH '${container}' -> Master row ${masterRow}`);
 
   if (!isApproved) {
-    await batchUpdateValues([
-      { range: `'${SHEETS.MASTER_SHEET}'!L${masterRow}`, values: [['Lease']] },
-      { range: `'${SHEETS.MASTER_SHEET}'!M${masterRow}`, values: [['Lease']] }
-    ], ssId);
+    // Rejected intimation -> leave Master Sheet completely untouched (per
+    // explicit request 2026-08-08). Previously this wrote 'Lease' to L/M
+    // unconditionally, which could clobber whatever the real current status
+    // was if it had changed for an unrelated reason since the intimation
+    // was raised. A rejection is a no-op on Master Sheet by design now —
+    // only the Off-Lease Tracking row's own status/Marked flag changes.
     await updateCell(OL_SHEET, rn, OL_MARKED_COL_1BASED - 1, 'Marked');
-    console.log(`[OL-SYNC] REJECTED -> Master L/M = Lease | ${container}`);
-    return 'OK-REJECT-LEASE';
+    console.log(`[OL-SYNC] REJECTED -> Master Sheet untouched (by design) | ${container}`);
+    return 'OK-REJECT-NOOP';
   }
 
   const size = olRow[2]; // C
@@ -1483,13 +1496,20 @@ export async function copyApprovedData() {
   // persist auto-approve (getApproveData is read-only on load; this runs from the hourly trigger)
   try { await runAutoApproval(); } catch (e) { console.error('copyApprovedData->runAutoApproval:', e?.message || e); }
 
+  // sourceRows MUST stay a live read: the write below (statusUpdate.push(i +
+  // 2)) reuses each row's position IN THIS SAME ARRAY as the live sheet's row
+  // number — a Mongo-sourced row order isn't guaranteed to match the live
+  // sheet, and reusing its positions for that write would silently mark the
+  // wrong row "Moved" (see [[lms_row_number_write_safety]]).
   const { rows: sourceRows } = await getSheetData(SHEETS.NEW_LEASE, undefined, 'A1:AD');
   if (!sourceRows.length) return;
 
   /* DUPLICATE GUARD — a contract already present in the Deployed sheet is
-     skipped (still marked "Moved" so it doesn't retry every hour). */
+     skipped (still marked "Moved" so it doesn't retry every hour). Read-only
+     membership check (never a row-number write target) — safe to serve from
+     the Mongo mirror, halving this hourly job's live Sheets read footprint. */
   const seen = {};
-  const { rows: existingRows } = await getSheetData(SHEETS.DEPLOYED, undefined, 'A1:H');
+  const { rows: existingRows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
   for (const r of existingRows) {
     const ec = r[0];
     if (!ec || String(ec).trim() === '') continue;

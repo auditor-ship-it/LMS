@@ -7,6 +7,8 @@ export const ROUTES = {
   RENEW_DOCUMENT: '/renew-document',
   OFF_LEASE: '/off-lease',
   DEPLOYED_SUMMARY: '/deployed-summary',
+  RETURN_DASHBOARD: '/return-dashboard',
+  AGREEMENT_FORM: '/agreement-form',
   ROLES_ACCESS: '/roles-access',
   STAGES: '/stages',
   stage: (n) => `/stages/stage-${n}`

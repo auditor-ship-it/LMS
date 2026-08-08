@@ -37,6 +37,33 @@ async function resurrectDeadEntries() {
   }
 }
 
+// outboxWorker.js's claimBatch marks an entry 'processing' BEFORE running its
+// handler — if the process restarts between those two steps (this backend
+// restarts often during active development, e.g. every code edit under
+// `node --watch`), that entry is orphaned: claimBatch only ever re-claims
+// 'pending'/'failed', never 'processing', so it would sit there forever,
+// permanently un-pushed to Sheets, with nothing in the logs to say so.
+// Confirmed 2026-08-08: 68 entries stuck this way, some over a week old.
+// Reset to 'pending' at its ORIGINAL createdAt (already in the past, so
+// immediately due) rather than "now", so claimBatch's nextAttemptAt-ascending
+// sort replays multiple stuck writes to the same cell in their original
+// order — the last one replayed is the same final value Mongo already holds.
+const STUCK_PROCESSING_MS = 3 * 60 * 1000; // generous vs. a single Sheets push's normal ~1s
+async function resurrectStuckProcessing() {
+  const cutoff = new Date(Date.now() - STUCK_PROCESSING_MS);
+  const col = getCollection(OUTBOX_COLLECTION);
+  const stuck = await col.find({ status: 'processing', updatedAt: { $lt: cutoff } }).toArray();
+  if (!stuck.length) return;
+  const now = new Date();
+  for (const entry of stuck) {
+    await col.updateOne(
+      { _id: entry._id, status: 'processing' },
+      { $set: { status: 'pending', nextAttemptAt: entry.createdAt, updatedAt: now } }
+    );
+  }
+  logger.warn(`[SYNC] Resurrected ${stuck.length} stuck 'processing' outbox entr${stuck.length === 1 ? 'y' : 'ies'} (backend likely restarted mid-push)`);
+}
+
 /** documentId strings (as string, to match ObjectId#toString) with a
  *  not-yet-finished outbox push targeting this sheet — reconciliation must
  *  never overwrite these, or it would clobber a Mongo-first write that
@@ -138,13 +165,17 @@ async function reconcileSheet(sheetName) {
   return result;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function runSheetsReconciliation() {
   const cycleStart = Date.now();
   logger.info('[SYNC] Starting sync cycle');
   await resurrectDeadEntries();
+  await resurrectStuckProcessing();
   const sheetNames = Object.keys(MONGO_SHEET_MAPPING);
   const results = [];
-  for (const sheetName of sheetNames) {
+  for (let i = 0; i < sheetNames.length; i++) {
+    const sheetName = sheetNames[i];
     try {
       const r = await reconcileSheet(sheetName);
       results.push(r);
@@ -152,6 +183,11 @@ export async function runSheetsReconciliation() {
       logger.error(`[SYNC ERROR] Failed to fetch sheet ${sheetName}`);
       logger.error(`[SYNC ERROR] Reason: ${err?.message || err}`);
     }
+    // A small gap between sheets — 9 back-to-back full-sheet reads can burn
+    // through the "requests per minute" cap on their own, even with nothing
+    // else contending for it (confirmed 2026-08-08: this exact cycle hit the
+    // wall on sheet 8 of 9). Skip the wait after the last sheet.
+    if (i < sheetNames.length - 1) await sleep(1500);
   }
   logger.info(`[SYNC] Sync cycle completed in ${((Date.now() - cycleStart) / 1000).toFixed(1)}s`);
   return results;

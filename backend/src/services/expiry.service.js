@@ -238,7 +238,15 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
   await checkActionPermission('expiry', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!rowId || String(rowId).trim() === '') throw new AppError('Container number is required');
-    const { rows } = await getSheetData(SHEETS.DEPLOYED, undefined, 'A2:W');
+    // getSheetData always treats values[0] of whatever range it's given as
+    // the header row and strips it — passing 'A2:W' here (already past the
+    // real header at row 1) meant row 2's actual data got silently dropped
+    // too, shifting every row's computed position back by one. Confirmed
+    // 2026-08-08: a container truly at row 274 always resolved to row 273.
+    // Use the default full-range read (same as every sibling function in
+    // this file, e.g. completeDocStage) so the one real header row is
+    // stripped exactly once.
+    const { rows } = await getSheetData(SHEETS.DEPLOYED);
     if (!rows.length) throw new AppError('No data rows');
 
     let targetRow = -1;
@@ -250,6 +258,19 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
       }
     }
     if (targetRow === -1) throw notFound(`Not found: ${rowId}`);
+
+    // Re-verify the row still holds this exact container right before
+    // writing — targetRow is a POSITION captured from the read above, and
+    // if anything else (a concurrent edit, a different process, a legacy
+    // Apps Script trigger) inserts/deletes a row in this sheet in the brief
+    // window between that read and this write, the position can now point
+    // at a different container entirely. Confirmed 2026-08-08: exactly this
+    // shape of bug, one row off, from a source outside this codebase.
+    const recheck = await getRange(SHEETS.DEPLOYED, `A${targetRow}:A${targetRow}`);
+    const stillThere = safeStr(recheck?.[0]?.[0]);
+    if (stillThere !== String(rowId)) {
+      throw new AppError(`The sheet changed while processing — row ${targetRow} no longer holds ${rowId} (now: ${stillThere || 'empty'}). Please retry.`);
+    }
 
     await batchUpdateValues([
       { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[new Date(timestamp).toISOString()]] },
@@ -296,7 +317,7 @@ async function _logRenewal(info) {
   } catch (e) { console.error('[RENEWAL-LOG]', e.message); } // Never throws — a logging failure must not block the real renewal.
 }
 
-export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail) {
+export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -321,13 +342,14 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
 
     /* ★ Find the REAL "Agreement PDF" / "PO" / "PO PDF" / Billing Cycle columns
        by header name (never hard-code a position — it shifts). */
-    let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1;
+    let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1, poValidityCol = -1;
     for (let h = 0; h < hdrs0.length; h++) {
       const hd = String(hdrs0[h] || '').trim().toLowerCase();
       if (agrCol < 0 && hd.indexOf('agreement') !== -1 && hd.indexOf('valid') === -1 &&
         (hd.indexOf('pdf') !== -1 || hd.indexOf('file') !== -1 || hd.indexOf('copy') !== -1 || hd.indexOf('doc') !== -1)) agrCol = h;
       if (poPdfCol < 0 && hd.indexOf('po') !== -1 && hd.indexOf('pdf') !== -1) poPdfCol = h;
       if (cycleCol < 0 && hd.indexOf('billing') !== -1 && hd.indexOf('cycle') !== -1) cycleCol = h;
+      if (poValidityCol < 0 && hd.indexOf('po') !== -1 && hd.indexOf('valid') !== -1) poValidityCol = h;
     }
     for (let h2 = 0; h2 < hdrs0.length; h2++) {
       const hd2 = String(hdrs0[h2] || '').trim().toLowerCase();
@@ -337,6 +359,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     if (poCol < 0) poCol = 10;      // col K fallback
     if (poPdfCol < 0) poPdfCol = 11; // col L fallback
     if (cycleCol < 0) cycleCol = 14; // col O fallback
+    if (poValidityCol < 0) poValidityCol = 12; // col M fallback
 
     let targetRow = -1, matchedRow = null;
     for (let i = 0; i < rows.length; i++) {
@@ -374,6 +397,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     if (poNo) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poCol)}${targetRow}`, values: [[poNo]] });
     if (poFileUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poPdfCol)}${targetRow}`, values: [[poFileUrl]] });
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(cycleCol)}${targetRow}`, values: [[billingCycle]] });
+    if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poValidityCol)}${targetRow}`, values: [[new Date(poValidity).toISOString()]] });
 
     /* Update Valid Upto — in all three: H, O, X (O is the billing cycle
        column's neighbor semantics in the original comment, but the original

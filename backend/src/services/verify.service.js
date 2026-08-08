@@ -34,6 +34,9 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { getCollection } from './mongo.service.js';
+import { normalizeKey } from '../config/mongoSheetMapping.js';
+import { writeThrough } from './writeThrough.service.js';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dmyTime(d) {
@@ -243,7 +246,7 @@ async function _logRenewal(info) {
 
 /* ===================== VERIFY LEASE SCREEN ===================== */
 
-function _padNewLeaseHeader(colStartCount, upToCount) {
+export function _padNewLeaseHeader(colStartCount, upToCount) {
   const t = [];
   for (let c = colStartCount; c <= upToCount; c++) {
     if (c === 34) t.push('Billing Type');
@@ -292,14 +295,14 @@ export async function getVerifyData() {
   if (ordIdx === -1) ordIdx = 3; // fallback: column D
 
   /* Build lookup from "New lease reff": col B=Client Code, col N=Agreement
-     Date, col O=Agreement PDF, keyed by Order No (col D) */
+     Date, col O=Agreement PDF, keyed by Order No (col D). Display-only
+     enrichment — read from the Mongo mirror (synced every 5 min by
+     sheetsReconcile.job.js), NOT the live sheet: this used to hit
+     sheets.googleapis.com on every single Verify Lease page load, which was
+     a confirmed contributor to the shared project's quota errors (2026-08-07). */
   const agrMap = {};
   try {
-    const refNames = ['New lease reff', 'New Lease reff', 'New lease ref', 'New Lease Reff'];
-    let refData = null;
-    for (const rn of refNames) {
-      try { refData = await getSheetData(rn, undefined, 'A1:O'); break; } catch (e) { /* try next name */ }
-    }
+    const refData = await getSheetDataFromMongo(SHEETS.NEW_LEASE_REFF);
     if (refData && refData.rows.length) {
       for (const raw of refData.rows) {
         const r = padWidth(raw, 15);
@@ -318,10 +321,18 @@ export async function getVerifyData() {
 
     const aeRaw = safeStr(row[30]); // AE
     const aeLines = aeRaw.split('\n').filter((x) => x.trim() !== '');
-    const logDates = [], logRemarks = [], logUsers = [];
+    const logDates = [], logIssues = [], logRemarks = [], logUsers = [];
     for (const line of aeLines) {
       const parts = line.split(' | ');
-      logDates.push(parts[0] || ''); logRemarks.push(parts[1] || ''); logUsers.push(parts[2] || '');
+      // New entries are "date | issue | remarks | user" (4 parts). Older
+      // entries written before the Issue field existed are "date | remarks |
+      // user" (3 parts) — keep displaying those with a blank issue rather
+      // than reinterpreting their remarks text as an issue.
+      if (parts.length >= 4) {
+        logDates.push(parts[0] || ''); logIssues.push(parts[1] || ''); logRemarks.push(parts[2] || ''); logUsers.push(parts[3] || '');
+      } else {
+        logDates.push(parts[0] || ''); logIssues.push(''); logRemarks.push(parts[1] || ''); logUsers.push(parts[2] || '');
+      }
     }
 
     const dispRow = buildDisplayRow(row, displayIndices, hdr);
@@ -337,7 +348,7 @@ export async function getVerifyData() {
     finalData.push({
       row: dispRow,
       _rowNum: i + 2,
-      logV: logDates.join('\n'), logW: logRemarks.join('\n'), logX: logUsers.join('\n'),
+      logV: logDates.join('\n'), logW: logRemarks.join('\n'), logX: logUsers.join('\n'), logU: logIssues.join('\n'),
       poUrl: safeStr(row[31]), agrUrl: safeStr(row[32]),
       billingType: safeStr(row[33]),
       invoiceType: safeStr(row[34]),
@@ -347,57 +358,191 @@ export async function getVerifyData() {
   return { headers: displayHeaders, data: finalData };
 }
 
+/**
+ * Mongo-first: the Mongo mirror (New Lease is naturalKeyColumn-keyed by
+ * Container No, not fullRefresh — see mongoSheetMapping.js — so a write-through
+ * update lands on the SAME doc every reconcile cycle, never orphaned by a
+ * delete+recreate) is updated and committed before this returns; the matching
+ * Sheets write is enqueued in the same transaction and pushed asynchronously
+ * by jobs/outboxWorker.js (see sheetPushers/verify.pusher.js for the actual
+ * Sheets mutation, moved there verbatim from what used to run inline here).
+ */
 export async function saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail) {
-  return withSheetLock(SHEETS.NEW_LEASE, async () => {
-    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  const link = invoiceType === 'Link to Container' ? (linkContainer || '') : '';
 
-    const { headers, rows } = await getSheetData(SHEETS.NEW_LEASE);
-    // Located by container number (not a client-cached row number) so a
-    // stale/differently-ordered list read (e.g. from the Mongo mirror) can
-    // never cause this write to land on the wrong row — see splendid-rolling-candy.md Phase 1a.
-    let rn = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { rn = i + 2; break; } // eslint-disable-line eqeqeq
-    }
-    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
-
-    let lastCol = headers.length;
-    for (const r of rows) if (r.length > lastCol) lastCol = r.length;
-    if (lastCol < 36) {
-      const t = _padNewLeaseHeader(lastCol, 36);
-      if (t.length > 0) {
-        await updateRange(SHEETS.NEW_LEASE, `${colLetter(lastCol)}1:${colLetter(lastCol + t.length - 1)}1`, [t]);
+  const result = await writeThrough({
+    collection: SHEETS.NEW_LEASE,
+    filter: { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) },
+    update: {
+      $set: {
+        'row.25': dmyTime(new Date(timestamp)), // Z
+        'row.26': status || '', // AA
+        'row.27': userEmail || '', // AB
+        'row.33': billingType || '', // AH
+        'row.34': invoiceType || '', // AI
+        'row.35': link // AJ
       }
+    },
+    mode: 'update',
+    actor: userEmail,
+    sheetPush: {
+      targetSheet: SHEETS.NEW_LEASE, operation: 'update', handler: 'verify.saveVerifyAction',
+      payload: { containerNo, timestamp, status: status || '', userEmail: userEmail || '', billingType: billingType || '', invoiceType: invoiceType || '', linkContainer: link }
     }
-
-    await batchUpdateValues([
-      { range: `'${SHEETS.NEW_LEASE}'!Z${rn}:AB${rn}`, values: [[dmyTime(new Date(timestamp)), status || '', userEmail || '']] },
-      { range: `'${SHEETS.NEW_LEASE}'!AH${rn}:AJ${rn}`, values: [[billingType || '', invoiceType || '', invoiceType === 'Link to Container' ? (linkContainer || '') : '']] }
-    ]);
-    return 'OK';
   });
+  if (!result.matched) throw new AppError(`Not found: ${containerNo}`);
+  return 'OK';
 }
 
-export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEmail) {
+export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEmail, issue) {
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  if (!remarks || String(remarks).trim() === '') throw new AppError('Remarks required');
+
+  const key = normalizeKey(SHEETS.NEW_LEASE, containerNo);
+  // Log columns append rather than replace — compute the full next value
+  // up front (from the Mongo doc, which is the same value the previous
+  // writeThrough call left it at) so both the Mongo $set and the async
+  // Sheets push write the identical absolute string. A retry of the Sheets
+  // push then just re-sets the same value instead of appending twice.
+  const existing = await getCollection(SHEETS.NEW_LEASE).findOne({ key });
+  if (!existing) throw new AppError(`Not found: ${containerNo}`);
+
+  const dateStr = safeStr(new Date(timestamp));
+  const newEntry = `${dateStr} | ${issue || ''} | ${remarks || ''} | ${userEmail || ''}`;
+  const cur = safeStr(existing.row?.[30]); // AE, 0-based index 30
+  const next = cur && cur.trim() !== '' ? `${cur}\n${newEntry}` : newEntry;
+
+  const result = await writeThrough({
+    collection: SHEETS.NEW_LEASE,
+    filter: { key },
+    update: { $set: { 'row.30': next } },
+    mode: 'update',
+    actor: userEmail,
+    sheetPush: {
+      targetSheet: SHEETS.NEW_LEASE, operation: 'update', handler: 'verify.saveVerifyFollowUp',
+      payload: { containerNo, next }
+    }
+  });
+  if (!result.matched) throw new AppError(`Not found: ${containerNo}`);
+  return 'OK';
+}
+
+/* ===================== RETURN DASHBOARD (send-back log across ALL rows) ===================== */
+
+function _findHeaderIdx(headers, mustInclude, oneOf) {
+  for (let h = 0; h < headers.length; h++) {
+    const hl = String(headers[h] || '').trim().toLowerCase();
+    if (mustInclude.every((m) => hl.includes(m)) && (!oneOf || oneOf.some((o) => hl.includes(o)))) return h;
+  }
+  return -1;
+}
+
+/**
+ * Every "Send Back" (Follow Up with an Issue selected) across the whole New
+ * Lease sheet — not just currently-pending rows, since a row can be sent
+ * back, fixed, and approved later while the send-back history still matters
+ * for reporting. Scans column AE (the same follow-up log saveVerifyFollowUp
+ * writes to) on every row, regardless of that row's approval status.
+ */
+export async function getReturnDashboardData() {
+  const { headers: rawHeaders, rows: rawRows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE);
+  if (!rawRows.length) return { total: 0, byIssue: [], data: [] };
+
+  const hdr = padWidth(rawHeaders, 36);
+  const allRows = rawRows.map((r) => padWidth(r, 36));
+
+  const clientNameIdx = _findHeaderIdx(hdr, ['client'], ['name']) !== -1 ? _findHeaderIdx(hdr, ['client'], ['name']) : _findHeaderIdx(hdr, ['customer'], ['name']);
+  const clientCodeIdx = _findHeaderIdx(hdr, ['client'], ['code']);
+  const saleExecIdx = _findHeaderIdx(hdr, ['sale'], ['exec', 'person']);
+  const orderNoIdx = _findHeaderIdx(hdr, ['order'], ['no']);
+
+  const data = [];
+  const issueCounts = {};
+
+  for (let i = 0; i < allRows.length; i++) {
+    const row = allRows[i];
+    const containerNo = safeStr(row[0]).trim();
+    if (!containerNo) continue;
+
+    const aeRaw = safeStr(row[30]); // AE
+    const aeLines = aeRaw.split('\n').filter((x) => x.trim() !== '');
+    if (!aeLines.length) continue;
+
+    for (const line of aeLines) {
+      const parts = line.split(' | ');
+      if (parts.length < 4) continue; // legacy 3-part entries have no issue — not a "send back"
+      const [date, issue, remarks, user] = parts;
+      if (!issue || !issue.trim()) continue;
+
+      data.push({
+        container: containerNo,
+        clientCode: clientCodeIdx !== -1 ? safeStr(row[clientCodeIdx]) : '',
+        clientName: clientNameIdx !== -1 ? safeStr(row[clientNameIdx]) : '',
+        orderNo: orderNoIdx !== -1 ? safeStr(row[orderNoIdx]) : '',
+        saleExecutive: saleExecIdx !== -1 ? safeStr(row[saleExecIdx]) : '',
+        issue: issue.trim(),
+        remarks: remarks || '',
+        date: date || '',
+        user: user || ''
+      });
+      issueCounts[issue.trim()] = (issueCounts[issue.trim()] || 0) + 1;
+    }
+  }
+
+  data.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+
+  const byIssue = Object.entries(issueCounts)
+    .map(([issue, count]) => ({ issue, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return { total: data.length, byIssue, data };
+}
+
+/* ===================== AGREEMENT FORM (edit lease fields in place) ===================== */
+
+// Column 0 (Container No, the lookup key) and the internal bookkeeping
+// columns (Z:AJ — action status/log/doc urls/billing) are never editable
+// through this endpoint, regardless of what the caller sends.
+const EDITABLE_COL_MAX = 25; // matches displayIndices' highest non-detail index used on the Verify screen
+
+export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEmail) {
   return withSheetLock(SHEETS.NEW_LEASE, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-    if (!remarks || String(remarks).trim() === '') throw new AppError('Remarks required');
+    if (!fieldUpdates || typeof fieldUpdates !== 'object' || !Object.keys(fieldUpdates).length) {
+      throw new AppError('No field updates provided');
+    }
 
-    const { rows } = await getSheetData(SHEETS.NEW_LEASE, undefined, 'A1:AE');
+    const { headers, rows } = await getSheetData(SHEETS.NEW_LEASE);
     let rn = -1;
     for (let i = 0; i < rows.length; i++) {
       if (String(rows[i][0]) == containerNo) { rn = i + 2; break; } // eslint-disable-line eqeqeq
     }
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
-    const dateStr = safeStr(new Date(timestamp));
-    const newEntry = `${dateStr} | ${remarks || ''} | ${userEmail || ''}`;
+    const updates = [];
+    const changedLabels = [];
+    for (const [key, value] of Object.entries(fieldUpdates)) {
+      const ci = Number(key);
+      if (!Number.isInteger(ci) || ci <= 0 || ci > EDITABLE_COL_MAX) continue; // silently skip out-of-range/protected columns
+      updates.push({ range: `'${SHEETS.NEW_LEASE}'!${colLetter(ci)}${rn}`, values: [[value == null ? '' : String(value)]] });
+      changedLabels.push(headers[ci] || `col${ci}`);
+    }
+    if (!updates.length) throw new AppError('No editable fields in update');
 
+    await batchUpdateValues(updates);
+
+    // Audit trail entry in the same follow-up log the Verify detail page's
+    // Follow-up Log reads — written in the legacy 3-part (no-issue) shape so
+    // it shows in that history without also counting as a "send back" on the
+    // Return Dashboard (which only counts 4-part entries with an issue).
+    const dateStr = safeStr(new Date());
+    const newEntry = `${dateStr} | Agreement data updated (${changedLabels.join(', ')}) | ${userEmail || ''}`;
     const srcRow = rows[rn - 2] || [];
-    const cur = safeStr(srcRow[30]); // AE, 0-based index 30
+    const cur = safeStr(srcRow[30]);
     const next = cur && cur.trim() !== '' ? `${cur}\n${newEntry}` : newEntry;
-
     await updateCell(SHEETS.NEW_LEASE, rn, 30, next);
+
     return 'OK';
   });
 }

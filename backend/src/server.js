@@ -27,8 +27,8 @@ await connectMongo();
 
 const app = createApp();
 
-app.listen(env.port, () => {
-  logger.info(`[SERVER] Lease Management API running on port ${env.port} (${env.nodeEnv})`);
+app.listen(env.port, env.host, () => {
+  logger.info(`[SERVER] Lease Management API running on ${env.host}:${env.port} (${env.nodeEnv})`);
   // This backend owns its own cron + Sheets<->Mongo sync (see jobs/index.js)
   // — scoped to only the jobs Lease Management's domain needs, independent
   // of the other two apps' backends. See splendid-rolling-candy.md Phase 1c.

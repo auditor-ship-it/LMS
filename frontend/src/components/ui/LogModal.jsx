@@ -1,9 +1,9 @@
 import { Modal } from './Modal.jsx';
 import styles from './LogModal.module.css';
 
-/** Generic "activity log" popup — dates/remarks/users are parallel arrays (same index = one entry). */
-export function LogModal({ open, onClose, title = 'Activity Log', dates = [], remarks = [], users = [] }) {
-  const rows = dates.map((d, i) => ({ date: d, remark: remarks[i] || '', user: users[i] || '' }));
+/** Generic "activity log" popup — dates/remarks/users (and optionally issues) are parallel arrays (same index = one entry). */
+export function LogModal({ open, onClose, title = 'Activity Log', dates = [], remarks = [], users = [], issues = [] }) {
+  const rows = dates.map((d, i) => ({ date: d, remark: remarks[i] || '', user: users[i] || '', issue: issues[i] || '' }));
   return (
     <Modal open={open} onClose={onClose} title={title} width="520px">
       {!rows.length ? (
@@ -16,6 +16,7 @@ export function LogModal({ open, onClose, title = 'Activity Log', dates = [], re
                 <span className={styles.date}>{r.date}</span>
                 <span className={styles.user}>{r.user}</span>
               </div>
+              {r.issue && <span className={styles.issueTag}>{r.issue}</span>}
               <div className={styles.remark}>{r.remark}</div>
             </li>
           ))}

@@ -3,6 +3,12 @@ import { useTheme } from '../../hooks/useTheme.js';
 import { Icon } from '../ui/Icon.jsx';
 import styles from './TopBar.module.css';
 
+function initials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
+}
+
 export function TopBar({ sidebarOpen, onMenuClick }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
@@ -28,6 +34,7 @@ export function TopBar({ sidebarOpen, onMenuClick }) {
       >
         <Icon name={theme === 'dark' ? 'sun' : 'moon'} size="sm" />
       </button>
+      <span className={styles.avatar}>{initials(user?.name || user?.empId)}</span>
       <div className={styles.user}>
         <span className={styles.name}>{user?.name || user?.empId}</span>
         <span className={styles.email}>{user?.email}</span>

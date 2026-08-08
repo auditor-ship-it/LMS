@@ -33,7 +33,13 @@ export async function uploadToDrive(base64Data, mimeType, fileName) {
       mimeType,
       body: stream
     },
-    fields: 'id, webViewLink, webContentLink'
+    fields: 'id, webViewLink, webContentLink',
+    // Required for the target folder to be treated as living inside a Shared
+    // Drive — without this, Drive API v3 tries to count the upload against
+    // the service account's own personal storage, which is always 0 ("Service
+    // Accounts do not have storage quota"). Still requires GOOGLE_DRIVE_FOLDER_ID
+    // to actually be a folder inside a real Shared Drive (see error handling below).
+    supportsAllDrives: true
   });
 
   // Make link-shareable within the org the same way the original relies on the
@@ -47,7 +53,7 @@ export async function uploadToDrive(base64Data, mimeType, fileName) {
 export async function deleteFromDrive(fileId) {
   const drive = getDriveClient();
   try {
-    await drive.files.delete({ fileId });
+    await drive.files.delete({ fileId, supportsAllDrives: true });
   } catch (e) {
     // Mirrors original's best-effort cleanup-on-failure semantics.
   }
