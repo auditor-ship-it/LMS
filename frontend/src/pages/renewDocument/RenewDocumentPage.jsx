@@ -143,7 +143,8 @@ export function RenewDocumentPage() {
         userEmail: user?.email || '',
         poNo: payload.poNo,
         poFileUrl,
-        billingCycle: payload.billingCycle
+        billingCycle: payload.billingCycle,
+        poValidity: payload.poValidity
       });
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else if (result === 'MISSING_PO') setDocError('A PO number/file URL is required first.');

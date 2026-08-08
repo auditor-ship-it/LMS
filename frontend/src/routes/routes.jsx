@@ -8,6 +8,8 @@ const LeaseExpiryPage = lazy(() => import('../pages/leaseExpiry/LeaseExpiryPage.
 const RenewDocumentPage = lazy(() => import('../pages/renewDocument/RenewDocumentPage.jsx').then((m) => ({ default: m.RenewDocumentPage })));
 const OffLeasePage = lazy(() => import('../pages/offLease/OffLeasePage.jsx').then((m) => ({ default: m.OffLeasePage })));
 const DeployedSummaryPage = lazy(() => import('../pages/deployedSummary/DeployedSummaryPage.jsx').then((m) => ({ default: m.DeployedSummaryPage })));
+const ReturnDashboardPage = lazy(() => import('../pages/returnDashboard/ReturnDashboardPage.jsx').then((m) => ({ default: m.ReturnDashboardPage })));
+const AgreementFormPage = lazy(() => import('../pages/agreementForm/AgreementFormPage.jsx').then((m) => ({ default: m.AgreementFormPage })));
 const RolesAccessPage = lazy(() => import('../pages/rolesAccess/RolesAccessPage.jsx').then((m) => ({ default: m.RolesAccessPage })));
 
 const Stage1Page = lazy(() => import('../pages/stages/Stage1Page.jsx').then((m) => ({ default: m.Stage1Page })));
@@ -28,6 +30,8 @@ export const APP_ROUTES = [
   { path: ROUTES.RENEW_DOCUMENT, element: RenewDocumentPage },
   { path: ROUTES.OFF_LEASE, element: OffLeasePage },
   { path: ROUTES.DEPLOYED_SUMMARY, element: DeployedSummaryPage },
+  { path: ROUTES.RETURN_DASHBOARD, element: ReturnDashboardPage },
+  { path: ROUTES.AGREEMENT_FORM, element: AgreementFormPage },
   { path: ROUTES.ROLES_ACCESS, element: RolesAccessPage },
   { path: ROUTES.stage(1), element: Stage1Page },
   { path: ROUTES.stage(2), element: Stage2Page },

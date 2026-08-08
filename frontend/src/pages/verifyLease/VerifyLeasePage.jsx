@@ -11,8 +11,14 @@ import { VerifyApproveModal } from './VerifyApproveModal.jsx';
 import { VerifyFollowUpModal } from './VerifyFollowUpModal.jsx';
 import styles from './VerifyLeasePage.module.css';
 
+// NOTE: does not filter out blank lines — dates/remarks/users/issues are
+// parallel arrays (backend writes one line per array per log entry, same
+// index = one entry); a legacy entry with no Issue produces a genuinely
+// blank line in the issues string at that position, which must stay in
+// place rather than being dropped (which would misalign every array after it).
 function splitLog(str) {
-  return String(str || '').split('\n').filter((x) => x.trim() !== '');
+  if (str == null || String(str).trim() === '') return [];
+  return String(str).split('\n');
 }
 
 // Columns that stay in the detail view only — same "trim the list, keep it in
@@ -32,7 +38,7 @@ export function VerifyLeasePage() {
   const { canAct } = usePermission();
   const canVerify = canAct('verify');
 
-  const { data, loading, error, reload } = useAsync(fetchVerifyList, []);
+  const { data, loading, error, reload, setData } = useAsync(fetchVerifyList, []);
   const headers = data?.headers || [];
   const items = data?.data || [];
 
@@ -54,6 +60,11 @@ export function VerifyLeasePage() {
     [visibleColIdx, headers]
   );
   const tableHeaders = useMemo(() => tableColIdx.map((i) => headers[i]), [tableColIdx, headers]);
+
+  const saleExecColIdx = useMemo(
+    () => headers.findIndex((h) => /sale/i.test(String(h || '')) && /exec|person/i.test(String(h || ''))),
+    [headers]
+  );
 
   const filterColIdx = useMemo(() => pickCategoricalFilterColumn(headers, items, visibleColIdx), [headers, items, visibleColIdx]);
   const filterOptions = useMemo(() => distinctOptionsForColumn(items, filterColIdx), [items, filterColIdx]);
@@ -88,14 +99,20 @@ export function VerifyLeasePage() {
         invoiceType,
         linkContainer
       });
+      const approvedRowNum = actionTarget._rowNum;
       setActionTarget(null);
       setSelectedRowNum(null);
       if (res?.message === 'ALREADY_PROCESSED') {
         setBanner({ type: 'error', text: 'This row was already processed by someone else.' });
+        reload();
       } else {
         setBanner({ type: 'success', text: `Approved — ${billingType}, ${invoiceType}.` });
+        // Drop it from the list immediately instead of waiting on reload(): a
+        // reload right now would re-fetch the Mongo mirror, which can lag the
+        // write that just landed on the live Sheet by up to the 5-minute
+        // reconciliation cycle — re-showing a row we just successfully approved.
+        setData((prev) => (prev ? { ...prev, data: prev.data.filter((it) => it._rowNum !== approvedRowNum) } : prev));
       }
-      reload();
       setTimeout(() => setBanner(null), 5000);
     } catch (e) {
       setActionError(apiErrorMessage(e));
@@ -104,13 +121,13 @@ export function VerifyLeasePage() {
     }
   }
 
-  async function submitFollowUp(remarks) {
+  async function submitFollowUp(remarks, issue) {
     if (!followUpTarget) return;
     setSubmitting(true);
     try {
-      await addVerifyFollowUp(followUpTarget.row[0], { timestamp: new Date().toISOString(), remarks });
+      await addVerifyFollowUp(followUpTarget.row[0], { timestamp: new Date().toISOString(), remarks, issue });
       setFollowUpTarget(null);
-      setBanner({ type: 'success', text: 'Follow-up recorded.' });
+      setBanner({ type: 'success', text: 'Sent back — recorded.' });
       reload();
       setTimeout(() => setBanner(null), 5000);
     } catch (e) {
@@ -199,16 +216,18 @@ export function VerifyLeasePage() {
       <VerifyFollowUpModal
         open={!!followUpTarget}
         submitting={submitting}
+        saleExecutive={saleExecColIdx >= 0 ? followUpTarget?.row?.[saleExecColIdx] : ''}
         onClose={() => setFollowUpTarget(null)}
         onSubmit={submitFollowUp}
       />
       <LogModal
         open={!!logTarget}
         onClose={() => setLogTarget(null)}
-        title="Follow-up History"
+        title="Send Back / Follow-up History"
         dates={splitLog(logTarget?.logV)}
         remarks={splitLog(logTarget?.logW)}
         users={splitLog(logTarget?.logX)}
+        issues={splitLog(logTarget?.logU)}
       />
     </>
   );

@@ -13,8 +13,18 @@ export async function saveAction(req, res) {
 }
 
 export async function saveFollowUp(req, res) {
-  const { timestamp, remarks } = req.body;
-  const message = await verifyService.saveVerifyFollowUp(req.params.containerNo, timestamp, remarks, req.user.email);
+  const { timestamp, remarks, issue } = req.body;
+  const message = await verifyService.saveVerifyFollowUp(req.params.containerNo, timestamp, remarks, req.user.email, issue);
+  res.json({ message });
+}
+
+export async function getReturnDashboard(req, res) {
+  res.json(await verifyService.getReturnDashboardData());
+}
+
+export async function editLease(req, res) {
+  const { updates } = req.body;
+  const message = await verifyService.updateVerifyLeaseFields(req.params.containerNo, updates, req.user.email);
   res.json({ message });
 }
 

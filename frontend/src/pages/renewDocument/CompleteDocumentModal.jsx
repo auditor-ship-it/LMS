@@ -5,7 +5,7 @@ import styles from './Modals.module.css';
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
 
 const EMPTY_FORM = {
-  renewedDate: '', validTill: '', remarks: '', poNo: '', billingCycle: '',
+  renewedDate: '', validTill: '', remarks: '', poNo: '', poValidity: '', billingCycle: '',
   signedCopy: null, // {base64Data, mimeType, fileName}
   poFile: null
 };
@@ -74,6 +74,11 @@ export function CompleteDocumentModal({ open, item, submitting, error, onClose, 
             />
           </label>
         </div>
+
+        <label className={styles.field}>
+          <span className={styles.label}>PO Valid Date</span>
+          <input type="date" value={form.poValidity} onChange={set('poValidity')} />
+        </label>
 
         <label className={styles.field}>
           <span className={styles.label}>Billing Cycle</span>

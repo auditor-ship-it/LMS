@@ -2,10 +2,23 @@ import { NavLink } from 'react-router-dom';
 import { NAV_TREE } from '../../constants/nav.js';
 import { useSidebarState } from '../../hooks/useSidebarState.js';
 import { usePermission } from '../../hooks/usePermission.js';
+import { useAsync } from '../../hooks/useAsync.js';
+import { fetchMyTasks } from '../../services/myTask.service.js';
 import { Icon } from '../ui/Icon.jsx';
 import styles from './Sidebar.module.css';
 
-function Leaf({ item, onNavigate }) {
+// Off-Lease has no single taskKey — its pending work is spread across the
+// approval queue plus all 8 stages, so it sums them instead of reading one field.
+function badgeValue(item, counts) {
+  if (!counts) return 0;
+  if (item.key === 'offLease') {
+    return (counts.offleaseApproval || 0) + [1, 2, 3, 4, 5, 6, 7, 8]
+      .reduce((sum, n) => sum + (counts[`olStage${n}`] || 0), 0);
+  }
+  return item.taskKey ? (counts[item.taskKey] || 0) : 0;
+}
+
+function Leaf({ item, onNavigate, badge }) {
   return (
     <NavLink
       to={item.path}
@@ -13,7 +26,8 @@ function Leaf({ item, onNavigate }) {
       onClick={onNavigate}
     >
       {item.icon && <Icon name={item.icon} className={styles.navIcon} />}
-      <span>{item.label}</span>
+      <span className={styles.navLabel}>{item.label}</span>
+      {badge > 0 && <span className={styles.navBadge}>{badge}</span>}
     </NavLink>
   );
 }
@@ -47,7 +61,17 @@ function Branch({ item, visibleChildren, onNavigate }) {
  */
 export function Sidebar({ open, onNavigate }) {
   const { canView } = usePermission();
+  const { data: counts } = useAsync(fetchMyTasks, []);
   const visible = (item) => (item.sidebarKey ? canView(item.sidebarKey) : true);
+
+  const visibleItems = NAV_TREE.items.filter((item) => item.children || visible(item));
+  const sections = [];
+  for (const item of visibleItems) {
+    const label = item.section || '';
+    let group = sections.find((s) => s.label === label);
+    if (!group) { group = { label, items: [] }; sections.push(group); }
+    group.items.push(item);
+  }
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.open : ''}`}>
@@ -56,14 +80,19 @@ export function Sidebar({ open, onNavigate }) {
         <span className={styles.brandText}>{NAV_TREE.label}</span>
       </div>
       <nav className={styles.nav}>
-        {NAV_TREE.items.map((item) => {
-          if (item.children) {
-            const visibleChildren = item.children.filter(visible);
-            if (!visibleChildren.length) return null;
-            return <Branch key={item.key} item={item} visibleChildren={visibleChildren} onNavigate={onNavigate} />;
-          }
-          return visible(item) ? <Leaf key={item.key} item={item} onNavigate={onNavigate} /> : null;
-        })}
+        {sections.map((group) => (
+          <div key={group.label || '_'} className={styles.section}>
+            {group.label && <div className={styles.sectionLabel}>{group.label}</div>}
+            {group.items.map((item) => {
+              if (item.children) {
+                const visibleChildren = item.children.filter(visible);
+                if (!visibleChildren.length) return null;
+                return <Branch key={item.key} item={item} visibleChildren={visibleChildren} onNavigate={onNavigate} />;
+              }
+              return <Leaf key={item.key} item={item} onNavigate={onNavigate} badge={badgeValue(item, counts)} />;
+            })}
+          </div>
+        ))}
       </nav>
     </aside>
   );

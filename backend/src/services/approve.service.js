@@ -64,48 +64,51 @@ export async function getApproveData(doWrite) {
   const allRows = rawRows.map((r) => padWidth(r, 31));
   const n = allRows.length;
 
-  /* FRESH (not yet Moved) containers in New Lease = new leases -> only these
-     are left for MANUAL approval. Safety: if New Lease can't be read,
-     nlReadOk=false -> nothing auto-approved (all manual). Only feeds the
-     doWrite branch's decision of which rows to auto-approve, so it needs the
-     same live-vs-Mongo split as the OPERATION read above. */
-  const newSet = {};
-  let nlReadOk = false;
-  try {
-    const { rows: nlRows } = doWrite
-      ? await getSheetData(SHEETS.NEW_LEASE, undefined, 'A1:AD')
-      : await getSheetDataFromMongo(SHEETS.NEW_LEASE);
-    for (const r of nlRows) {
-      const c = normKey(r[0]);
-      if (!c) continue;
-      if (String(r[29] || '').trim().toLowerCase() !== 'moved') newSet[c] = true; // fresh new lease
-    }
-    nlReadOk = true;
-  } catch (e) { nlReadOk = false; }
+  /* RECURRING-LEASE AUTO-APPROVAL: a container+client pair that already has
+     at least one MANUALLY-approved row elsewhere in this sheet is a proven,
+     recurring monthly lease relationship -> auto-approve subsequent rows for
+     it without making someone re-click Approve every month. A pair with no
+     prior manual-approval history is a genuinely new lease and stays manual.
+     (Replaced the old "still unmoved in New Lease sheet" check 2026-08-08 —
+     that check missed exactly this case: a container could have several
+     already-approved rows here yet still have a live New Lease entry,
+     wrongly keeping its next row manual every time.)
+     Only a MANUAL approval seeds history (AE user is a real email, not
+     "Auto-approved") — an auto-approval can never itself justify the next
+     one, so every recurring chain still traces back to one human decision. */
+  const approvedPairs = new Set();
+  for (let i = 0; i < n; i++) {
+    if (String(allRows[i][29] || '').trim().toLowerCase() !== 'approved') continue;
+    if (String(allRows[i][30] || '').trim().toLowerCase() === 'auto-approved') continue;
+    const cn = normKey(allRows[i][0]);
+    const client = String(allRows[i][2] || '').trim().toLowerCase();
+    if (cn && client) approvedPairs.add(`${cn}|${client}`);
+  }
 
-  /* Pending rows: if the container is NOT a FRESH new lease -> AUTO-APPROVE */
   const now = dmyTime(new Date());
   let autoCount = 0;
   const acWrites = [];
-  if (nlReadOk) {
-    for (let i = 0; i < n; i++) {
-      const cn = String(allRows[i][0] || '').trim();
-      if (!cn) continue;
-      if (String(allRows[i][29] || '').trim().toLowerCase() === 'approved') continue;
-      /* multi-container cell safe: if any part is a fresh new lease, keep it manual */
-      let isNew = false;
-      for (const p of splitContainers(cn)) { if (newSet[normKey(p)]) { isNew = true; break; } }
-      if (isNew) continue; // new lease -> manual approval, skip
+  for (let i = 0; i < n; i++) {
+    const cn = String(allRows[i][0] || '').trim();
+    if (!cn) continue;
+    if (String(allRows[i][29] || '').trim().toLowerCase() === 'approved') continue;
+    const client = String(allRows[i][2] || '').trim().toLowerCase();
+    /* multi-container cell safe: every part of the container cell must have
+       approval history under this same client to count as recurring. */
+    let recurring = client !== '';
+    for (const p of splitContainers(cn)) {
+      if (!approvedPairs.has(`${normKey(p)}|${client}`)) { recurring = false; break; }
+    }
+    if (!recurring) continue; // no prior approval history for this container+client -> manual
 
-      allRows[i][28] = now;             // AC = timestamp
-      allRows[i][29] = 'Approved';      // AD = status
-      allRows[i][30] = 'Auto-approved'; // AE = user
-      acWrites.push({ rowNum: i + 2, values: [now, 'Approved', 'Auto-approved'] });
-      autoCount++;
-    }
-    if (acWrites.length && doWrite) { // write only from trigger/manual (not on load)
-      await batchUpdateValues(acWrites.map((w) => ({ range: `'${SHEETS.OPERATION}'!AC${w.rowNum}:AE${w.rowNum}`, values: [w.values] })));
-    }
+    allRows[i][28] = now;             // AC = timestamp
+    allRows[i][29] = 'Approved';      // AD = status
+    allRows[i][30] = 'Auto-approved'; // AE = user
+    acWrites.push({ rowNum: i + 2, values: [now, 'Approved', 'Auto-approved'] });
+    autoCount++;
+  }
+  if (acWrites.length && doWrite) { // write only from trigger/manual (not on load)
+    await batchUpdateValues(acWrites.map((w) => ({ range: `'${SHEETS.OPERATION}'!AC${w.rowNum}:AE${w.rowNum}`, values: [w.values] })));
   }
 
   /* List: skip approved (incl auto) -> only FRESH new leases remain */
@@ -181,15 +184,24 @@ export async function saveApproveLeaseByContainer(containerNo, timestamp, status
     // Located by container number (not a client-cached row number) so a
     // stale/differently-ordered list read (e.g. from the Mongo mirror) can
     // never cause this write to land on the wrong row — see splendid-rolling-candy.md Phase 1a.
+    //
+    // A container number can legitimately repeat across multiple rows in
+    // this sheet (same reasoning as mongoSheetMapping.js's fullRefresh note
+    // on Operation sheet — confirmed 2026-08-08: TRIU6688779 had 5 rows, all
+    // Order OR454, 4 already approved). Stopping at the FIRST name match
+    // risked landing on an old already-approved duplicate and permanently
+    // blocking the real pending row from ever being approved — scan past
+    // already-approved matches for the first one that still needs a decision.
     let rn = -1;
+    let foundAny = false;
     for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { rn = i + 2; break; } // eslint-disable-line eqeqeq
+      if (String(rows[i][0]) != containerNo) continue; // eslint-disable-line eqeqeq
+      foundAny = true;
+      const st = String(rows[i][29] || '').trim().toLowerCase(); // AD, 0-based index 29
+      if (st !== 'approved') { rn = i + 2; break; }
     }
-    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
-
-    /* AD(30, 1-based) = Approve Status — check if already approved */
-    const curStatus = rows[rn - 2] ? rows[rn - 2][29] : ''; // 0-based index 29
-    if (curStatus && String(curStatus).trim().toLowerCase() === 'approved') return 'ALREADY_PROCESSED';
+    if (!foundAny) throw new AppError(`Not found: ${containerNo}`);
+    if (rn === -1) return 'ALREADY_PROCESSED'; // every matching row is already approved
 
     await updateRange(SHEETS.OPERATION, `AC${rn}:AE${rn}`, [[dmyTime(new Date(timestamp)), status || '', userEmail || '']]);
     return 'OK';

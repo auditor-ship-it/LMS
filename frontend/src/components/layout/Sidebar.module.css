@@ -36,6 +36,18 @@
 
 .nav { display: flex; flex-direction: column; padding: 9px; gap: 2px; flex: 1; }
 
+.section { display: flex; flex-direction: column; gap: 2px; }
+.section + .section { margin-top: 10px; }
+.sectionLabel {
+  font-family: var(--f-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 8px 10px 4px;
+}
+
 .navItem {
   display: flex;
   align-items: center;
@@ -53,6 +65,23 @@
 .navItem.active { background: var(--accent-soft); color: var(--accent); }
 .navIcon { width: 17px; height: 17px; color: var(--text-3); flex: none; }
 .navItem.active .navIcon { color: var(--accent); }
+.navLabel { flex: 1; }
+.navBadge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--amber-c);
+  color: var(--on-amber);
+  font-family: var(--f-display);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.navItem.active .navBadge { background: var(--accent); color: var(--on-accent); }
 
 .branch { display: flex; flex-direction: column; }
 .branchToggle {

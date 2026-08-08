@@ -26,11 +26,11 @@ export async function saveAction(req, res) {
 
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
 export async function completeRenewalDocStage(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity } = req.body;
   res.json({
     result: await expiryService.completeDocStage(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email
+      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity
     )
   });
 }

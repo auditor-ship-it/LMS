@@ -39,7 +39,14 @@ export const MONGO_SHEET_MAPPING = {
   [SHEETS.RECEIVABLES]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true },
   [SHEETS.USER]: { naturalKeyColumn: 3, appendOnly: false, keyCaseInsensitive: true }, // Email — verified unique
   [SHEETS.TEAM_ACCOUNTS]: { naturalKeyColumn: 0, appendOnly: false, keyCaseInsensitive: true }, // Email — verified unique
-  [SHEETS.SIDEBAR_ACCESS]: { naturalKeyColumn: 0, appendOnly: false, keyCaseInsensitive: true } // Email — verified unique
+  [SHEETS.SIDEBAR_ACCESS]: { naturalKeyColumn: 0, appendOnly: false, keyCaseInsensitive: true }, // Email — verified unique
+  // Order No (col D) uniqueness not verified against live data — fullRefresh
+  // errs conservative, same reasoning as OPERATION/DEPLOYED above. Added so
+  // getVerifyData's agreement-lookup enrichment (Client Code/Agreement Date/
+  // Agreement PDF by Order No) can read this from Mongo instead of hitting
+  // the live sheet on every Verify Lease page load — confirmed 2026-08-07 as
+  // a live quota contributor (project-wide quota shared with 3 other apps).
+  [SHEETS.NEW_LEASE_REFF]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true }
 };
 
 /** Normalizes a raw natural-key cell value the same way reconciliation and
