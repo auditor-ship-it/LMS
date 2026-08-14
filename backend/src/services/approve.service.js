@@ -54,6 +54,18 @@ function padWidth(arr, width) {
  * row (see splendid-rolling-candy.md Phase 1a/1b). The list is still correct
  * either way because would-be-approved rows are filtered out in memory either way.
  */
+/**
+ * Client names for cross-sheet comparison — lower-cased with punctuation and
+ * spacing removed, so "AAK India Pvt.Ltd" and "AAK INDIA PVT LTD" match.
+ *
+ * Deliberately NOT fuzzy: this decides whether a row skips human approval, so
+ * a near-miss must fail to manual rather than guess. Suffix-stripping or edit
+ * distance would risk auto-approving one client's row against another's.
+ */
+function normClientName(v) {
+  return String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 export async function getApproveData(doWrite) {
   const { headers: rawHeaders, rows: rawRows } = doWrite
     ? await getSheetData(SHEETS.OPERATION)
@@ -85,6 +97,41 @@ export async function getApproveData(doWrite) {
     if (cn && client) approvedPairs.add(`${cn}|${client}`);
   }
 
+  /* DEPLOYED-SHEET MATCH — the second, independent way a row qualifies.
+   *
+   * A container+client already ON the Deployed sheet is an existing, live
+   * deployment: this Operation row is the next billing cycle for a lease that
+   * physically exists, so it auto-approves. A pair NOT on Deployed has never
+   * gone out under that client — a genuinely new lease — and stays manual.
+   *
+   * This complements the approval-history rule rather than replacing it: a
+   * first-ever lease still needs one human decision before deployment, and
+   * after deployment the repeat cycles no longer do.
+   *
+   * Deployed columns are 0 = Container No, 1 = Customer Name; Operation is
+   * 0 = Container No., 2 = Client Name — the two sheets name them differently.
+   */
+  const deployedPairs = new Set();
+  try {
+    const { rows: depRows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    for (const r of depRows) {
+      const client = normClientName(r[1]);
+      if (!client) continue;
+      /* Multi-container cells occur here too, so each part is indexed
+         separately — otherwise a two-container deployment would only ever
+         match a two-container Operation row written the same way. */
+      for (const p of splitContainers(String(r[0] || ''))) {
+        const cn = normKey(p);
+        if (cn) deployedPairs.add(`${cn}|${client}`);
+      }
+    }
+  } catch (e) {
+    /* Fail CLOSED: with no Deployed data the pairs set stays empty, so nothing
+       auto-approves on that basis and everything falls back to manual. The
+       opposite default would approve rows because a read failed. */
+    console.error('[AUTO-APPROVE] Deployed sheet unavailable — deployed-match rule inactive:', e?.message || e);
+  }
+
   const now = dmyTime(new Date());
   let autoCount = 0;
   const acWrites = [];
@@ -93,13 +140,17 @@ export async function getApproveData(doWrite) {
     if (!cn) continue;
     if (String(allRows[i][29] || '').trim().toLowerCase() === 'approved') continue;
     const client = String(allRows[i][2] || '').trim().toLowerCase();
-    /* multi-container cell safe: every part of the container cell must have
-       approval history under this same client to count as recurring. */
-    let recurring = client !== '';
-    for (const p of splitContainers(cn)) {
-      if (!approvedPairs.has(`${normKey(p)}|${client}`)) { recurring = false; break; }
-    }
-    if (!recurring) continue; // no prior approval history for this container+client -> manual
+    const depClient = normClientName(allRows[i][2]);
+
+    /* Multi-container cell safe: EVERY part must qualify under this same
+       client. One unknown container in a multi-container row makes the whole
+       row a human decision — approving the row approves all of it. */
+    const parts = splitContainers(cn);
+
+    const hasHistory = client !== '' && parts.every((p) => approvedPairs.has(`${normKey(p)}|${client}`));
+    const isDeployed = depClient !== '' && parts.every((p) => deployedPairs.has(`${normKey(p)}|${depClient}`));
+
+    if (!hasHistory && !isDeployed) continue; // new container+client -> manual
 
     allRows[i][28] = now;             // AC = timestamp
     allRows[i][29] = 'Approved';      // AD = status

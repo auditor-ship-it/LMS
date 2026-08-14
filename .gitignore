@@ -29,3 +29,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Persisted FMS sheet snapshots (backend/src/services/stage8.service.js) - regenerated, never committed
+backend/.cache/

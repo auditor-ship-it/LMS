@@ -7,3 +7,19 @@
   margin-bottom: 14px;
 }
 .count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
+
+/* FMS chain (STAGE-8 -> 9 -> 10) in the Status column. */
+.dots { display: inline-flex; gap: 3px; }
+.dot {
+  min-width: 22px;
+  padding: 2px 5px;
+  border-radius: var(--r-sm);
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.dot_found { background: var(--success-bg); color: var(--success); }
+.dot_missing { background: var(--surface-2); color: var(--text-3); }
+.dot_unread { background: var(--error-bg); color: var(--error); }

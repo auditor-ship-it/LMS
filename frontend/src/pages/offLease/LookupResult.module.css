@@ -104,3 +104,118 @@
   padding: 14px;
 }
 .filledEmpty { padding: 14px; margin: 0; font-size: 12px; color: var(--text-3); }
+
+/* Stage 3 container inspection checklist */
+.inspWrap { padding: 4px 14px 14px; overflow-x: auto; }
+.inspTitle {
+  margin: 8px 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-2);
+}
+.inspTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.inspTable th {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1.5px solid var(--line);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.inspTable td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+.inspTable tr:last-child td { border-bottom: none; }
+.inspNum { color: var(--text-3); margin-right: 5px; font-variant-numeric: tabular-nums; }
+.inspGood, .inspDamage, .inspNA {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.inspGood { background: var(--success-bg); color: var(--success); }
+.inspDamage { background: var(--error-bg); color: var(--error); }
+.inspNA { background: var(--surface-2); color: var(--text-2); }
+
+/* Container History — Stage 1 to Stage 9 in one table. */
+.sectionCount {
+  margin-left: 8px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-3);
+}
+
+.histWrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.histTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.histTable th {
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1.5px solid var(--line);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.histTable td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+.histTable tr:last-child td { border-bottom: none; }
+
+.histStage { font-weight: 800; white-space: nowrap; color: var(--text-2); }
+
+/* Movements are journal entries, not pipeline states — tinted so the two
+   kinds of row are distinguishable at a glance in one list. */
+.histMovementRow td { background: var(--accent-soft); }
+
+.histDone, .histLogged, .histRejected, .histPending, .histNeutral {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.histDone { background: var(--success-bg); color: var(--success); }
+.histRejected { background: var(--error-bg); color: var(--error); }
+.histPending { background: var(--surface-2); color: var(--text-2); }
+.histLogged { background: var(--accent-soft); color: var(--accent); }
+.histNeutral { background: var(--surface-2); color: var(--text-2); }
+
+.movementsError { margin: 0; font-size: 12px; font-weight: 600; color: var(--error); }
+
+/* Invoice table — same shape as the Stage 1 panel's. */
+.tRight { text-align: right; }
+.tCenter { text-align: center; }
+.invNo { font-weight: 700; white-space: nowrap; }
+.histTable tfoot .invTotalRow td {
+  padding: 9px 12px;
+  background: var(--surface-2);
+  border-top: 1.5px solid var(--line);
+  border-bottom: none;
+  font-weight: 800;
+}

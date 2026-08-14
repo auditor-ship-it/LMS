@@ -1,4 +1,16 @@
-.tabRow { display: flex; gap: 20px; border-bottom: 1.5px solid var(--line); margin-bottom: 12px; overflow-x: auto; }
+/* overflow-y: hidden is load-bearing — `overflow-x: auto` alone computes
+   overflow-y to `auto` too, and the tabs' -1.5px bottom margin overflows the
+   row by a fraction of a pixel, which was enough to show a vertical
+   scrollbar next to a single-line strip of tabs. */
+.tabRow {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1.5px solid var(--line);
+  margin-bottom: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
 .tab {
   padding: 8px 0;
   margin-bottom: -1.5px;
@@ -24,4 +36,44 @@
   font-size: 12px;
   font-weight: 600;
   margin: 0 0 12px;
+}
+
+/* Chooser shown when one container number has several off-lease records */
+.pickerWrap { padding: 4px 0 8px; }
+.pickerTitle {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.pickerList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.pickerCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  text-align: left;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.pickerCard:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pickerClient { font-size: 14px; font-weight: 800; color: var(--text); }
+.pickerMeta { font-size: 11.5px; color: var(--text-2); }
+.pickerStage {
+  margin-top: 4px;
+  align-self: flex-start;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
 }

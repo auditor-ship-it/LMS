@@ -58,7 +58,7 @@ function vec(trueKeys) {
 
 function accessSeedData() {
   const ALL = PERMISSION_KEYS.map((p) => p.key);
-  const OFFLEASE_ALL = ['offlease1', 'offlease2', 'offlease3', 'offlease4', 'offlease5', 'offlease6', 'offlease7', 'offlease8'];
+  const OFFLEASE_ALL = ['offlease1', 'offlease2', 'offlease3', 'offlease4', 'offlease5', 'offlease6', 'offlease7', 'offlease8', 'offlease9'];
   return [
     { email: 'intern@crystalgroup.in', perms: vec(ALL), allAccess: false },
     { email: 'shivani.dhall@crystalgroup.in', perms: vec(ALL), allAccess: false },

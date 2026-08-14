@@ -223,6 +223,10 @@ function _deployedClientName(headers, row) {
    first use. Never throws — a logging failure must not block the real renewal. */
 const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File'];
 
+/** Container numbers are compared case- and punctuation-insensitively, so a
+ *  stray space or lower-case entry still resolves to the same row. */
+const rlKey = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+
 async function _logRenewal(info) {
   try {
     await insertSheetIfMissing(SHEETS.RENEWAL_LOG, RENEWAL_LOG_HEADERS);
@@ -234,11 +238,45 @@ async function _logRenewal(info) {
       const endCol = colLetter(RENEWAL_LOG_HEADERS.length - 1);
       await updateRange(SHEETS.RENEWAL_LOG, `${startCol}1:${endCol}1`, [RENEWAL_LOG_HEADERS.slice(headers.length)]);
     }
-    await appendRow(SHEETS.RENEWAL_LOG, [
-      dmyTime(new Date()), info.container || '', info.clientName || '', info.poNo || '',
-      info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
-    ]);
+    /* UPSERT on Container No, not append — see the same logic in
+       expiry.service.js. Both paths write this sheet, so both must upsert or
+       one of them re-creates the duplicates the other avoids. Blank incoming
+       values mean "not part of this update" and keep what is already there;
+       only Timestamp and Updated By always take the newest value. */
+    const incoming = {
+      1: info.container || '', 2: info.clientName || '', 3: info.poNo || '',
+      4: info.poFileUrl || '', 5: info.agreementUrl || '', 6: info.validTill || '',
+      8: info.oldPoNo || '', 9: info.oldPoFileUrl || '', 10: info.oldAgreementUrl || ''
+    };
+    const stamp = dmyTime(new Date());
+    const wantKey = rlKey(info.container);
+
+    const { rows } = await getSheetData(SHEETS.RENEWAL_LOG);
+    let rn = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (wantKey && rlKey(rows[i][1]) === wantKey) rn = i + 2;   // last match wins
+    }
+
+    const existing = rn === -1 ? [] : (rows[rn - 2] || []);
+
+    /* New renewal cycle -> new row; document upload -> update the current row.
+       Valid Till moving is what marks a renewal. Same rule as
+       expiry.service.js — both write this sheet and must agree. */
+    const incomingValid = safeStr(info.validTill).trim();
+    const currentValid = safeStr(existing[6]).trim();
+    if (rn === -1 || (incomingValid !== '' && incomingValid !== currentValid)) {
+      await appendRow(SHEETS.RENEWAL_LOG, RENEWAL_LOG_HEADERS.map((_, i) =>
+        (i === 0 ? stamp : i === 7 ? (info.userEmail || '') : (incoming[i] || ''))));
+      return;
+    }
+
+    const merged = RENEWAL_LOG_HEADERS.map((_, i) => {
+      if (i === 0) return stamp;
+      if (i === 7) return info.userEmail || safeStr(existing[7]);
+      const next = incoming[i];
+      return next !== '' && next !== undefined ? next : safeStr(existing[i]);
+    });
+    await updateRange(SHEETS.RENEWAL_LOG, `A${rn}:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}${rn}`, [merged]);
   } catch (e) {
     console.error('[RENEWAL-LOG]', e?.message || e);
   }

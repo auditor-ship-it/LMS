@@ -94,6 +94,141 @@
 .field select:disabled,
 .field textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* ---- Stage 3 container inspection checklist ---- */
+.sectionTitle {
+  margin: 26px 0 10px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+}
+.sectionHint {
+  margin: -6px 0 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.inspTable {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.inspTable th {
+  text-align: left;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1.5px solid var(--line);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-2);
+}
+.inspTable th:last-child { width: 240px; }
+.inspTable td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--text);
+  vertical-align: middle;
+}
+.inspTable tr:last-child td { border-bottom: none; }
+
+.inspPoint { font-weight: 600; }
+.inspNum { color: var(--text-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+/* Status dropdown — one control per checklist row, tinted by what's chosen. */
+.statusSelect {
+  width: 100%;
+  max-width: 220px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.statusSelect:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.statusSelect:disabled { opacity: 0.6; cursor: not-allowed; }
+.statusGood { border-color: var(--success, #16a34a); background: var(--success-bg, #ecfdf5); color: var(--success, #16a34a); }
+.statusDamage { border-color: var(--error); background: var(--error-bg); color: var(--error); }
+.statusNA { border-color: var(--text-3); background: var(--surface-2); color: var(--text-2); }
+/* The dropdown list itself inherits the tint otherwise — keep options neutral. */
+.statusSelect option { background: var(--surface); color: var(--text); font-weight: 600; }
+
+.inspChoices { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Segmented Good/Damage control — the selected Damage state goes red, as on
+   the printed inspection sheet. */
+.inspChoice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.inspChoice:hover { border-color: var(--text-3); }
+.inspChoice input { margin: 0; accent-color: currentColor; }
+.inspChoiceGood { border-color: var(--success, #16a34a); background: var(--success-bg, #ecfdf5); color: var(--success, #16a34a); }
+.inspChoiceDamage { border-color: var(--error); background: var(--error-bg); color: var(--error); }
+.inspChoiceNA { border-color: var(--text-3); background: var(--surface-2); color: var(--text-2); }
+.inspChoice.disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Revealed only when an item is marked Damage. */
+.inspDamageCell { padding: 0 !important; background: var(--error-bg); }
+.inspDamageBox {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 18px;
+  padding: 14px 14px 16px 32px;
+  border-left: 3px solid var(--error);
+}
+
+.cabinQty {
+  width: 90px;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text);
+}
+.cabinQty:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.cabinQty:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Fewer present than the cabin spec expects. */
+.cabinShort { border-color: var(--error); background: var(--error-bg); color: var(--error); font-weight: 700; }
+
+/* Inputs that belong to a checklist but aren't a point — e.g. technician hours. */
+.checklistFooter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 18px;
+  padding: 14px 2px 0;
+}
+.computed {
+  display: block;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
 .error {
   margin-top: 16px;
   padding: 10px 14px;
@@ -104,6 +239,21 @@
   font-weight: 600;
 }
 
+/* Shown in place of the form once a report stage has been saved. */
+.savedPanel {
+  padding: 26px 22px;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.savedTitle { margin: 0 0 6px; font-size: 15px; font-weight: 800; color: var(--success, #16a34a); }
+.savedHint { margin: 0 0 18px; font-size: 13px; color: var(--text-2); }
+.savedActions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* Pushed left so the report sits apart from Cancel / Save. */
+.reportBtn { margin-right: auto; }
+
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -111,4 +261,137 @@
   margin-top: 22px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+/* Tally outstanding summary on Stage 1 */
+/* A single card now — sized to its content rather than stretched across the
+   modal, which a full-width grid track would do. */
+.outstandingRow {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.outstandingRow > * { min-width: 200px; }
+.outstandingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.outstandingLabel {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.outstandingValue { font-size: 18px; font-weight: 800; color: var(--text); }
+.outstandingOpen { color: var(--error); font-weight: 700; }
+
+/* Container list under an invoice — several per row, so it wraps rather than
+   forcing the table wide. */
+.containerList {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 260px;
+  word-break: break-word;
+}
+.containerCount { color: var(--text-3); font-weight: 700; }
+
+/* Invoice groups: containers stack on their own rows, so only the first row of
+   each group carries a divider — inner rows stay visually joined to it. */
+.invoiceGroupStart td { border-top: 1.5px solid var(--line); }
+.inspTable tbody tr:not(.invoiceGroupStart) td { border-bottom: none; }
+.containerCell { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---- Invoice table: compact accounting/ERP layout, A4-print friendly ---- */
+.invTable {
+  width: 100%;
+  max-width: 720px;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.35;
+  table-layout: fixed;
+}
+.colInvoice { width: 20%; }
+.colContainers { width: 26%; }
+.colMonth { width: 12%; }
+.colAmount { width: 15%; }
+/* FMS pipeline: STAGE-8 -> 9 -> 10 for this container. */
+.fmsRow { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 4px; }
+.fmsStep {
+  flex: 1 1 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--line);
+  border-left-width: 4px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.fmsNum { font-size: 10px; font-weight: 800; letter-spacing: 0.6px; color: var(--text-3); }
+.fmsNum::before { content: 'STAGE '; }
+.fmsLabel { font-size: 13px; font-weight: 700; color: var(--text); }
+.fmsState { font-size: 11px; font-weight: 700; }
+
+.fms_found { border-left-color: var(--success); }
+.fms_found .fmsState { color: var(--success); }
+.fms_missing { border-left-color: var(--line-strong); }
+.fms_missing .fmsState { color: var(--text-3); }
+.fms_unread { border-left-color: var(--error); }
+.fms_unread .fmsState { color: var(--error); }
+
+.colAge { width: 9%; }
+/* Holds a single 📎, so it takes only what the icon needs. */
+.colAttachment { width: 8%; }
+
+.invTable thead th {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-2);
+  text-align: left;
+  white-space: nowrap;
+}
+.invTable tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: top;
+}
+.invTable tbody tr:last-child td { border-bottom: none; }
+
+.invNo { font-weight: 700; word-break: break-word; }
+.tRight { text-align: right; font-variant-numeric: tabular-nums; }
+.tCenter { text-align: center; }
+.invOpen { color: var(--error); font-weight: 700; }
+
+/* Containers stacked tightly — all listed, minimal vertical cost. */
+.cnList { margin: 0; padding: 0; list-style: none; }
+.cnList li {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.invTable tfoot td {
+  padding: 7px 10px;
+  border-top: 1.5px solid var(--line);
+  background: var(--surface-2);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--text);
 }

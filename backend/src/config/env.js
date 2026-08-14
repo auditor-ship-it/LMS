@@ -40,6 +40,12 @@ export const env = {
   googleDriveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
   enableCron: String(process.env.ENABLE_CRON || '').toLowerCase() === 'true',
 
+  /* Accounts & Collection app — Tally outstanding shown on Off-Lease Stage 1.
+     Server-side only: these credentials must never reach the browser. */
+  accountsApiUrl: process.env.ACCOUNTS_API_URL || 'https://accounts-collection.vercel.app',
+  accountsApiEmpId: process.env.ACCOUNTS_API_EMP_ID || '',
+  accountsApiPassword: process.env.ACCOUNTS_API_PASSWORD || '',
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',

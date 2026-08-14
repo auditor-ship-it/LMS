@@ -8,9 +8,56 @@
 
 .toolbar {
   display: flex;
-  justify-content: flex-start;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
+.count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
+
+/* Active KPI filter — click to clear. */
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--accent);
+  cursor: pointer;
+}
+.filterChip:hover { filter: brightness(0.95); }
+.filterX { font-size: 14px; line-height: 1; }
+.srOnly {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* View 1 / View 2 — presentation switch, sits in the card's action slot. */
+.viewRow { display: inline-flex; gap: 2px; margin-right: 8px; }
+.viewTab {
+  padding: 5px 12px;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-3);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.viewTab:hover { color: var(--text); }
+.viewTabActive { color: var(--text); border-bottom-color: var(--warn, #e0a800); }
 
 .tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
 

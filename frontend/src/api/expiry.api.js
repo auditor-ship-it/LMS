@@ -1,5 +1,11 @@
 import { apiClient } from '../shared/auth/index.js';
 
+/** GET /api/expiry/renewal-log — Renewal Log rows for the month-wise report. */
+export const getRenewalLog = () => apiClient.get('/expiry/renewal-log').then((r) => r.data);
+
+/** GET /api/expiry/new-lease-report — New Lease rows for the month-wise report. */
+export const getNewLeaseReport = () => apiClient.get('/expiry/new-lease-report').then((r) => r.data);
+
 /** GET /api/expiry?filter=pending — the "Lease Expiry" page's own dedicated pending-only view. */
 export const getExpiryData = (filter = 'pending') =>
   apiClient.get('/expiry', { params: { filter } }).then((r) => r.data);

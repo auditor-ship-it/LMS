@@ -10,6 +10,7 @@ import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchApprovalQueue, decideApproval, lookupContainer } from '../../services/offLease.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { LookupResult } from './LookupResult.jsx';
+import { exportLookupToExcel, exportLookupToPdf } from './lookupExport.js';
 import { PipelineDashboard } from './PipelineDashboard.jsx';
 import { StagePageBase } from '../stages/StagePageBase.jsx';
 import { STAGES } from '../../constants/stages.js';
@@ -19,7 +20,9 @@ const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'approval', label: 'Pending Approval' },
   { key: 'lookup', label: 'Container Lookup' },
-  ...STAGES.map((s) => ({ key: `stage${s.number}`, label: s.owner ? `Stage ${s.number} (${s.owner})` : `Stage ${s.number}` }))
+  // key uses the internal number (it routes to the stage's columns); the label
+  // shows the display number so the tabs read Stage 1..7 with no gap.
+  ...STAGES.map((s) => ({ key: `stage${s.number}`, label: s.owner ? `Stage ${s.display} (${s.owner})` : `Stage ${s.display}` }))
 ];
 
 /**
@@ -147,20 +150,61 @@ function ApprovalQueue() {
   );
 }
 
+/**
+ * Shown when one container number has more than one off-lease record — the
+ * same box returned by different clients at different times. Picking a client
+ * re-runs the lookup scoped to that lease, so the detail and the downloaded
+ * report are unambiguously that one record.
+ */
+function ContainerMatchPicker({ container, matches, onPick }) {
+  return (
+    <div className={styles.pickerWrap}>
+      <p className={styles.pickerTitle}>
+        {container} has {matches.length} off-lease records — choose a client
+      </p>
+      <div className={styles.pickerList}>
+        {matches.map((m) => (
+          <button
+            key={m.leaseId || m.clientName}
+            type="button"
+            className={styles.pickerCard}
+            onClick={() => onPick(m.leaseId)}
+          >
+            <span className={styles.pickerClient}>{m.clientName || 'Unknown client'}</span>
+            <span className={styles.pickerMeta}>
+              {[m.leaseId, m.clientCode, [m.size, m.type].filter(Boolean).join(' · ')].filter(Boolean).join('  ·  ')}
+            </span>
+            <span className={styles.pickerMeta}>
+              {[m.deployedDate && `Deployed ${m.deployedDate}`, m.validUpto && `Valid upto ${m.validUpto}`].filter(Boolean).join('  ·  ')}
+            </span>
+            {m.currentStage && <span className={styles.pickerStage}>{m.currentStage}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ContainerLookup() {
   const [term, setTerm] = useState('');
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [downloadError, setDownloadError] = useState('');
 
-  const search = async (e) => {
+  /* `leaseId` picks one record when a container has been off-leased more than
+     once — the same box returned by two different clients at different times.
+     Without it the API hands back the candidate list instead of quietly
+     showing whichever row happens to come first. */
+  const search = async (e, leaseId) => {
     e?.preventDefault();
     const cn = term.trim();
     if (!cn) return;
     setLoading(true);
     setError('');
+    setDownloadError('');
     try {
-      const res = await lookupContainer(cn);
+      const res = await lookupContainer(cn, leaseId);
       setResult(res);
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -170,10 +214,34 @@ function ContainerLookup() {
     }
   };
 
-  const clear = () => { setTerm(''); setResult(null); setError(''); };
+  const clear = () => { setTerm(''); setResult(null); setError(''); setDownloadError(''); };
+
+  // Both exports are built from `result`, which is already in memory — no
+  // extra API call, so no loading state is needed here.
+  const download = (fn) => () => {
+    setDownloadError('');
+    try {
+      fn(result);
+    } catch (err) {
+      setDownloadError(err?.message || 'Could not build the download file.');
+    }
+  };
+
+  // No download while the user is still choosing which record they mean.
+  const canDownload = Boolean(result?.found && !result?.multiple);
 
   return (
-    <Card title="Container Lookup">
+    <Card
+      title="Container Lookup"
+      actions={canDownload ? (
+        <>
+          <Button variant="secondary" size="sm" onClick={download(exportLookupToExcel)}>Download Excel</Button>
+          <Button variant="secondary" size="sm" onClick={download(exportLookupToPdf)}>Download PDF</Button>
+        </>
+      ) : undefined}
+    >
+      {downloadError && <p className={styles.actionError}>{downloadError}</p>}
+
       <form onSubmit={search} className={styles.searchRow}>
         <SearchBar value={term} onChange={setTerm} placeholder="Search by container number…" />
         <Button type="submit" variant="primary" loading={loading}>Search</Button>
@@ -185,7 +253,14 @@ function ContainerLookup() {
       {!loading && !error && result && !result.found && (
         <EmptyState message={result.message || 'Container not found'} />
       )}
-      {!loading && !error && result?.found && <LookupResult result={result} />}
+      {!loading && !error && result?.multiple && (
+        <ContainerMatchPicker
+          container={result.container}
+          matches={result.matches}
+          onPick={(leaseId) => search(null, leaseId)}
+        />
+      )}
+      {!loading && !error && result?.found && !result.multiple && <LookupResult result={result} />}
       {!loading && !error && !result && (
         <EmptyState message="Search for a container to see its off-lease status" hint="Enter a container number and press Search" />
       )}

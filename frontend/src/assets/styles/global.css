@@ -22,3 +22,7 @@ table { border-collapse: collapse; width: 100%; }
   outline: none;
   box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--focus);
 }
+
+/* Placeholder shown by renderCellValue() where a cell has no value — muted so
+   it reads as "nothing recorded" rather than competing with real data. */
+.cellEmpty { color: var(--text-3); }

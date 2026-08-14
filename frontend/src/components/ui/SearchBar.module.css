@@ -1,14 +1,67 @@
-.input {
-  font-family: var(--f-body);
-  padding: 10px 12px;
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0 10px 0 11px;
   border: 1.5px solid var(--line);
-  border-radius: var(--r-sm);
-  font-size: 13px;
-  min-width: 220px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  transition: border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out),
+              background-color var(--dur-fast) var(--ease-out);
+}
+.wrap:hover { border-color: var(--line-strong); }
+/* Same double ring every other focusable control uses (global.css), so the
+   pill matches buttons and inputs across the app rather than inventing its own. */
+.wrap:focus-within {
+  border-color: var(--focus, var(--accent));
   background: var(--surface);
+  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--focus);
+}
+
+.icon { width: 15px; height: 15px; flex: none; color: var(--text-3); }
+.wrap:focus-within .icon { color: var(--accent); }
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 0;
+  border: none;
+  background: none;
+  font-family: var(--f-body);
+  font-size: 13px;
   color: var(--text);
-  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+/* The WRAPPER owns the focus ring — the input must not draw its own, or a
+   square outline appears inside the rounded pill. `:focus-visible` is listed
+   separately and `!important` is used deliberately: a global focus-ring rule
+   applies to every focusable element and would otherwise win here. */
+.input:focus,
+.input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 .input::placeholder { color: var(--text-3); }
-.input:hover:not(:disabled) { border-color: var(--line-strong); }
-.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* type="search" paints its own clear button in WebKit, next to ours. */
+.input::-webkit-search-cancel-button { appearance: none; }
+
+.clear {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--line);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.clear:hover { background: var(--line-strong); color: var(--text); }
