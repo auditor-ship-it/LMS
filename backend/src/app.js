@@ -33,7 +33,27 @@ export function createApp() {
   // downstream Mongo/Sheets access reports into (see requestContext.js).
   app.use(requestLogger);
 
-  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'lease-management-backend' }));
+  /* Unauthenticated on purpose, and deliberately says WHICH build is running.
+     A deploy that ships the frontend but leaves the old Node process up is
+     invisible from outside: the UI is new, the API is old, and the only
+     symptoms are wrong numbers and 404s on routes that plainly exist in the
+     repo. Diagnosing that took a full investigation; `curl /api/health` should
+     answer it in one line.
+
+     Commit comes from the environment (set it in the deploy script, e.g.
+     GIT_COMMIT=$(git rev-parse --short HEAD)) — not shelled out to git here,
+     which would be a process spawn per request and wrong anyway if the
+     checkout moves on without a restart. `startedAt` needs no configuration
+     and is the decisive one: a process older than your last deploy did not
+     pick it up. */
+  const STARTED_AT = new Date().toISOString();
+  app.get('/api/health', (req, res) => res.json({
+    ok: true,
+    service: 'lease-management-backend',
+    commit: process.env.GIT_COMMIT || 'unset',
+    startedAt: STARTED_AT,
+    uptimeSeconds: Math.round(process.uptime())
+  }));
 
   // Resolves req.user (if a valid session token is present) for every request,
   // then serves/populates the per-user response cache + global quota-lockout

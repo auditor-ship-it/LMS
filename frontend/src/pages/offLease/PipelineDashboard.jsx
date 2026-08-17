@@ -73,22 +73,32 @@ export function PipelineDashboard({ onOpenTab }) {
     <>
       <div className={styles.kpiRow}>
         <StatCard icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} tint="navy" />
-        <StatCard
-          icon="clock" label="Pending approval" value={kpis.pendingApproval ?? '—'} tint="warn"
-          footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
-          onClick={() => toggleFilter('approval')}
-        />
-        {STAGES.map((s) => (
-          <StatCard
-            key={s.number}
-            icon={STAGE_ICONS[s.number]}
-            label={`Stage ${s.display} · ${s.label}`}
-            value={kpis.byStage?.[s.number] ?? '—'}
-            tint={s.number === 8 ? 'success' : 'info'}
-            footnote={s.owner}
-            onClick={() => toggleFilter(s.number)}
-          />
-        ))}
+        {/* The approval gate sits BETWEEN Stage 1 and Stage 2, so its card
+            follows Stage 1 rather than leading the row — the cards now read in
+            the order the work actually happens. Same reasoning as the tab
+            strip in OffLeasePage.jsx. */}
+        {STAGES.flatMap((s) => {
+          const card = (
+            <StatCard
+              key={s.number}
+              icon={STAGE_ICONS[s.number]}
+              label={`Stage ${s.display} · ${s.label}`}
+              value={kpis.byStage?.[s.number] ?? '—'}
+              tint={s.number === 8 ? 'success' : 'info'}
+              footnote={s.owner}
+              onClick={() => toggleFilter(s.number)}
+            />
+          );
+          if (s.display !== 1) return [card];
+          return [card, (
+            <StatCard
+              key="approval"
+              icon="clock" label="Stage 1A · Pending approval" value={kpis.pendingApproval ?? '—'} tint="warn"
+              footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
+              onClick={() => toggleFilter('approval')}
+            />
+          )];
+        })}
         <StatCard icon="check" label="Completed this month" value={kpis.completedThisMonth ?? '—'} tint="success" />
       </div>
 

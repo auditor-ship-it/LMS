@@ -17,19 +17,27 @@ import { StagePageBase } from '../stages/StagePageBase.jsx';
 import { STAGES } from '../../constants/stages.js';
 import styles from './OffLeasePage.module.css';
 
+/* The approval gate is not a stage of its own — it sits BETWEEN Stage 1 and
+   Stage 2 — so it is numbered 1A and placed immediately after Stage 1 rather
+   than floating at the front of the strip, where the tab order implied
+   approvals happened before intimation. */
+const APPROVAL_TAB = { key: 'approval', label: 'Stage 1A (Approval)', countKey: 'approval' };
+
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'approval', label: 'Pending Approval', countKey: 'approval' },
   { key: 'lookup', label: 'Container Lookup' },
   // key uses the internal number (it routes to the stage's columns); the label
   // shows the display number so the tabs read Stage 1..7 with no gap.
   /* countKey is the INTERNAL stage number — the same key the API returns
      counts under. The display number is only ever the label. */
-  ...STAGES.map((s) => ({
-    key: `stage${s.number}`,
-    countKey: String(s.number),
-    label: s.owner ? `Stage ${s.display} (${s.owner})` : `Stage ${s.display}`
-  }))
+  ...STAGES.flatMap((s) => {
+    const tab = {
+      key: `stage${s.number}`,
+      countKey: String(s.number),
+      label: s.owner ? `Stage ${s.display} (${s.owner})` : `Stage ${s.display}`
+    };
+    return s.display === 1 ? [tab, APPROVAL_TAB] : [tab];
+  })
 ];
 
 /**
