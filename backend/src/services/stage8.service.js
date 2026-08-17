@@ -53,8 +53,13 @@ const S9_CACHE_KEY = 'offlease:stage9-movements:v8';
 /* 30 minutes, not 5. These are external sheets that change a few times a day,
    and every cache miss is a read on a quota that is currently failing outright
    — a short TTL bought freshness nobody needed at the cost of the data
-   appearing at all. */
-const CACHE_TTL_MS = 30 * 60 * 1000;
+   appearing at all.
+
+   In SECONDS: cachePut takes a TTL in seconds and multiplies by 1000 itself.
+   This was written `30 * 60 * 1000`, which asked for 1.8 million seconds
+   (~21 days) — STAGE-8/9/10 were read once per process and then frozen, so no
+   FMS change reached Stage 2 until the server restarted. */
+const CACHE_TTL_SECONDS = 30 * 60;
 
 /** Container numbers are compared on alphanumerics, case-insensitively. */
 const normContainer = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -261,7 +266,7 @@ async function readOffleaseRows() {
     }))
     .filter((r) => r.containerNo);   // a movement with no container cannot be matched
 
-  cachePut(CACHE_KEY, out, CACHE_TTL_MS);
+  cachePut(CACHE_KEY, out, CACHE_TTL_SECONDS);
   setLastGood(CACHE_KEY, out);
   return out;
 }
@@ -302,7 +307,7 @@ async function readStage10Rows() {
     }))
     .filter((r) => r.keys.length);
 
-  cachePut(S10_CACHE_KEY, out, CACHE_TTL_MS);
+  cachePut(S10_CACHE_KEY, out, CACHE_TTL_SECONDS);
   setLastGood(S10_CACHE_KEY, out);
   return out;
 }
@@ -345,7 +350,7 @@ async function readStage9OffleaseRows() {
     }))
     .filter((r) => r.containerNo);
 
-  cachePut(S9_CACHE_KEY, out, CACHE_TTL_MS);
+  cachePut(S9_CACHE_KEY, out, CACHE_TTL_SECONDS);
   setLastGood(S9_CACHE_KEY, out);
   return out;
 }

@@ -30,6 +30,7 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { cacheGet, cachePut } from '../utils/memoryCache.js';
 import { OL_STAGE_INFO, _findOlColumnMulti } from './offlease.service.js';
+import { parseStamp } from './offleaseSla.service.js';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dmyTime(d) {
@@ -66,6 +67,108 @@ function normClientName(v) {
   return String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+/* ---------------- LEASE-CYCLE BOUNDARY ----------------
+ *
+ * Going Off-Lease CLOSES a container+client approval cycle. If that pair is
+ * later re-leased, its first entry is a new lease and must go back through a
+ * human — otherwise a decision made about a lease that ended months ago would
+ * keep auto-approving rows for a completely new one.
+ *
+ * Two sources, unioned, because neither alone is complete:
+ *   - Off-Lease Tracking, the workflow record. Carries the client NAME, but
+ *     only for containers that actually entered the workflow (38 rows).
+ *   - Deployed, whose Status column is the broader "this box is off-lease"
+ *     flag (40 rows, 3 of them with no tracking row at all).
+ *
+ * Every column is located BY HEADER, never by position: both sheets have had
+ * columns inserted and deleted by hand, and Off-Lease Tracking is currently
+ * 289 columns against a live 212, so a positional read would silently take a
+ * neighbouring column and mis-date the boundary.
+ */
+const OL_CYCLE_CACHE_KEY = 'approve_offlease_cycle_v1';
+
+/** Container -> the off-lease events recorded against it, each with the client
+ *  it was leased to and when the cycle closed. */
+export async function _offLeaseCycleIndex() {
+  const hit = cacheGet(OL_CYCLE_CACHE_KEY);
+  if (hit) return hit;
+
+  const byContainer = new Map();
+  const add = (container, code, name, stamp) => {
+    const key = normKey(container);
+    const ts = parseStamp(stamp);
+    if (!key || !ts) return; // an undated event cannot bound a cycle
+    if (!byContainer.has(key)) byContainer.set(key, []);
+    byContainer.get(key).push({
+      code: String(code || '').trim().toUpperCase(),
+      name: normClientName(name),
+      ts: ts.getTime()
+    });
+  };
+
+  try {
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.OFF_LEASE_TRACKING);
+    const cCode = _findOlColumnMulti(headers, ['client code']);
+    const cName = _findOlColumnMulti(headers, ['client name']);
+    const cDate = _findOlColumnMulti(headers, ['ol intimation date', 'intimation date']);
+    const cFallback = _findOlColumnMulti(headers, ['stage 1 timestamp']);
+    for (const r of rows) {
+      if (!safeStr(r[0]).trim()) continue;
+      /* Intimation date is when the off-lease began; Stage 1's timestamp is
+         when it was recorded. Either dates the boundary — prefer the former. */
+      add(r[0], cCode >= 0 ? r[cCode] : '', cName >= 0 ? r[cName] : '',
+        (cDate >= 0 ? safeStr(r[cDate]).trim() : '') || (cFallback >= 0 ? r[cFallback] : ''));
+    }
+  } catch (e) {
+    console.error('[APPROVE-CYCLE] off-lease tracking read failed:', e?.message || e);
+  }
+
+  try {
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    /* 'Customer Name' here, not 'Client Name' — this sheet names the column
+       differently from the other two, and matching on /client/ alone picks up
+       'Client Code' instead and compares a code against a name. */
+    const cName = _findOlColumnMulti(headers, ['customer name', 'client name']);
+    const cCode = _findOlColumnMulti(headers, ['client code']);
+    const cSts = _findOlColumnMulti(headers, ['status']);
+    const cUpd = _findOlColumnMulti(headers, ['update']);
+    if (cSts >= 0 && cUpd >= 0) {
+      for (const r of rows) {
+        if (!/off[\s-]?lease/i.test(safeStr(r[cSts]))) continue;
+        add(r[0], cCode >= 0 ? r[cCode] : '', cName >= 0 ? r[cName] : '', r[cUpd]);
+      }
+    }
+  } catch (e) {
+    console.error('[APPROVE-CYCLE] deployed read failed:', e?.message || e);
+  }
+
+  cachePut(OL_CYCLE_CACHE_KEY, byContainer, 300); // 5 min, same as _expiryOrderNoMap
+  return byContainer;
+}
+
+/**
+ * When this container+client pair most recently went off-lease, as epoch ms —
+ * 0 if it never has.
+ *
+ * The client is matched on its CODE when both sides carry one (an exact
+ * identifier, immune to the punctuation drift between sheets) and on the
+ * normalised name otherwise. A pair whose client matches neither is a
+ * different lease and does not bound this one — per the rule that ABC123 with
+ * Client A and ABC123 with Client B are two separate combinations.
+ */
+export function _cycleClosedAt(cycleIndex, container, clientCode, clientName) {
+  const events = cycleIndex.get(normKey(container));
+  if (!events?.length) return 0;
+  const code = String(clientCode || '').trim().toUpperCase();
+  const name = normClientName(clientName);
+  let latest = 0;
+  for (const e of events) {
+    const sameClient = (code && e.code && code === e.code) || (name && e.name && name === e.name);
+    if (sameClient && e.ts > latest) latest = e.ts;
+  }
+  return latest;
+}
+
 export async function getApproveData(doWrite) {
   const { headers: rawHeaders, rows: rawRows } = doWrite
     ? await getSheetData(SHEETS.OPERATION)
@@ -99,6 +202,17 @@ export async function getApproveData(doWrite) {
 
      An AUTO-approval never seeds history, so a chain cannot bootstrap itself —
      every recurring pair traces back to exactly one manual decision. */
+  /* A manual approval seeds history only for the cycle it belongs to. Once the
+     pair has gone off-lease, every approval made BEFORE that closes with it,
+     so a re-lease of the same container to the same client starts over at
+     manual — and a later manual approval (the new cycle's first entry) seeds
+     the new cycle exactly as the first one did.
+
+     An approval that cannot be dated is not credited against a pair that has
+     an off-lease event: there is no way to tell which side of the boundary it
+     falls on, and manual is the safe answer. All 435 manual approvals on the
+     sheet today carry a parseable date, so this discards nothing in practice. */
+  const cycleIndex = await _offLeaseCycleIndex();
   const approvedPairs = new Set();
   for (let i = 0; i < n; i++) {
     if (String(allRows[i][29] || '').trim().toLowerCase() !== 'approved') continue;
@@ -106,9 +220,13 @@ export async function getApproveData(doWrite) {
     /* Multi-container cells: each container is history in its own right. */
     const client = String(allRows[i][2] || '').trim().toLowerCase();
     if (!client) continue;
+    const approvedAt = parseStamp(allRows[i][28]);
     for (const p of splitContainers(String(allRows[i][0] || ''))) {
       const cn = normKey(p);
-      if (cn) approvedPairs.add(`${cn}|${client}`);
+      if (!cn) continue;
+      const closedAt = _cycleClosedAt(cycleIndex, p, allRows[i][1], allRows[i][2]);
+      if (closedAt && !(approvedAt && approvedAt.getTime() > closedAt)) continue;
+      approvedPairs.add(`${cn}|${client}`);
     }
   }
 
@@ -135,7 +253,11 @@ export async function getApproveData(doWrite) {
      * A "container is on the Deployed sheet" rule was tried here and removed:
      * it matched 1,208 of 1,216 rows, so first entries auto-approved too and
      * the manual gate effectively disappeared. Being deployed says the box is
-     * out on lease — it says nothing about whether anyone approved THIS row. */
+     * out on lease — it says nothing about whether anyone approved THIS row.
+     *
+     * approvedPairs is already scoped to the CURRENT lease cycle (see above),
+     * so a pair whose last cycle ended at off-lease is absent from it and
+     * lands back on manual, exactly as it did the first time round. */
     const hasHistory = client !== '' && parts.every((p) => approvedPairs.has(`${normKey(p)}|${client}`));
 
     if (!hasHistory) continue; // no prior manual approval for this pair -> manual

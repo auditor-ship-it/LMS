@@ -121,7 +121,7 @@ async function readAll() {
    the hover popover stuck on "Loading…". Dropped on every write, so a remark
    just saved, edited or deleted is reflected at once. */
 const ROWS_CACHE_KEY = 'offlease:remark-rows';
-const ROWS_TTL_MS = 60 * 1000;
+const ROWS_TTL_SECONDS = 60; // seconds: cachePut multiplies by 1000 itself
 
 function invalidateIndex() { cacheRemove(ROWS_CACHE_KEY); }
 
@@ -129,7 +129,7 @@ async function readAllCached() {
   const hit = cacheGet(ROWS_CACHE_KEY);
   if (hit) return hit;
   const rows = await readAll();
-  cachePut(ROWS_CACHE_KEY, rows, ROWS_TTL_MS);
+  cachePut(ROWS_CACHE_KEY, rows, ROWS_TTL_SECONDS);
   return rows;
 }
 

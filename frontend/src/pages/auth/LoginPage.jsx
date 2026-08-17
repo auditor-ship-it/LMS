@@ -18,6 +18,7 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [otpNote, setOtpNote] = useState('');
+  const [showPw, setShowPw] = useState(false);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -64,52 +65,222 @@ export function LoginPage() {
     }
   };
 
+  /* Errors are announced, not just coloured: the sign-in failure is the one
+     message on this page a user must not miss. */
+  const errorBlock = error && (
+    <div className={styles.error} role="alert">
+      <Icon name="alert" />
+      <span>{error}</span>
+    </div>
+  );
+
+  const brandMark = (
+    <span className={styles.mark}><Icon name="container" /></span>
+  );
+
+  const backToLogin = (
+    <div className={styles.backRow}>
+      <Icon name="chev-left" />
+      <button
+        type="button"
+        className={styles.linkBtn}
+        onClick={() => { setMode('login'); setError(''); }}
+      >
+        Back to login
+      </button>
+    </div>
+  );
+
   return (
-    <div className={styles.overlay}>
-      <div className={styles.card}>
-        <div className={styles.brand}>
-          <span className={styles.brandIcon}><Icon name="container" /></span>
-          <h1>Lease Management</h1>
+    <div className={styles.shell}>
+      {/* Brand panel. Purely decorative for screen readers — every word here
+          is repeated by the form side's heading or the app itself. */}
+      <aside className={styles.side} aria-hidden="true">
+        <div className={styles.sideInner}>
+          <div className={styles.lockup}>
+            {brandMark}
+            <span className={styles.lockupText}>
+              <span className={styles.lockupName}>Lease Management</span>
+              <span className={styles.lockupOrg}>Crystal Group</span>
+            </span>
+          </div>
         </div>
 
-        {mode === 'login' && (
-          <form onSubmit={handleLogin} className={styles.form}>
-            <label>Employee ID or Email</label>
-            <input value={empId} onChange={(e) => setEmpId(e.target.value)} autoFocus required />
-            <label>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            {error && <div className={styles.error}>{error}</div>}
-            <Button type="submit" size="lg" loading={loading}>Login</Button>
-            <button type="button" className={styles.linkBtn} onClick={() => { setMode('otp-request'); setError(''); }}>
-              Forgot password?
-            </button>
-          </form>
-        )}
+        <div className={styles.sideInner}>
+          <h2 className={styles.headline}>Every container, <em>every stage</em>.</h2>
+          <p className={styles.sub}>
+            Lease, renewal and off-lease movement tracked end to end — from intimation
+            through inspection, billing and FMS closure.
+          </p>
+          <div className={styles.points}>
+            <div className={styles.point}>
+              <span className={styles.pointIcon}><Icon name="container" /></span>
+              Lease, renewal and off-lease workflow
+            </div>
+            <div className={styles.point}>
+              <span className={styles.pointIcon}><Icon name="clock" /></span>
+              Stage-wise SLA and TAT tracking
+            </div>
+            <div className={styles.point}>
+              <span className={styles.pointIcon}><Icon name="check-circle" /></span>
+              Approvals, billing and outstanding
+            </div>
+          </div>
+        </div>
 
-        {mode === 'otp-request' && (
-          <form onSubmit={handleOtpRequest} className={styles.form}>
-            <p className={styles.hint}>Enter your Employee ID or email. We'll email a 6-digit OTP.</p>
-            <label>Employee ID or Email</label>
-            <input value={empId} onChange={(e) => setEmpId(e.target.value)} autoFocus required />
-            {error && <div className={styles.error}>{error}</div>}
-            <Button type="submit" size="lg" loading={loading}>Send OTP</Button>
-            <button type="button" className={styles.linkBtn} onClick={() => { setMode('login'); setError(''); }}>Back to login</button>
-          </form>
-        )}
+        <div className={styles.sideFoot}>Crystal Group · Internal use only</div>
+      </aside>
 
-        {mode === 'otp-reset' && (
-          <form onSubmit={handleOtpReset} className={styles.form}>
-            {otpNote && <p className={styles.hint}>{otpNote}</p>}
-            <label>OTP</label>
-            <input value={otp} onChange={(e) => setOtp(e.target.value)} autoFocus required maxLength={6} />
-            <label>New Password</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required minLength={4} />
-            {error && <div className={styles.error}>{error}</div>}
-            <Button type="submit" size="lg" loading={loading}>Reset Password</Button>
-            <button type="button" className={styles.linkBtn} onClick={() => { setMode('login'); setError(''); }}>Back to login</button>
-          </form>
-        )}
-      </div>
+      <main className={styles.pane}>
+        <div className={styles.form}>
+          <div className={styles.paneBrand}>
+            {brandMark}
+            <span className={styles.lockupText}>
+              <span className={styles.lockupName} style={{ color: 'var(--text)' }}>Lease Management</span>
+              <span className={styles.lockupOrg} style={{ color: 'var(--text-3)' }}>Crystal Group</span>
+            </span>
+          </div>
+
+          {mode === 'login' && (
+            <form onSubmit={handleLogin}>
+              <h1 className={styles.title}>Sign in</h1>
+              <p className={styles.lede}>Use your Crystal employee ID or work email.</p>
+
+              {errorBlock}
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="lg-id">Employee ID or Email</label>
+                <input
+                  id="lg-id"
+                  className={styles.input}
+                  value={empId}
+                  onChange={(e) => setEmpId(e.target.value)}
+                  placeholder="e.g. 1962 or name@crystalgroup.in"
+                  autoComplete="username"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <div className={styles.field}>
+                <div className={styles.labelRow}>
+                  <label className={styles.label} htmlFor="lg-pw">Password</label>
+                  <button
+                    type="button"
+                    className={styles.linkBtn}
+                    onClick={() => { setMode('otp-request'); setError(''); }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+                <div className={styles.pwWrap}>
+                  <input
+                    id="lg-pw"
+                    className={styles.input}
+                    type={showPw ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoComplete="current-password"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className={`${styles.pwToggle} ${showPw ? '' : styles.pwOff}`}
+                    onClick={() => setShowPw((v) => !v)}
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
+                    tabIndex={-1}
+                  >
+                    <Icon name="eye" />
+                  </button>
+                </div>
+              </div>
+
+              <Button type="submit" size="lg" loading={loading} className={styles.submit}>Login</Button>
+            </form>
+          )}
+
+          {mode === 'otp-request' && (
+            <form onSubmit={handleOtpRequest}>
+              <h1 className={styles.title}>Reset password</h1>
+              <p className={styles.lede}>
+                Enter your Employee ID or email and we&apos;ll send a 6-digit OTP to your
+                registered address.
+              </p>
+
+              {errorBlock}
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="rq-id">Employee ID or Email</label>
+                <input
+                  id="rq-id"
+                  className={styles.input}
+                  value={empId}
+                  onChange={(e) => setEmpId(e.target.value)}
+                  autoComplete="username"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              <Button type="submit" size="lg" loading={loading} className={styles.submit}>Send OTP</Button>
+              {backToLogin}
+            </form>
+          )}
+
+          {mode === 'otp-reset' && (
+            <form onSubmit={handleOtpReset}>
+              <h1 className={styles.title}>Enter OTP</h1>
+              {otpNote && <p className={styles.hint}>{otpNote}</p>}
+
+              {errorBlock}
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="rs-otp">6-digit OTP</label>
+                <input
+                  id="rs-otp"
+                  className={`${styles.input} ${styles.otpInput}`}
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="000000"
+                  autoFocus
+                  required
+                  maxLength={6}
+                />
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="rs-pw">New Password</label>
+                <div className={styles.pwWrap}>
+                  <input
+                    id="rs-pw"
+                    className={styles.input}
+                    type={showPw ? 'text' : 'password'}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    autoComplete="new-password"
+                    required
+                    minLength={4}
+                  />
+                  <button
+                    type="button"
+                    className={`${styles.pwToggle} ${showPw ? '' : styles.pwOff}`}
+                    onClick={() => setShowPw((v) => !v)}
+                    aria-label={showPw ? 'Hide password' : 'Show password'}
+                    tabIndex={-1}
+                  >
+                    <Icon name="eye" />
+                  </button>
+                </div>
+              </div>
+
+              <Button type="submit" size="lg" loading={loading} className={styles.submit}>Reset Password</Button>
+              {backToLogin}
+            </form>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
