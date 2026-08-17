@@ -11,6 +11,23 @@ router.use(requireAuth);
    than via a static requirePermission(...) at the route level. */
 router.get('/', asyncHandler(offLeaseController.getData)); // ?stage=1..8
 router.get('/next-lease-id', asyncHandler(offLeaseController.nextLeaseId));
+/* Pending count per stage, for the tab badges. */
+router.get('/stage-counts', asyncHandler(offLeaseController.getStageCounts));
+
+/* Stage 9 — container movement log (append-only, its own sheet, outside the
+   1..8 pipeline). Declared BEFORE the '/:containerNo/...' routes so a literal
+   'stage2'/'stage9' first segment can never be read as a container number. */
+router.get('/stage2/containers', asyncHandler(offLeaseController.getMovementSources));
+router.get('/stage2/container/:containerNo', asyncHandler(offLeaseController.getMovementSource));
+router.get('/stage9/movements', asyncHandler(offLeaseController.getMovements));
+router.post('/stage9/movements', asyncHandler(offLeaseController.saveMovement));
+
+/* Dashboard live remarks — a comment thread per record, not stage data. */
+router.get('/:containerNo/remarks', asyncHandler(offLeaseController.getRemarkThread));
+router.post('/:containerNo/remarks', asyncHandler(offLeaseController.addRemark));
+router.put('/:containerNo/remarks/:remarkId', asyncHandler(offLeaseController.updateRemark));
+router.delete('/:containerNo/remarks/:remarkId', asyncHandler(offLeaseController.deleteRemark));
+
 router.get('/:containerNo/stage/:stage', asyncHandler(offLeaseController.getStageDetail));
 router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveStage));
 
@@ -21,6 +38,7 @@ router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprov
 /* Dashboard: pipeline overview (all containers) + single-container lookup */
 router.get('/dashboard', asyncHandler(offLeaseController.getDashboardData));
 router.get('/:containerNo/detail', asyncHandler(offLeaseController.getContainerDetail));
+router.get('/:containerNo/outstanding', asyncHandler(offLeaseController.getOutstanding));
 
 /* Tracking-sheet bootstrap — moves a container off "Deployed" onto Off-Lease Tracking */
 router.post('/tracking', asyncHandler(offLeaseController.addToTracking));

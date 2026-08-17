@@ -21,6 +21,10 @@ export const ACTION_PERMISSIONS = {
   offlease6: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
   offlease7: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
   offlease8: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
+  /* Stage 9 (movement entry) draws its containers from Stage 2, so it starts
+     with exactly the offlease6 (Transportation) list — the people already
+     working that queue, Kshirod Khatua included. Roles & Access can widen it. */
+  offlease9: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
   billing: ['shivani.dhall@crystalgroup.in', 'intern@crystalgroup.in', 'pushpa.shetty@crystalgroup.in', 'swati.barot@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
   receivables: ['ar@crystalgroup.in', 'intern@crystalgroup.in', 'pushpa.shetty@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'support@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
   'default': ['intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'ar@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'pc@crystalgroup.in']
@@ -45,10 +49,19 @@ export const PERMISSION_KEYS = [
   { key: 'offlease4', label: 'Off-Lease Stage 4: Quotation' },
   { key: 'offlease5', label: 'Off-Lease Stage 5: Billing' },
   { key: 'offlease6', label: 'Off-Lease Stage 6: Transport' },
-  { key: 'offlease7', label: 'Off-Lease Stage 7: Get In' },
+  { key: 'offlease7', label: 'Off-Lease Stage 7: Gate In' },
   { key: 'offlease8', label: 'Off-Lease Stage 8: FMS Closure' },
   { key: 'billing', label: 'Billing' },
-  { key: 'receivables', label: 'Receivables' }
+  { key: 'receivables', label: 'Receivables' },
+  /* APPENDED, never inserted — exactly like SIDEBAR_KEYS below. This array is
+     read POSITIONALLY against the live "Team Accounts" sheet
+     (roles.service.js: perms[p.key] = row[3 + k]), so putting offlease9 next
+     to offlease8 would shift Billing and Receivables one column right and
+     hand every user the wrong permission. A new key must land at the END, and
+     its sheet column does not exist yet — so it reads false until Roles &
+     Access adds it, which is why ACTION_PERMISSIONS above carries the working
+     baseline. */
+  { key: 'offlease9', label: 'Off-Lease Stage 9: Movement Entry' }
 ];
 
 export const SIDEBAR_KEYS = [

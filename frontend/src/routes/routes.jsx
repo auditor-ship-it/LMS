@@ -11,6 +11,7 @@ const DeployedSummaryPage = lazy(() => import('../pages/deployedSummary/Deployed
 const ReturnDashboardPage = lazy(() => import('../pages/returnDashboard/ReturnDashboardPage.jsx').then((m) => ({ default: m.ReturnDashboardPage })));
 const AgreementFormPage = lazy(() => import('../pages/agreementForm/AgreementFormPage.jsx').then((m) => ({ default: m.AgreementFormPage })));
 const RolesAccessPage = lazy(() => import('../pages/rolesAccess/RolesAccessPage.jsx').then((m) => ({ default: m.RolesAccessPage })));
+const ReportsPage = lazy(() => import('../pages/reports/ReportsPage.jsx').then((m) => ({ default: m.ReportsPage })));
 
 const Stage1Page = lazy(() => import('../pages/stages/Stage1Page.jsx').then((m) => ({ default: m.Stage1Page })));
 const Stage2Page = lazy(() => import('../pages/stages/Stage2Page.jsx').then((m) => ({ default: m.Stage2Page })));
@@ -20,6 +21,9 @@ const Stage5Page = lazy(() => import('../pages/stages/Stage5Page.jsx').then((m) 
 const Stage6Page = lazy(() => import('../pages/stages/Stage6Page.jsx').then((m) => ({ default: m.Stage6Page })));
 const Stage7Page = lazy(() => import('../pages/stages/Stage7Page.jsx').then((m) => ({ default: m.Stage7Page })));
 const Stage8Page = lazy(() => import('../pages/stages/Stage8Page.jsx').then((m) => ({ default: m.Stage8Page })));
+// Stage 9 is the movement-entry module, not a pipeline stage — it has its own
+// page rather than a StagePageBase wrapper.
+const Stage9Page = lazy(() => import('../pages/stages/Stage9Page.jsx').then((m) => ({ default: m.Stage9Page })));
 
 /** Route config consumed by App.jsx — one entry per sidebar leaf, all lazy-loaded. */
 export const APP_ROUTES = [
@@ -33,6 +37,7 @@ export const APP_ROUTES = [
   { path: ROUTES.RETURN_DASHBOARD, element: ReturnDashboardPage },
   { path: ROUTES.AGREEMENT_FORM, element: AgreementFormPage },
   { path: ROUTES.ROLES_ACCESS, element: RolesAccessPage },
+  { path: ROUTES.REPORTS, element: ReportsPage },
   { path: ROUTES.stage(1), element: Stage1Page },
   { path: ROUTES.stage(2), element: Stage2Page },
   { path: ROUTES.stage(3), element: Stage3Page },
@@ -40,5 +45,6 @@ export const APP_ROUTES = [
   { path: ROUTES.stage(5), element: Stage5Page },
   { path: ROUTES.stage(6), element: Stage6Page },
   { path: ROUTES.stage(7), element: Stage7Page },
-  { path: ROUTES.stage(8), element: Stage8Page }
+  { path: ROUTES.stage(8), element: Stage8Page },
+  { path: ROUTES.stage(9), element: Stage9Page }
 ];

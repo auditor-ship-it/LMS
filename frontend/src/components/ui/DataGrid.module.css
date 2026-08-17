@@ -4,7 +4,22 @@
   border-radius: var(--r-md);
   border: 1px solid var(--line);
 }
-.table { width: 100%; font-size: 12.5px; white-space: nowrap; }
+/* Cells WRAP rather than forcing the table wider than its container.
+   `nowrap` guaranteed a horizontal scrollbar on any grid with more than a few
+   columns — a wide client name alone was enough — and reading a table you have
+   to scroll sideways is worse than reading one with a two-line cell. Long
+   unbroken tokens (container numbers, URLs) still break rather than overflow. */
+.table {
+  width: 100%;
+  font-size: 12.5px;
+  table-layout: auto;
+  /* break-word, NOT anywhere. `anywhere` splits mid-word whenever a column is
+     tight, which turned "Renewed" into "Rene wed" and container numbers into
+     "TITU725108 0". This breaks only tokens that genuinely cannot fit, and
+     prefers word boundaries. */
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 .table thead th {
   position: sticky;
   top: 0;
@@ -28,4 +43,14 @@
 .table tbody tr { transition: background var(--dur-fast) var(--ease-out); }
 .table tbody tr:last-child td { border-bottom: none; }
 .table tbody tr:hover td { background: var(--surface-2); }
+/* The action button must never wrap or shrink — width:1% makes the column
+   take only what the button needs and gives the rest to the data. */
 .actionsCol { white-space: nowrap; width: 1%; text-align: center; }
+/* Headers stay on one line; they are short and wrapping them costs more
+   vertical space than it saves horizontally. */
+.table thead th { white-space: nowrap; }
+
+/* Short status words and identifiers must never be split. A column that is
+   too narrow for them should widen, not hyphenate the value. */
+.table td:has(> span[class*='badge']),
+.table td:has(> span[class*='status']) { white-space: nowrap; }

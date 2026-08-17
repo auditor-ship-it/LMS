@@ -27,6 +27,16 @@ export const SHEETS = {
   USER: 'USER',
   MASTER_SHEET: 'Master Sheet',
   CONTAINER_MASTER_LOGS: 'container_master_logs',
+  /* Stage 9 container-movement log. Unlike Stage 1-8, which fill columns on
+     the container's existing Off-Lease Tracking row, Stage 9 is append-only:
+     one row per movement, so the same container can be logged many times.
+     Created on first use by stage9.service.js — it is not one of the tabs the
+     port inherited, so it may not exist in the live spreadsheet yet. */
+  STAGE9_MOVEMENT: 'Stage 9 Movement',
+  /* Dashboard live-comment thread, append-only, one row per remark. Separate
+     from the stage remark columns, which belong to a stage and freeze when it
+     completes. Created on first use by offleaseRemarks.service.js. */
+  OFF_LEASE_REMARKS: 'Off-Lease Remarks',
 
   // Public API framework — hidden bookkeeping tabs
   API_KEYS: '__api_keys',

@@ -6,6 +6,16 @@ export async function list(req, res) {
   res.json(await expiryService.getExpiryDataByFilter(filterType));
 }
 
+/** GET /api/expiry/renewal-log — Renewal Log rows for the month-wise report. */
+export async function renewalLog(req, res) {
+  res.json(await expiryService.getRenewalLogReport());
+}
+
+/** GET /api/expiry/new-lease-report — New Lease rows for the month-wise report. */
+export async function newLeaseReport(req, res) {
+  res.json(await expiryService.getNewLeaseReport());
+}
+
 /** POST /api/expiry/documents/upload */
 export async function uploadDocument(req, res) {
   const { base64Data, mimeType, fileName, containerNo, docType } = req.body;

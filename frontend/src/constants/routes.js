@@ -10,6 +10,7 @@ export const ROUTES = {
   RETURN_DASHBOARD: '/return-dashboard',
   AGREEMENT_FORM: '/agreement-form',
   ROLES_ACCESS: '/roles-access',
+  REPORTS: '/reports',
   STAGES: '/stages',
   stage: (n) => `/stages/stage-${n}`
 };

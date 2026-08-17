@@ -18,4 +18,5 @@ export { ConfirmDialog } from './ConfirmDialog.jsx';
 export { FileUpload } from './FileUpload.jsx';
 export { renderCellValue } from './CellValue.jsx';
 export { Icon } from './Icon.jsx';
+export { RichTextEditor } from './RichTextEditor.jsx';
 export { IconSprite } from './IconSprite.jsx';

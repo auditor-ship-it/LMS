@@ -34,7 +34,7 @@ import {
 } from './googleSheets.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
-import { safeStr, buildDisplayRow, parseDate } from '../utils/format.js';
+import { safeStr, buildDisplayRow, parseDate, formatDateVal } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { checkActionPermission } from './permissions.service.js';
 import { AppError, notFound } from '../utils/AppError.js';
@@ -123,6 +123,15 @@ export async function getExpiryDataByFilter(filterType) {
   for (const row of allRows) {
     if (!row[0] || String(row[0]).trim() === '') continue;
     const vVal = row[21], wVal = row[22];
+
+    /* A container marked Off-Lease has LEFT this stage — it belongs to the
+       Off-Lease pipeline now and must not appear here under any filter.
+       The 'pending' test below only asks whether the Update cell is empty,
+       so a row whose Status said Off-Lease still showed up whenever that
+       cell had not been stamped. Status is the authority on which stage a
+       container is in; Update is just when it last changed. */
+    if (String(wVal || '').trim().toLowerCase().replace(/[\s-]/g, '') === 'offlease') continue;
+
     let include = false;
     if (filterType === 'pending') include = (!vVal || String(vVal).trim() === '');
     else if (filterType === 'renewed') include = (wVal && String(wVal).trim().toLowerCase() === 'renewed');
@@ -299,6 +308,170 @@ function _deployedClientName(headers, row) {
   return '';
 }
 
+/** Column index of Container No in RENEWAL_LOG_HEADERS — the row's identity. */
+const RL_CONTAINER = 1;
+
+/**
+ * UPSERT one Renewal Log row, keyed on Container No.
+ *
+ * Previously every save appended: updating Valid Till wrote one row, then
+ * uploading a PO or agreement file wrote another, leaving several rows for the
+ * same container and no single place showing its current state.
+ *
+ * Fields are MERGED rather than replaced wholesale. An agreement upload sends
+ * only the agreement URL, so overwriting the row with that payload would blank
+ * the PO number and Valid Till captured earlier. A blank incoming value means
+ * "not part of this update", not "clear it" — the two exceptions are Timestamp
+ * and Updated By, which always reflect the latest edit.
+ */
+async function _upsertRenewalRow(info) {
+  const incoming = {
+    1: info.container || '',
+    2: info.clientName || '',
+    3: info.poNo || '',
+    4: info.poFileUrl || '',
+    5: info.agreementUrl || '',
+    6: info.validTill || '',
+    8: info.oldPoNo || '',
+    9: info.oldPoFileUrl || '',
+    10: info.oldAgreementUrl || ''
+  };
+  const stamp = new Date().toISOString();
+  const wantKey = _normKey(info.container);
+
+  const { rows } = await getSheetData(RENEWAL_LOG_SHEET);
+  /* Last match wins: if earlier appends already left duplicates, the newest is
+     the one carrying current data, and it is the one kept up to date. */
+  let rn = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (wantKey && _normKey(rows[i][RL_CONTAINER]) === wantKey) rn = i + 2;
+  }
+
+  const existing = rn === -1 ? [] : (rows[rn - 2] || []);
+
+  /* A NEW RENEWAL CYCLE gets its own row; document uploads update the current
+     one. The discriminator is Valid Till: renewing pushes it to a new date,
+     whereas uploading a PO or agreement leaves it alone (or sends it blank).
+     Call site cannot tell us this — both screens save renewal and document
+     fields through the same path — but the data can. */
+  const incomingValid = safeStr(info.validTill).trim();
+  const currentValid = safeStr(existing[6]).trim();
+  const isNewCycle = rn === -1 || (incomingValid !== '' && incomingValid !== currentValid);
+
+  if (isNewCycle) {
+    const fresh = RENEWAL_LOG_HEADERS.map((_, i) => (i === 0 ? stamp : i === 7 ? (info.userEmail || '') : (incoming[i] || '')));
+    await appendRow(RENEWAL_LOG_SHEET, fresh);
+    return;
+  }
+
+  const merged = RENEWAL_LOG_HEADERS.map((_, i) => {
+    if (i === 0) return stamp;                       // always the latest edit
+    if (i === 7) return info.userEmail || safeStr(existing[7]);
+    const next = incoming[i];
+    return next !== '' && next !== undefined ? next : safeStr(existing[i]);
+  });
+  await updateRange(
+    RENEWAL_LOG_SHEET,
+    `A${rn}:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}${rn}`,
+    [merged]
+  );
+}
+
+/**
+ * The Renewal Log as report rows — one per renewal, newest first.
+ *
+ * Served from the Mongo mirror where available, falling back to a live read:
+ * this is a read-only report and must not add Sheets load to a project that
+ * routinely exhausts its read quota.
+ */
+export async function getRenewalLogReport() {
+  let rows = [];
+  try {
+    ({ rows } = await getSheetDataFromMongo(RENEWAL_LOG_SHEET));
+  } catch (e) { /* not mirrored — fall through to the live read */ }
+
+  /* An EMPTY mirror is not proof the sheet is empty: this tab is not
+     registered with the reconcile job, so Mongo returns zero rows rather than
+     throwing. Falling back only on a thrown error left the report silently
+     blank. */
+  if (!rows.length) {
+    try {
+      ({ rows } = await getSheetData(RENEWAL_LOG_SHEET));
+    } catch (e2) {
+      return { headers: RENEWAL_LOG_HEADERS, data: [], error: e2?.message || 'Could not read Renewal Log' };
+    }
+  }
+
+  const data = rows
+    .filter((r) => safeStr(r[1]).trim() !== '')     // must have a container
+    .map((r) => ({
+      timestamp: safeStr(r[0]).trim(),
+      container: safeStr(r[1]).trim(),
+      clientName: safeStr(r[2]).trim(),
+      poNo: safeStr(r[3]).trim(),
+      poFile: safeStr(r[4]).trim(),
+      agreementFile: safeStr(r[5]).trim(),
+      validTill: safeStr(r[6]).trim(),
+      updatedBy: safeStr(r[7]).trim(),
+      oldPoNo: safeStr(r[8]).trim(),
+      oldPoFile: safeStr(r[9]).trim(),
+      oldAgreementFile: safeStr(r[10]).trim()
+    }))
+    .reverse();                                     // newest first
+
+  return { headers: RENEWAL_LOG_HEADERS, data, count: data.length };
+}
+
+/**
+ * New Lease rows for the month-wise report.
+ *
+ * Grouped downstream by Deployed Date — when the container actually went out —
+ * rather than the approval timestamp, which records when paperwork cleared and
+ * can fall in a different month from the deployment it describes.
+ *
+ * Column positions are fixed on this sheet; read from the Mongo mirror, which
+ * is where every other New Lease read comes from.
+ */
+export async function getNewLeaseReport() {
+  const NL = {
+    CONTAINER: 0, CLIENT_CODE: 1, CLIENT_NAME: 2, ORDER_NO: 3, ORDER_TYPE: 4,
+    QTY: 5, SALE_EXEC: 8, LOCATION: 9, SIZE: 10, PRODUCT_TYPE: 11, DEPLOYED_DATE: 12
+  };
+
+  let rows = [];
+  try {
+    ({ rows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE));
+  } catch (e) {
+    return { data: [], error: e?.message || 'Could not read New Lease' };
+  }
+
+  const data = rows
+    .filter((r) => safeStr(r[NL.CONTAINER]).trim() !== '')
+    .map((r) => ({
+      container: safeStr(r[NL.CONTAINER]).trim(),
+      clientCode: safeStr(r[NL.CLIENT_CODE]).trim(),
+      clientName: safeStr(r[NL.CLIENT_NAME]).trim(),
+      orderNo: safeStr(r[NL.ORDER_NO]).trim(),
+      orderType: safeStr(r[NL.ORDER_TYPE]).trim(),
+      qty: safeStr(r[NL.QTY]).trim(),
+      saleExec: safeStr(r[NL.SALE_EXEC]).trim(),
+      location: safeStr(r[NL.LOCATION]).trim(),
+      size: safeStr(r[NL.SIZE]).trim(),
+      productType: safeStr(r[NL.PRODUCT_TYPE]).trim(),
+      deployedDate: fmtCellDate(r[NL.DEPLOYED_DATE])
+    }));
+
+  return { data, count: data.length };
+}
+
+/** Deployed Date arrives as a Date, a Sheets serial or an already-formatted
+ *  string depending on the row — normalised so the month grouping sees one
+ *  shape. */
+function fmtCellDate(v) {
+  const d = parseDate(v);
+  return d ? formatDateVal(d) : safeStr(v).trim();
+}
+
 async function _logRenewal(info) {
   try {
     await insertSheetIfMissing(RENEWAL_LOG_SHEET, RENEWAL_LOG_HEADERS);
@@ -309,11 +482,7 @@ async function _logRenewal(info) {
       const missing = RENEWAL_LOG_HEADERS.slice(curHeaders.length);
       await updateRange(RENEWAL_LOG_SHEET, `${colLetter(curHeaders.length)}1:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}1`, [missing]);
     }
-    await appendRow(RENEWAL_LOG_SHEET, [
-      new Date().toISOString(), info.container || '', info.clientName || '', info.poNo || '',
-      info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
-    ]);
+    await _upsertRenewalRow(info);
   } catch (e) { console.error('[RENEWAL-LOG]', e.message); } // Never throws — a logging failure must not block the real renewal.
 }
 

@@ -1,0 +1,279 @@
+.book {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  /* NOT overflow: hidden — the history rail's popover escapes its row, and
+     clipping it here left it cut off at the row boundary. The first/last rows
+     round their own corners instead. */
+}
+.book > *:first-child { border-top-left-radius: var(--r-md); border-top-right-radius: var(--r-md); }
+.book > *:last-child { border-bottom-left-radius: var(--r-md); border-bottom-right-radius: var(--r-md); }
+
+.row {
+  display: grid;
+  /* Proportional, not fixed: the remark column shares slack with the client
+     block instead of reserving a wide gutter that sits empty on the many
+     records carrying no remark. */
+  grid-template-columns: 132px minmax(0, 1.35fr) minmax(0, 1fr) 178px;
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+  align-items: stretch;
+}
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--surface-2); }
+/* The whole row opens the record; its own controls stop the click. */
+.row { cursor: pointer; }
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Vertical rules BETWEEN the four blocks, drawn as each cell's left border so
+   they run the full height of the row however tall a remark makes it — a gap
+   alone did not read as a separation once the remark column was added. */
+.row > * {
+  padding: 10px 14px;
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+.row > *:first-child { border-left: none; }
+
+/* ---- left: when / which record / who ---- */
+.idCol { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* The date reads as a value, not a caption — it sits with the Lease ID as the
+   pair that identifies the record, so it carries the same weight. */
+.date {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.leaseId { font-size: 16px; font-weight: 800; color: var(--accent); letter-spacing: 0.2px; }
+.kind {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  color: var(--text-2);
+}
+.owner { font-size: 11px; color: var(--text-3); overflow-wrap: anywhere; }
+
+/* ---- middle: client, spec, and the stage strip ---- */
+.mainCol { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.client { font-size: 14px; font-weight: 800; color: var(--accent); overflow-wrap: anywhere; }
+/* Spec and location on one line — they were two near-empty rows each holding
+   a few characters. */
+.meta { font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chipCode {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.location { display: inline-flex; align-items: center; gap: 3px; color: var(--text-3); }
+.locationIcon { width: 12px; height: 12px; flex: none; }
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+
+/* One chip per stage. Fixed width so the strips line up down the page and an
+   incomplete pipeline is obvious at a glance. */
+.chip {
+  min-width: 26px;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+.done { background: var(--accent); color: #fff; }
+.current { background: var(--warn-bg, #fdf0d0); color: var(--warn, #8a6100); }
+.future { background: var(--surface-2); color: var(--text-3); }
+.rejected { background: var(--error-bg); color: var(--error); }
+
+.status {
+  margin-left: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 800;
+  border: none;
+  font-family: inherit;
+}
+.statusLink { cursor: pointer; }
+.statusLink:hover { filter: brightness(0.95); }
+
+.info { background: var(--accent-soft); color: var(--accent); }
+.warn { background: var(--warn-bg, #fdf0d0); color: var(--warn, #8a6100); }
+.danger { background: var(--error-bg); color: var(--error); }
+.success { background: var(--success-bg); color: var(--success); }
+
+/* ---- remark: the live comment, written here ---- */
+.remarkCol { display: flex; flex-direction: column; gap: 3px; }
+.remarkHead { display: flex; align-items: center; gap: 6px; }
+
+.remarkAdd {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.remarkAdd:hover { filter: brightness(0.95); }
+.remarkAddIcon { width: 11px; height: 11px; flex: none; }
+
+/* ---- history rail: one tick per stored remark, thread on hover ---- */
+.rail {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  outline: none;
+}
+.rail:hover, .rail:focus-visible { background: var(--surface-2); }
+
+.railTick {
+  width: 2.5px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+.rail:hover .railTick, .rail:focus-visible .railTick { background: var(--accent); }
+.railCount { margin-left: 3px; font-size: 9.5px; font-weight: 800; color: var(--text-3); }
+.rail:hover .railCount { color: var(--accent); }
+
+.railPop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  width: 290px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: 0 10px 26px rgb(0 0 0 / 14%);
+  cursor: default;
+  text-align: left;
+}
+.rail:hover .railPop, .rail:focus-within .railPop { display: flex; }
+
+.railPopHead {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.railItem { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.railItem:last-child { padding-bottom: 0; border-bottom: none; }
+.railItemBody { font-size: 12px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.railItemBody ul, .railItemBody ol { margin: 0; padding-left: 18px; }
+.railItemBody ul { list-style: disc; }
+.railItemBody ol { list-style: decimal; }
+.railItemBody b, .railItemBody strong { font-weight: 800; }
+.railPopMeta { font-size: 10.5px; color: var(--text-3); }
+
+.railItemFoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.railAction {
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--accent);
+  cursor: pointer;
+}
+.railAction:first-of-type { margin-left: auto; }
+.railAction:hover:not(:disabled) { text-decoration: underline; }
+.railAction:disabled { opacity: 0.5; cursor: not-allowed; }
+.railDanger { color: var(--error); }
+
+.remarkText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+/* The remark is stored markup, so its tags need explicit rules — the global
+   reset strips list styling and margins. */
+.remarkText p { margin: 0 0 4px; }
+.remarkText p:last-child { margin-bottom: 0; }
+.remarkText ul, .remarkText ol { margin: 0 0 4px; padding-left: 18px; }
+.remarkText ul { list-style: disc; }
+.remarkText ol { list-style: decimal; }
+.remarkText b, .remarkText strong { font-weight: 800; }
+
+.remarkOn { font-size: 10.5px; color: var(--text-3); }
+.remarkEmpty { margin: 0; font-size: 12px; color: var(--text-3); }
+
+.remarkEditor { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.remarkActions { display: flex; justify-content: flex-end; gap: 6px; }
+.remarkError { margin: 0; font-size: 11.5px; font-weight: 600; color: var(--error); }
+
+/* ---- right: the container itself ---- */
+.sideCol { display: flex; flex-direction: column; gap: 0; }
+.sideLabel {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+  margin-top: 6px;
+}
+.sideLabel:first-child { margin-top: 0; }
+
+/* The container number is what the row is ABOUT — sized and weighted to be
+   the first thing found when scanning this column. */
+.containerNo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  margin: 1px 0 2px;
+}
+.containerIcon { width: 17px; height: 17px; flex: none; color: var(--accent); }
+
+.sideValue { font-size: 12px; color: var(--text); }
+
+@media (max-width: 1100px) {
+  .row { grid-template-columns: 150px minmax(0, 1fr); }
+  /* Stacked, so the vertical rules become horizontal ones between blocks. */
+  .row > *:nth-child(n + 3) { border-left: none; border-top: 1px solid var(--line); grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+  .row { grid-template-columns: 1fr; }
+  .row > * { border-left: none; }
+  .row > * + * { border-top: 1px solid var(--line); }
+}

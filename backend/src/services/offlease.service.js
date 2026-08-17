@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Port of LMS.js lines 6180-7924: the Off-Lease 8-stage workflow (Pending
  * Approval -> Intimation -> Lifting/Arrival -> Inspection -> Quotation/Order
  * -> Billing Reconciliation -> Transportation -> Get In -> FMS Closure),
@@ -61,6 +61,7 @@ import {
   getSheetData,
   getRange,
   updateRange,
+  ensureColumnCount,
   updateCell,
   batchUpdateValues,
   appendRow,
@@ -81,70 +82,210 @@ import { checkActionPermission } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { getCollection } from './mongo.service.js';
+import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
 ============================================= */
 const OL_SHEET = SHEETS.OFF_LEASE_TRACKING;
 
-export const OL_HEADERS = [
-  'Container No', 'Lease ID', 'Size', 'Type', 'Client Code', 'Client Name', 'Location',
-  'Deployed Date', 'Valid Upto', 'Rate',
-  'OL Intimation Date', 'OL Date', 'Email Notification URL', 'Final Billing Date',
-  'Stage 1 Remark', 'Stage 1 Timestamp', 'Stage 1 User', 'Stage 1 Status',
-  'Lifting Date', 'Arrival Date', 'Stage 2 Remark', 'Stage 2 Timestamp', 'Stage 2 User', 'Stage 2 Status',
-  'Container Received Date', 'Internal Cleaning', 'External Cleaning', '18m Wire Intact',
-  'Dents Checked', 'Paint Condition', 'Logo Visibility', 'Reefer Machine Cleaned',
-  'Keypad Display Visible', 'Short PTI Done', 'Estimation Work Pending', 'Technician Checked',
-  'Checklist Drawing', 'Estimate If Any', 'Estimate Cost', 'Stage 3 Remark',
-  'Stage 3 Timestamp', 'Stage 3 User', 'Stage 3 Status',
-  'Rentals Billed Till Date', 'Outstanding Amount', 'Date Billed Till', 'Est Repair Charges Billed',
-  'Transport Cost Billed', 'Adjust Security Deposit', 'Security Deposit Amount', 'Last Date Of Billing',
-  'Accrued Rental Amount', 'Accrued Rental Date', 'Reconcile Billing Cycle', 'Approval From',
-  'Stage 5 Remark', 'Stage 5 Timestamp', 'Stage 5 User', 'Stage 5 Status',
-  'Quotation Number', 'Order Received Number', 'Delivery Order Required',
-  'Stage 4 Remark', 'Stage 4 Timestamp', 'Stage 4 User', 'Stage 4 Status',
-  'User', 'Vehicle Placed By', 'Quotation Number', 'Order Received Number', 'DO Number',
-  'Vehicle No', 'Cash Memo Number', 'Cash Memo Date', 'Cash Memo Received Date',
-  'Vehicle Reached at Pick-up', 'Loading City', 'Destination City', 'Loading Date',
-  'Transit Days', 'Km', 'Expected Delivery Date', 'Size', 'Container Type',
-  'Quantity', 'Vehicle Type', 'Movement Type', 'Transportation Type',
-  'Container Number', 'WT', 'Pick-up Address', 'Delivery Address', 'Delivery Pin Code',
-  'Customer Name', 'Driver Photo', 'Payment Type', 'Payment Terms',
-  'Immediate Payment', 'Payment Due Date', 'Other Charges', 'Detention Charge',
-  'Less Late Delivery', 'Crane/Hydra Charge', 'Unloading Labour', 'Cleaning Charge',
-  'Collection Memo', 'LR Scanned Copy', 'Vehicle Name Plate', 'Container Photo',
-  'Door Photo', 'Inside Full View', 'Machine Photo', 'Full Video',
-  'Bill', 'Driving Licence', 'RC Book', 'Transporter Name', 'Freight Cost',
-  'Stage 6 Remark', 'Stage 6 Timestamp', 'Stage 6 User', 'Stage 6 Status',
-  'Billing & Filing', 'FMS Closure', 'All Docs Uploaded to FMS',
-  'Stage 8 Remark', 'Stage 8 Timestamp', 'Stage 8 User', 'Stage 8 Status',
-  'Intimation Approval Status', 'Intimation Approval Timestamp', 'Intimation Approval User', 'Intimation Approval Remarks',
-  'Stage 3 Photo: Left Side', 'Stage 3 Photo: Right Side', 'Stage 3 Photo: Back View',
-  'Stage 3 Photo: Inside Front', 'Stage 3 Photo: Inside Rear', 'Stage 3 Photo: Roof',
-  'Stage 3 Photo: Floor', 'Stage 3 Photo: Door Lock', 'Stage 3 Photo: Container Close Up',
-  'Gate Status', 'Gate Date', 'Gate Location', 'Gate Transporter Name', 'Gate Transporter Number',
-  'Gate Vehicle Number', 'Gate LR Copy', 'Gate Photo: Left Side', 'Gate Photo: Right Side',
-  'Gate Photo: Back View', 'Gate Photo: Inside Front', 'Gate Photo: Inside Rear', 'Gate Photo: Roof',
-  'Gate Photo: Floor', 'Gate Photo: Door Lock', 'Gate Photo: Container Close Up',
-  'Gate Repair Required', 'Gate Est Budget', 'Stage 7 Remark', 'Stage 7 Timestamp', 'Stage 7 User', 'Stage 7 Status',
-  'Quotation Created?', 'Quotation File', 'Quotation Amount', 'Quotation Email'
-];
+/* ---- Stage 3 Machine Check, indices 212..253 (columns HE..IT) ------------
+   Ten reefer machine points, each Status / Estimate / Photo / Remark.
 
+   The bases are an explicit list rather than 212 + i*4 because index 249
+   (column 250) is the legacy stray documented on OL_MARKED_COL_1BASED: it
+   carries no header but DOES hold the value "Marked" in 24 live rows.
+   Mapping a field onto it would surface that string as if it were inspection
+   data, so the tenth item jumps it and lands at 250..253. 248 and 249 are
+   labelled but never read or written by this feature.
+
+   Verified against the live sheet 2026-08-10: 249 is the ONLY occupied cell
+   at or beyond index 212. */
+const OL_MACHINE_ITEMS = [
+  'Compressor', 'Condenser Coil', 'Evaporator Coil', 'Condenser Fan', 'Evaporator Fan',
+  'Controller / Microprocessor', 'Power Cable & Plug', 'Refrigerant Gas Charge',
+  'Temperature Sensors / Probes', 'Defrost System'
+];
+const OL_MACHINE_BASES = [180, 184, 188, 192, 196, 200, 204, 208, 212, 218];
+const OL_MACHINE_FIRST = 212;
+const OL_MACHINE_LAST = 253;
+
+/** Row-1 labels for 212..253, with the two skipped cells named for what they
+ *  actually are so nobody maps a field onto them later. */
+const OL_MACHINE_HEADER_BLOCK = (() => {
+  const out = new Array(OL_MACHINE_LAST - OL_MACHINE_FIRST + 1).fill('');
+  const put = (idx, val) => { out[idx - OL_MACHINE_FIRST] = val; };
+  OL_MACHINE_ITEMS.forEach((item, i) => {
+    const b = OL_MACHINE_BASES[i];
+    put(b, `Machine ${item} Status`);
+    put(b + 1, `Machine ${item} Estimate`);
+    put(b + 2, `Machine ${item} Photo`);
+    put(b + 3, `Machine ${item} Remark`);
+  });
+  put(248, 'Unused (reserved)');
+  put(249, 'Marked (legacy, unused)');
+  return out;
+})();
+
+import { OL_HEADERS } from './olHeaders.generated.js';
+export { OL_HEADERS };
+
+
+/**
+ * Re-derived 2026-08-11 from the live header row after 33 columns were deleted
+ * from the sheet by hand, which shifted 231 others left. Every range below was
+ * resolved by locating that stage's first field and its "... Status" column in
+ * row 1 — see olHeaders.generated.js.
+ *
+ * Stage 4 (Quotation / Order) is gone entirely: it was retired, and its columns
+ * were among those deleted. It therefore has no entry here.
+ *
+ * The status-quad HEADERS still carry the old mislabelling — Billing's quad
+ * reads "Stage 4 ...", Get In's reads "Stage 8 ...". The indices are what
+ * matter and they are correct; the text is cosmetic.
+ */
 export const OL_STAGE_INFO = {
-  1: { statusCol: 17, startCol: 10, endCol: 17, label: 'Off-Lease Intimation' },
-  2: { statusCol: 23, startCol: 18, endCol: 23, label: 'Lifting / Arrival' },
-  3: { statusCol: 42, startCol: 24, endCol: 42, label: 'Inspection Checklist' },
-  4: { statusCol: 65, startCol: 59, endCol: 65, label: 'Quotation / Order' },
-  5: { statusCol: 58, startCol: 43, endCol: 58, label: 'Billing Reconciliation' },
-  6: { statusCol: 121, startCol: 66, endCol: 121, label: 'Transportation' },
-  7: { statusCol: 163, startCol: 142, endCol: 163, label: 'Get In' },
-  8: { statusCol: 128, startCol: 122, endCol: 128, label: 'FMS Closure' }
+  1: { statusCol: 17, startCol: 10, endCol: 17, label: 'Off-Lease Intimation' },   // K..R
+  2: { statusCol: 23, startCol: 18, endCol: 23, label: 'Lifting / Arrival' },      // S..X
+  3: { statusCol: 28, startCol: 24, endCol: 28, label: 'Inspection Checklist' },   // Y..AC
+  5: { statusCol: 44, startCol: 29, endCol: 44, label: 'Billing Reconciliation' }, // AD..AS
+  6: { statusCol: 99, startCol: 45, endCol: 99, label: 'Transportation' },         // AT..CV
+  7: { statusCol: 135, startCol: 114, endCol: 135, label: 'Gate In' },             // DK..EF
+  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'FMS Closure' }          // CW..DC
 };
 /* 133/134/135 deliberately excluded -- confirmed via the live sheet those
    columns are the Marked sync flag / Email ID / Mail Status feature, not
    Stage 3 photos. */
-const OL_STAGE3_EXTRA_COLS = [136, 137, 138, 139, 140, 141];
+/* 136..141 = the Stage 3 photo columns. 168..200 = the inspection checklist
+   (11 points x Status/Estimate/Photo) and 201..211 = one Remark per point,
+   both appended to OL_HEADERS above — listed here so
+   getOffLeaseStageDetail() pre-fills them and getOffLeaseContainerDetail()
+   reports them. */
+
+/**
+ * The 11 Stage 3 inspection points and the column each of their four values
+ * lives in. Derived from the header block above: Status/Estimate/Photo run
+ * 168 + n*3, Remarks were appended later at 201 + n.
+ *
+ * Mirrors INSPECTION_POINTS in frontend/src/pages/stages/stageFields.js —
+ * the two lists must name the same items in the same order.
+ */
+/**
+ * The inspection points, IN DISPLAY ORDER — array position sets the number the
+ * user sees, `status`/`remark` set where the values live. The two are
+ * deliberately independent: Gasket Door was added later and displays as point
+ * 9, but its columns sit at the end (254..257) so inserting it did not shift
+ * Curtain / Tube Light / Mantrap off their existing columns.
+ *
+ * Columns are therefore listed explicitly, never derived from the index.
+ * `reeferOnly` points are hidden for Dry containers, which have no such
+ * fittings.
+ */
+const OL_INSPECTION_DEFS = [
+  // Re-derived 2026-08-11 from row 1 after the manual column deletions.
+  { item: 'Outside / Undercarriage', status: 136, remark: 169 },   // EG / FN
+  { item: 'Inside and Outside Doors', status: 139, remark: 170 },  // EJ / FO
+  { item: 'Right Side', status: 142, remark: 171 },                // EM / FP
+  { item: 'Left Side', status: 145, remark: 172 },                 // EP / FQ
+  { item: 'Front Wall', status: 148, remark: 173 },                // ES / FR
+  { item: 'Ceiling / Roof', status: 151, remark: 174 },            // EV / FS
+  { item: 'Floor (Inside)', status: 154, remark: 175 },            // EY / FT
+  { item: 'Contamination', status: 157, remark: 176 },             // FB / FU
+  { item: 'Gasket Door', status: 222, remark: 225 },               // HO / HR
+  { item: 'Curtain', status: 160, remark: 177, reeferOnly: true }, // FE / FV
+  { item: 'Tube Light', status: 163, remark: 178, reeferOnly: true }, // FH / FW
+  { item: 'Mantrap', status: 166, remark: 179, reeferOnly: true }  // FK / FX
+];
+
+export const OL_INSPECTION_POINTS = OL_INSPECTION_DEFS.map((d, i) => ({
+  n: i + 1,
+  item: d.item,
+  status: d.status,
+  estimate: d.status + 1,
+  photo: d.status + 2,
+  remark: d.remark,
+  reeferOnly: !!d.reeferOnly
+}));
+
+/**
+ * Machine Check points IN DISPLAY ORDER, with explicit columns. The first ten
+ * keep the bases allocated in OL_MACHINE_BASES; the four added later sit at
+ * 258+ so nothing shifted. Four consecutive columns each
+ * (status / estimate / photo / remark).
+ */
+const OL_MACHINE_DEFS = [
+  ...OL_MACHINE_ITEMS.map((item, i) => ({ item, status: OL_MACHINE_BASES[i] })),
+  // Re-derived 2026-08-11 after the manual column deletions.
+  { item: 'Cable 4 Core 4mm 18Mtr', status: 226 },  // HS
+  { item: 'Motor Condition', status: 230 },         // HW
+  { item: 'Contractor', status: 234 },              // IA
+  { item: 'ISO Plug', status: 238 }                 // IE
+];
+
+export const OL_MACHINE_POINTS = OL_MACHINE_DEFS.map((d, i) => ({
+  n: i + 1,
+  item: d.item,
+  status: d.status,
+  estimate: d.status + 1,
+  photo: d.status + 2,
+  remark: d.status + 3
+}));
+
+/**
+ * Site Cabin fittings inventory, in printed-sheet order. `qty` is the expected
+ * count per cabin size — a spec, so it lives here rather than in the sheet;
+ * only the count actually found is stored, at `col`.
+ *
+ * 20FT quantities are from the supplied cabin sheet. Sizes without an entry
+ * render with a blank expected quantity until their spec is supplied.
+ */
+export const OL_CABIN_ITEMS = [
+  { item: 'Fan', col: 244, qty: { '20FT': 3 } },
+  { item: 'LED', col: 245, qty: { '20FT': 4 } },
+  { item: '5 Amp Switch', col: 246, qty: { '20FT': 2 } },
+  { item: 'Window', col: 247, qty: { '20FT': 2 } },
+  { item: '15A Switch', col: 248, qty: { '20FT': 1 } },
+  { item: 'Bulkhead', col: 249, qty: { '20FT': 1 } },
+  { item: 'AC point', col: 250, qty: { '20FT': 1 } },
+  { item: 'MCB', col: 251, qty: { '20FT': 1 } },
+  { item: 'Manager Table', col: 252, qty: { '20FT': 1 } },
+  { item: 'Table', col: 253, qty: { '20FT': 4 } },
+  { item: 'Overhead Storage', col: 254, qty: { '20FT': 4 } },
+  { item: 'Chair', col: 255, qty: { '20FT': 7 } },
+  { item: 'Partition', col: 256, qty: { '20FT': 1 } }
+];
+
+/** Expected quantity for an item at a given container size, or '' if that
+ *  size's spec has not been supplied. */
+export function cabinExpectedQty(entry, size) {
+  const key = String(size || '').trim().toUpperCase().replace(/\s+/g, '');
+  return entry.qty[key] ?? '';
+}
+
+/** Technician labour — hours entered by the inspector, cost derived. */
+export const OL_TECHNICIAN_RATE_PER_HOUR = 1000;
+export const OL_TECHNICIAN_HOURS_COL = 242;
+export const OL_TECHNICIAN_COST_COL = 243;
+
+const OL_STAGE3_INSPECTION_COLS = OL_INSPECTION_POINTS
+  .flatMap((p) => [p.status, p.estimate, p.photo, p.remark]);
+const OL_STAGE3_MACHINE_COLS = [
+  ...OL_MACHINE_POINTS.flatMap((p) => [p.status, p.estimate, p.photo, p.remark]),
+  OL_TECHNICIAN_HOURS_COL,
+  OL_TECHNICIAN_COST_COL
+];
+const OL_STAGE3_CABIN_COLS = OL_CABIN_ITEMS.map((c) => c.col);
+const OL_INSPECTION_COL_SET = new Set([
+  ...OL_STAGE3_INSPECTION_COLS, ...OL_STAGE3_MACHINE_COLS, ...OL_STAGE3_CABIN_COLS
+]);
+
+const OL_STAGE3_EXTRA_COLS = [
+  136, 137, 138, 139, 140, 141,
+  ...OL_STAGE3_INSPECTION_COLS,
+  ...OL_STAGE3_MACHINE_COLS,
+  ...OL_STAGE3_CABIN_COLS
+];
 const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
 
 /* FIXED, not derived — see LMS.js's long comment on this constant. A prior
@@ -162,9 +303,92 @@ const OL_LEASE_ID_PREFIX = 'LEASE';
 const OL_LEASE_ID_START = 28; // first new Lease ID = LEASE0028
 const OL_LEASE_ID_PAD = 4;
 
+/**
+ * Stages retired from the workflow. Stage 4 (Quotation / Order) was removed
+ * 2026-08-10: a container now goes straight from Stage 3 (Inspection
+ * Checklist) to Stage 5 (Billing Reconciliation).
+ *
+ * Retired, not deleted — OL_STAGE_INFO[4] and its columns are untouched, so
+ * rows that already completed Stage 4 keep their data and it still shows in
+ * the container lookup and its PDF. What changes is that Stage 4 is no longer
+ * offered for entry and is skipped when working out which stage a container
+ * is currently sitting at.
+ *
+ * NOTE: the Stage 4 quotation email (_sendOffLeaseQuotationEmail) fired on a
+ * Stage 4 save, so retiring the stage stops those client emails.
+ */
+/**
+ * The live workflow, IN ORDER:
+ *   1 Intimation -> Approval gate -> 2 Transportation -> 3 Gate In
+ *   -> 4 Inspection -> 5 Billing Reconciliation -> 6 FMS Closure
+ *
+ * These are INTERNAL stage numbers and the array order IS the workflow order —
+ * it no longer ascends. Internal numbers stay fixed because they select the
+ * sheet column range; only the sequence and the displayed number change.
+ *
+ * Get In (internal 7) and Inspection (internal 3) swapped on 2026-08-12: a
+ * container is now inspected AFTER it has been received, not before.
+ *
+ * Retired: 2 (Lifting / Arrival) and 4 (Quotation / Order, whose columns were
+ * deleted from the sheet). Their data is preserved and still reported.
+ */
+export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 8];
+const OL_RETIRED_STAGES = new Set([2, 4]);
+
+/* Internal numbers for the two stages the STAGE-10 hand-off moves between:
+   the tab shown as "Stage 2 (Transportation)" and the one shown as
+   "Stage 3 (Gate In)". Named because the display numbers are not the internal
+   ones and reading `6` or `7` inline invites the wrong assumption. */
+const OL_STAGE2_INTERNAL = 6;
+const OL_STAGE3_INTERNAL = 7;
+
+/** Container key for cross-sheet lookups — upper-cased alphanumerics only, so
+ *  spacing and punctuation differences between sheets cannot miss. Must stay
+ *  identical to normContainer() in stage8.service.js. */
+const _containerKey = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/**
+ * Stage numbers shown to users, so the workflow reads 1..7 with no gap where
+ * a retired stage used to be. Billing Reconciliation is internally stage 5
+ * and displays as "Stage 4".
+ *
+ * DISPLAY ONLY. The internal number is the stage's identity — it selects the
+ * column range in OL_STAGE_INFO, the offlease1..8 permission key and the API
+ * route. Renumbering those would write data into another stage's columns.
+ * Never map a display number back to a column.
+ *
+ * A retired stage has no display number: it is not part of the sequence, and
+ * reusing its old number would collide with whichever stage now occupies that
+ * position.
+ */
+/**
+ * The stage that must be completed before `stage` can be worked — the nearest
+ * ACTIVE stage before it, skipping retired ones. Returns null for the first
+ * stage. Never use `stage - 1` for this: a retired stage's status column can
+ * never be filled, so anything gated on it would stay empty forever.
+ */
+function _prevActiveStage(stage) {
+  /* By POSITION in the workflow, not by numeric value — the sequence is
+     1 -> 6 -> 7 -> 3 -> 5 -> 8, so "the previous stage" is the element before
+     this one, which numeric comparison would get wrong. */
+  const i = OL_ACTIVE_STAGE_NUMS.indexOf(Number(stage));
+  if (i > 0) return OL_ACTIVE_STAGE_NUMS[i - 1];
+  if (i === 0) return null;
+  // A retired stage: gate on whatever precedes it in workflow order.
+  return null;
+}
+
+const OL_STAGE_DISPLAY = new Map(OL_ACTIVE_STAGE_NUMS.map((s, i) => [s, i + 1]));
+const displayStageNum = (s) => OL_STAGE_DISPLAY.get(s) ?? null;
+/** "Stage 4 · Billing Reconciliation", or "Quotation / Order (retired)". */
+const stageCaption = (s) => {
+  const d = displayStageNum(s);
+  return d ? `Stage ${d} · ${OL_STAGE_LABELS[s]}` : `${OL_STAGE_LABELS[s]} (retired)`;
+};
+
 const OL_STAGE_LABELS = {
   1: 'Off-Lease Intimation', 2: 'Lifting / Arrival', 3: 'Inspection Checklist',
-  4: 'Quotation / Order', 5: 'Billing Reconciliation', 6: 'Transportation', 7: 'Get In',
+  4: 'Quotation / Order', 5: 'Billing Reconciliation', 6: 'Transportation', 7: 'Gate In',
   8: 'FMS Closure'
 };
 
@@ -189,6 +413,18 @@ function fmtDMYHM(d) {
 function fmtCell(val) {
   const d = parseDate(val);
   return d ? formatDateVal(d) : safeStr(val);
+}
+/**
+ * For money and quantity cells. These must NEVER go through fmtCell():
+ * parseDate() treats a bare number as a date, so an estimate of 10000 came
+ * back as "01-01-10000". Returns the number as plain text, or the raw string
+ * if it isn't numeric.
+ */
+function fmtNumCell(val) {
+  const s = safeStr(val).trim();
+  if (s === '') return '';
+  const n = Number(s.replace(/,/g, ''));
+  return Number.isFinite(n) ? String(n) : s;
 }
 /** Frontend date inputs send "yyyy-MM-dd"; build via local Y/M/D components rather than
  *  `new Date(string)` (UTC parse -> possible day-roll). Falls back to a raw Date parse,
@@ -282,6 +518,10 @@ export async function _ensureOffLeaseSheet() {
     const toWrite = [];
     for (let c = wide.length; c < OL_HEADERS.length; c++) toWrite.push(OL_HEADERS[c] || `Col ${c + 1}`);
     if (toWrite.length) {
+      /* The grid has to be wide enough first — values.update cannot write past
+         the sheet's existing column count, it fails with "exceeds grid
+         limits" rather than growing the sheet. */
+      await ensureColumnCount(OL_SHEET, OL_HEADERS.length);
       await updateRange(OL_SHEET, `${colLetter(wide.length)}1:${colLetter(OL_HEADERS.length - 1)}1`, [toWrite]);
     }
   }
@@ -601,8 +841,8 @@ export async function debugOrderNosForContainer(containerNo) {
 
     const cols = _orderScanCols(headers);
     out.push(`${name}:`);
-    out.push(`   container col = ${colLetter(cols.contCol)}  header '${safeStr(headers[cols.contCol])}'${cols.contFallback ? '   ← FALLBACK, header not found!' : ''}`);
-    out.push(`   order col     = ${colLetter(cols.ordCol)}  header '${safeStr(headers[cols.ordCol])}'${cols.ordFallback ? '   ← FALLBACK, header not found!' : ''}`);
+    out.push(`   container col = ${colLetter(cols.contCol)}  header '${safeStr(headers[cols.contCol])}'${cols.contFallback ? '   â† FALLBACK, header not found!' : ''}`);
+    out.push(`   order col     = ${colLetter(cols.ordCol)}  header '${safeStr(headers[cols.ordCol])}'${cols.ordFallback ? '   â† FALLBACK, header not found!' : ''}`);
 
     let hits = 0;
     const hitLines = [];
@@ -816,13 +1056,45 @@ export async function addToOffLeaseTracking(containerNo) {
     console.log(`[OL-ADD] Writing rate: index=${colMap.rate}, val=${rateVal}, type=${typeof rateVal}`);
     newRow[9] = typeof rateVal === 'number' ? rateVal : safeStr(rateVal);
 
-    await appendRow(OL_SHEET, newRow);
+    const { rowNum } = await appendRow(OL_SHEET, newRow);
 
     // Also mark the Deployed sheet — removes it from Pending
+    const stamp = dmyTime(new Date());
     await batchUpdateValues([
-      { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[dmyTime(new Date())]] },
+      { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[stamp]] },
       { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] }
     ]);
+
+    /* MIRROR BOTH WRITES INTO MONGO IMMEDIATELY.
+     *
+     * Every off-lease screen reads the Mongo mirror, but this function wrote
+     * only to Sheets — so a container off-leased from Lease Expiry did not
+     * appear under Off-Lease until the reconcile job next ran, up to five
+     * minutes later. saveOffLeaseStage already does this for the same reason;
+     * this path was simply missed.
+     *
+     * Best-effort: reconcile remains the source of truth, so a failure here
+     * must never fail a write that already succeeded on the sheet. */
+    try {
+      /* Keyed by POSITION. Container numbers are not unique on this sheet
+         (TRIU6681671 has two records), so `row_<n>` is the only safe address.
+         `rowNum` is 1-based including the header, and data row 2 is row_0. */
+      if (rowNum) {
+        await getCollection(OL_SHEET).updateOne(
+          { key: `row_${rowNum - 2}` },
+          { $set: { key: `row_${rowNum - 2}`, row: newRow } },
+          { upsert: true }
+        );
+      }
+      /* Deployed's Update (V) and Status (W) too — they drive the Lease Expiry
+         list and seed Stage 1's SLA clock. */
+      await getCollection(SHEETS.DEPLOYED).updateOne(
+        { key: `row_${deployedTargetRow - 2}` },
+        { $set: { 'row.21': stamp, 'row.22': 'Off-Lease' } }
+      );
+    } catch (e) {
+      console.error('[OL-ADD] mirror update failed (reconcile will correct):', e?.message || e);
+    }
 
     return 'OK';
   });
@@ -831,18 +1103,79 @@ export async function addToOffLeaseTracking(containerNo) {
 /* =============================================
    STAGE LIST / DETAIL
 ============================================= */
-export async function getOffLeaseData(stage) {
-  await _ensureOffLeaseSheet();
+/**
+ * @param opts.deliveredKeys Set of "CONTAINER|client" that have a STAGE-10
+ *   site-delivery record. Those containers are treated as finished with
+ *   Stage 2 and released to Stage 3 (Gate In).
+ *
+ *   Stage 2 is read-only and has no form, so its status column can never be
+ *   filled — without this, Gate In would gate on a column nothing can write
+ *   and no container would ever reach it. STAGE-10 being filled IS the
+ *   completion signal for that leg.
+ *
+ *   Done as a read-time rule rather than by writing "Completed" into the
+ *   tracking sheet: that sheet currently has 212 columns where the code
+ *   expects 289, so a positional write to a stage status column would land in
+ *   the wrong place. This achieves the same movement with no write at all, and
+ *   stays correct once the columns are re-synced.
+ */
+/**
+ * When a container was marked Off-Lease on the Deployed sheet — the moment it
+ * entered the off-lease workflow, and therefore when Stage 1's clock starts.
+ *
+ * Read from the "Update" column on the row whose "Status" is Off-Lease. Both
+ * are found BY HEADER, not position: this sheet has had columns inserted
+ * before, and a positional read would silently return a neighbouring column.
+ *
+ * Stage 1's SLA previously started from the deployed date, which is when the
+ * container went out on lease — often years earlier — so every container
+ * looked like a 600-day breach.
+ */
+export async function getOffLeaseEntryStamp(containerNo) {
+  const want = normKey(containerNo);
+  if (!want) return '';
+  try {
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const updCol = _findOlColumnMulti(headers, ['update']);
+    const stsCol = _findOlColumnMulti(headers, ['status']);
+    if (updCol < 0) return '';
+
+    for (const r of rows) {
+      if (normKey(r[0]) !== want) continue;
+      if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+      const stamp = safeStr(r[updCol]).trim();
+      if (stamp) return stamp;
+    }
+  } catch (e) {
+    console.error('[OL-ENTRY-STAMP]', e?.message || e);
+  }
+  return '';
+}
+
+export async function getOffLeaseData(stage, opts = {}) {
   // Display-only list read, no embedded write in this function — safe to
-  // serve from the Mongo mirror (Phase 1b).
+  // serve from the Mongo mirror (Phase 1b), and therefore no
+  // _ensureOffLeaseSheet(): see the note in getOffLeaseDashboardData.
   const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
   const info = OL_STAGE_INFO[stage];
   if (!rows.length || !info) return { headers: [], data: [], stage };
 
+  const { deliveredKeys } = opts;
   const displayIndices = [0, 1, 2, 3, 5, 6, 7, 8, 9];
   const displayHeaders = ['Container No', 'Lease ID', 'Size', 'Type', 'Client Name', 'Location', 'Deployed Date', 'Valid Upto', 'Rate'];
-  const prevInfo = Number(stage) > 1 ? OL_STAGE_INFO[Number(stage) - 1] : null;
-  const intApprovalCol = Number(stage) === 2
+  /* The gate is the previous ACTIVE stage, not stage-1: with Stage 4 retired,
+     Billing (stage 5) waits on Stage 3, otherwise it would wait forever on a
+     status column nothing can ever fill. */
+  const prevNum = _prevActiveStage(stage);
+  const prevInfo = prevNum ? OL_STAGE_INFO[prevNum] : null;
+  /* The Intimation Approval gate sits immediately after Stage 1, so it applies
+     to whichever stage FOLLOWS Stage 1 in the workflow — currently internal 6.
+     This was keyed on `stage === 2`, the RETIRED Lifting/Arrival stage, so the
+     gate never fired: all 6 containers awaiting approval were also listed as
+     pending at Transportation, and the tab badges summed to 43 against 37
+     active records. */
+  const gatedByApproval = prevNum === 1;
+  const intApprovalCol = gatedByApproval
     ? _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status'])
     : -1;
 
@@ -854,11 +1187,33 @@ export async function getOffLeaseData(stage) {
     const statusVal = row[info.statusCol];
     if (statusVal && String(statusVal).trim() !== '') continue;
 
-    if (prevInfo) {
-      const prevStatus = row[prevInfo.statusCol];
-      if (!prevStatus || String(prevStatus).trim() === '') continue;
+    /* Has this container's site delivery been recorded in STAGE-10? Keyed on
+       container alone — see getDeliveredKeys() for why client is not used. */
+    const delivered = deliveredKeys ? deliveredKeys.has(_containerKey(row[0])) : false;
 
-      if (Number(stage) === 2 && intApprovalCol >= 0) {
+    /* Stage 2 (internal 6) is DONE once STAGE-10 has its delivery — drop it
+       from that queue so it is not shown as still awaiting transport. Only
+       once it has actually reached Stage 2, though: a row still sitting at
+       Stage 1 must stay there. */
+    if (Number(stage) === OL_STAGE2_INTERNAL && delivered
+        && safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '') continue;
+
+    if (prevInfo) {
+      /* ...and released into the next stage on the same signal, regardless of
+         the (unfillable) Stage 2 status column.
+
+         Stage 1 must still be COMPLETE. The delivery signal substitutes for
+         the Stage 2 gate only — it is not a licence to skip the rest of the
+         chain. Without this check a container whose delivery was recorded but
+         whose intimation was never completed appeared in Stage 1 and Stage 3
+         at the same time, which is how 7 + 20 + 10 came to 37 against 36
+         records. */
+      const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
+      const releasedByDelivery = Number(stage) === OL_STAGE3_INTERNAL && delivered && stage1Done;
+      const prevStatus = row[prevInfo.statusCol];
+      if (!releasedByDelivery && (!prevStatus || String(prevStatus).trim() === '')) continue;
+
+      if (gatedByApproval && intApprovalCol >= 0) {
         const intApproval = row[intApprovalCol];
         if (!intApproval || String(intApproval).trim().toLowerCase() !== 'approved') continue;
       }
@@ -875,17 +1230,85 @@ export async function getOffLeaseData(stage) {
   return { headers: displayHeaders, data: finalData, stage, stageLabel: info.label, statusCol: info.statusCol };
 }
 
+/**
+ * Attaches a `tat` to every row of a stage list, in place.
+ *
+ * The clock starts when the stage became actionable, not when the container
+ * entered off-lease: for Stage 1 that is the Deployed sheet's Off-Lease stamp,
+ * and for every later stage it is the previous stage's completion. Measured
+ * against now, because these rows are by definition still pending.
+ *
+ * The Deployed sheet is read ONCE and indexed, rather than per row — a list of
+ * 20 containers would otherwise mean 20 reads of the same data.
+ */
+export async function attachStageTat(result, stage) {
+  const stageNum = Number(stage);
+  const budget = SLA_MS[stageNum];
+  if (!budget || !result?.data?.length) return result;
+
+  const prevNum = _prevActiveStage(stageNum);
+  const prevInfo = prevNum ? OL_STAGE_INFO[prevNum] : null;
+
+  /* The off-lease entry stamp, ALWAYS built — not only for Stage 1.
+     It is the fallback whenever the previous stage carries no timestamp, which
+     is the normal case for Stage 3: those containers were released by the FMS
+     delivery rule, so Stage 2's status column was never written and there is
+     no completion time to start the clock from. Without this the TAT column
+     rendered a dash on every row. */
+  const entryByContainer = new Map();
+  {
+    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const updCol = _findOlColumnMulti(dh, ['update']);
+    const stsCol = _findOlColumnMulti(dh, ['status']);
+    if (updCol >= 0) {
+      for (const r of dr) {
+        if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+        const k = normKey(r[0]);
+        if (k && !entryByContainer.has(k)) entryByContainer.set(k, safeStr(r[updCol]).trim());
+      }
+    }
+  }
+
+  const { rows } = await getSheetDataFromMongo(OL_SHEET);
+
+  for (const item of result.data) {
+    const row = rows[item._rowNum - 2] || [];
+    const entry = entryByContainer.get(normKey(item.row?.[0])) || '';
+    /* Previous stage's completion, falling back to the off-lease entry stamp
+       when that stage was never stamped. */
+    const startRaw = (prevInfo ? safeStr(row[prevInfo.statusCol - 2]).trim() : '') || entry;
+
+    const start = parseStamp(startRaw);
+    if (!start) { item.tat = null; continue; }
+
+    const elapsed = Date.now() - start.getTime();
+    item.tat = {
+      startedAt: startRaw,
+      budget: budgetLabel(budget),
+      elapsed: humanize(elapsed),
+      elapsedMs: elapsed,
+      delayed: elapsed > budget,
+      overdueBy: elapsed > budget ? humanize(elapsed - budget) : ''
+    };
+  }
+  result.tatBudget = budgetLabel(budget);
+  return result;
+}
+
 export async function getOffLeaseStageDetail(containerNo, stage) {
   try {
-    await _ensureOffLeaseSheet();
-    const { rows } = await getSheetData(OL_SHEET);
+    /* Served from the Mongo mirror, like the stage lists. This is a read-only
+       pre-fill: nothing here computes a row number for a later write, so the
+       mirror's row order is safe to use. It previously read live Sheets on
+       every form open, which made the form slow and — once the per-minute
+       read quota was exhausted — silently returned an empty record, so every
+       field rendered as a dash. saveOffLeaseStage still reads live Sheets,
+       because its row numbers DO target writes. */
+    const { rows } = await getSheetDataFromMongo(OL_SHEET);
     const rn = _findOlRowByContainer(rows, containerNo);
-    if (rn === -1) {
-      console.error(`[OL-DETAIL] Not found: ${containerNo}`);
-      return {};
-    }
+    if (rn === -1) throw new AppError(`Not found: ${safeStr(containerNo)}`);
     const info = OL_STAGE_INFO[stage];
-    if (!info) { console.error(`[OL-DETAIL] No stage info for stage ${stage}`); return {}; }
+    if (!info) throw new AppError(`No such stage: ${safeStr(stage)}`);
 
     const row = rows[rn - 2] || [];
     const result = {};
@@ -900,8 +1323,11 @@ export async function getOffLeaseStageDetail(containerNo, stage) {
 
     return result;
   } catch (e) {
+    /* Rethrow rather than returning {}. Swallowing this turned a transient
+       quota error into a form full of dashes with no indication anything had
+       failed — the caller now sees a real error and can retry. */
     console.error('[OL-DETAIL] ERROR:', e?.message || e);
-    return {};
+    throw e instanceof AppError ? e : new AppError(`Could not load ${safeStr(containerNo)}: ${e?.message || e}`);
   }
 }
 
@@ -975,6 +1401,17 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
       console.log(`[LEASE-ID] row ${rn} -> ${assignedLeaseId}${curLid ? ` (was: ${curLid})` : ''}`);
     }
 
+    /* Technician cost is derived, never taken from the client — hours x the
+       fixed rate. Recomputed on every Stage 3 save so the two columns cannot
+       drift apart, and cleared when hours are blank. */
+    if (stageNum === 3) {
+      const hoursRaw = payload[`col_${OL_TECHNICIAN_HOURS_COL}`];
+      const hours = Number(String(hoursRaw ?? '').trim());
+      payload[`col_${OL_TECHNICIAN_COST_COL}`] = (hoursRaw != null && String(hoursRaw).trim() !== '' && !Number.isNaN(hours))
+        ? hours * OL_TECHNICIAN_RATE_PER_HOUR
+        : '';
+    }
+
     // Write stage data
     const cellUpdates = [];
     for (const key of Object.keys(payload)) {
@@ -991,10 +1428,49 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
       }
     }
     // Status + Timestamp + User: (0-based) [statusCol-2]=Timestamp, [statusCol-1]=User, [statusCol]=Status
+    const stamp = dmyTime(new Date());
     cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol)}${rn}`, values: [['Completed']] });
-    cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [[dmyTime(new Date())]] });
+    cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [[stamp]] });
     cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol - 1)}${rn}`, values: [[userEmail || '']] });
     await batchUpdateValues(cellUpdates);
+
+    /* Mirror the same cells into Mongo immediately.
+     *
+     * The stage lists (getOffLeaseData) read the Mongo mirror, but the write
+     * above goes only to Sheets — so without this, a container that finished
+     * Stage 3 stayed invisible on the next stage until the reconcile job ran,
+     * up to 5 minutes later. Applying the same values here makes it appear at
+     * once; reconcile then re-reads the sheet and agrees.
+     *
+     * Best-effort: reconcile is still the source of truth, so a failure here
+     * must never fail a save that already succeeded on the sheet. */
+    try {
+      const mirrored = {};
+      for (const key of Object.keys(payload)) {
+        if (key.indexOf('col_') !== 0) continue;
+        const ci = parseInt(key.replace('col_', ''), 10);
+        const v = payload[key];
+        if (v === '' || v === undefined || v === null) continue;
+        mirrored[`row.${ci}`] = v;
+      }
+      mirrored[`row.${info.statusCol}`] = 'Completed';
+      mirrored[`row.${info.statusCol - 2}`] = stamp;
+      mirrored[`row.${info.statusCol - 1}`] = userEmail || '';
+      if (assignedLeaseId) mirrored['row.1'] = assignedLeaseId;
+
+      /* Keyed by POSITION, not container number. This sheet's mirror is
+         configured naturalKeyColumn:null / fullRefresh:true precisely because
+         container numbers are not unique here (TRIU6681671 has two records) —
+         so `row_<n>` is the only safe way to address one row. `rn` is the
+         1-based sheet row including the header, and data row 2 is row_0. */
+      const r = await getCollection(OL_SHEET).updateOne(
+        { key: `row_${rn - 2}` },
+        { $set: mirrored }
+      );
+      if (!r.matchedCount) console.warn(`[OL-STAGE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-STAGE] mirror update failed (reconcile will correct):', e?.message || e);
+    }
 
     /* Stage 4 "Quotation Create? = Yes" -> email the client. Best-effort: a
        failed send must never fail the stage save itself. */
@@ -1080,30 +1556,141 @@ async function _fillBlanksFromDeployed(res, want) {
 /** Same stage/approval classification getOffLeaseContainerDetail computes
  *  for one container's full detail view, trimmed to just what a pipeline
  *  list needs (no per-field "Filled Stage Data" — that's detail-only). */
+/* =============================================
+   BILLING (Billing Sales sheet -> Off-Lease report)
+============================================= */
+/* Billing Sales column positions. Joined on Container No.: that sheet has no
+   Lease ID column at all, so the container number is the only key available
+   (verified 2026-08-11 — 117 Billing rows match an Off-Lease container, 0
+   match a Lease ID). */
+const BS_CONTAINER = 0, BS_CLIENT_NAME = 2, BS_BILLING_RANGE = 18,
+  BS_BILL_AMOUNT = 19, BS_MONTH = 21, BS_YEAR = 22,
+  BS_INVOICE_ATTACHMENT = 28, BS_INVOICE_NO = 30;
+
+/**
+ * Billing Sales rows for one container AND client, plus the billed total.
+ *
+ * BOTH keys are required. A container number is reused across clients over
+ * time — TRIU6681671 alone appears under two different clients — so matching
+ * on the container alone pulled another client's invoices onto the report.
+ *
+ * Falls back to container-only when the Off-Lease record has no client name,
+ * since an empty client would otherwise match nothing at all.
+ */
+async function _findBillingForContainer(want, wantClient) {
+  const empty = { records: [], count: 0, totalBilling: 0 };
+  const client = safeStr(wantClient).trim().toLowerCase();
+  try {
+    const { rows } = await getSheetDataFromMongo(SHEETS.BILLING_SALES);
+    const records = [];
+    for (const r of rows) {
+      if (normKey(r[BS_CONTAINER]) !== want) continue;
+      if (client && safeStr(r[BS_CLIENT_NAME]).trim().toLowerCase() !== client) continue;
+      records.push({
+        container: safeStr(r[BS_CONTAINER]).trim(),
+        clientName: safeStr(r[BS_CLIENT_NAME]).trim(),
+        invoiceNo: safeStr(r[BS_INVOICE_NO]).trim(),
+        amount: fmtNumCell(r[BS_BILL_AMOUNT]),
+        attachment: safeStr(r[BS_INVOICE_ATTACHMENT]).trim(),
+        billingRange: safeStr(r[BS_BILLING_RANGE]).trim(),
+        period: [safeStr(r[BS_MONTH]).trim(), safeStr(r[BS_YEAR]).trim()].filter(Boolean).join('/')
+      });
+    }
+    if (!records.length) return empty;
+    const totalBilling = records.reduce((sum, x) => {
+      const n = Number(String(x.amount).replace(/,/g, ''));
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+    return { records, count: records.length, totalBilling };
+  } catch (e) {
+    console.error('[OL-BILLING]', e?.message || e);
+    return empty;
+  }
+}
+
+/** Invoice numbers are written with inconsistent separators and case across
+ *  systems ("QUA/APR65/26-27", "QUA-APR65-26-27", lower case). Compared on
+ *  alphanumerics alone so those all match. */
+const normInvoiceNo = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/**
+ * Invoice number -> its attachment link, from the Billing Sales sheet.
+ *
+ * Keyed on the INVOICE NUMBER alone, deliberately — not container + client
+ * like _findBillingForContainer. An attachment belongs to the invoice, and the
+ * container/client join finds nothing for most records (HNKU6063239 has three
+ * invoices in the Accounts API and zero Billing Sales rows, because the two
+ * systems spell the client differently: "Draeger India Pvt Ltd" vs
+ * "Draeger India Pvt. Ltd."). The invoice number is the one field both sides
+ * agree on, so it is the one to match on.
+ */
+export async function getInvoiceAttachments(invoiceNos) {
+  const want = new Set((invoiceNos || []).map(normInvoiceNo).filter(Boolean));
+  const out = {};
+  if (!want.size) return out;
+
+  try {
+    const { rows } = await getSheetDataFromMongo(SHEETS.BILLING_SALES);
+    for (const r of rows) {
+      const key = normInvoiceNo(r[BS_INVOICE_NO]);
+      if (!key || !want.has(key) || out[key]) continue;
+      const link = safeStr(r[BS_INVOICE_ATTACHMENT]).trim();
+      if (link) out[key] = link;
+    }
+  } catch (e) {
+    console.error('[OL-INVOICE-ATTACH]', e?.message || e);
+  }
+  return out;
+}
+
+/** The Off-Lease sheet's own client cell is sometimes blank at intimation
+ *  time; fall back to what the lease/order sheets say. */
+function _clientNameFallback(leaseInfo) {
+  return safeStr(leaseInfo?.clientName || '');
+}
+
 function _classifyOffLeaseStages(headers, row) {
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const approval = apCol >= 0 ? safeStr(row[apCol]).trim() : '';
 
-  const stages = [];
-  for (let s = 1; s <= 8; s++) {
+  const stages = OL_ACTIVE_STAGE_NUMS.map((s) => {
     const info = OL_STAGE_INFO[s];
     const st = safeStr(row[info.statusCol]).trim();
-    stages.push({ stage: s, label: OL_STAGE_LABELS[s], done: st !== '', timestamp: row[info.statusCol - 2] });
-  }
+    /* Every stage block ends "... Remark | Timestamp | User | Status", so the
+       remark is three columns before the status — the same fixed offset
+       saveOffLeaseStage relies on for Timestamp (-2) and User (-1). Guarded
+       by the header text rather than trusted blindly: this sheet has had
+       columns deleted by hand before, and reading the wrong column would put
+       another stage's data on the dashboard. */
+    const remarkCol = info.statusCol - 3;
+    const remark = /remark/i.test(safeStr(headers[remarkCol])) ? safeStr(row[remarkCol]).trim() : '';
+    return {
+      stage: s,
+      displayStage: displayStageNum(s),
+      label: OL_STAGE_LABELS[s],
+      done: st !== '',
+      timestamp: row[info.statusCol - 2],
+      remark
+    };
+  });
 
   const apLower = approval.toLowerCase();
   let currentStage, stageClass, currentStageNum;
-  if (!stages[0].done) {
-    currentStage = `Stage 1 · ${OL_STAGE_LABELS[1]}`; stageClass = 'stage'; currentStageNum = 1;
+  const stage1 = stages.find((s) => s.stage === 1);
+  if (!stage1.done) {
+    currentStage = stageCaption(1); stageClass = 'stage'; currentStageNum = 1;
   } else if (apLower === '') {
     currentStage = 'Pending Approval'; stageClass = 'approval'; currentStageNum = null;
   } else if (apLower === 'rejected') {
     currentStage = 'Rejected — container stays on lease'; stageClass = 'rejected'; currentStageNum = null;
   } else {
-    let cur = 0;
-    for (let s2 = 1; s2 < 8; s2++) { if (!stages[s2].done) { cur = s2 + 1; break; } }
-    if (cur === 0) { currentStage = 'Completed — container released'; stageClass = 'done'; currentStageNum = null; }
-    else { currentStage = `Stage ${cur} · ${OL_STAGE_LABELS[cur]}`; stageClass = 'stage'; currentStageNum = cur; }
+    /* First unfinished stage after Stage 1. Searched by stage number rather
+       than array index because retired stages leave gaps in the sequence. */
+    // `stages` is built in OL_ACTIVE_STAGE_NUMS order, so the first unfinished
+    // entry after the first IS the next stage — index order, not numeric.
+    const next = stages.slice(1).find((s) => !s.done);
+    if (!next) { currentStage = 'Completed — container released'; stageClass = 'done'; currentStageNum = null; }
+    else { currentStage = stageCaption(next.stage); stageClass = 'stage'; currentStageNum = next.stage; }
   }
   return { stages, approvalStatus: approval, currentStage, stageClass, currentStageNum, completed: stageClass === 'done' };
 }
@@ -1127,7 +1714,12 @@ function _completedThisMonth(stage8) {
  * Display-only, safe to read from the Mongo mirror.
  */
 export async function getOffLeaseDashboardData() {
-  await _ensureOffLeaseSheet();
+  /* No _ensureOffLeaseSheet() here. It exists to create the tab and widen the
+     header row before a WRITE; this function only reads, and reads from the
+     Mongo mirror. Calling it made a Mongo-backed page depend on a live
+     spreadsheets.get — and because `sheetEnsured` is per-process, every
+     backend restart paid it again. With the read quota exhausted that turned
+     into the circuit breaker refusing the whole dashboard. */
   const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
 
   const items = [];
@@ -1141,6 +1733,17 @@ export async function getOffLeaseDashboardData() {
       leaseId: safeStr(row[1]),
       clientName: safeStr(row[5]),
       clientCode: safeStr(row[4]),
+      /* Identity columns, fixed positions on the tracking sheet — the same
+         ones getOffLeaseData's display grid uses. Added for the order-book
+         dashboard view, which shows each record's size/type/location and who
+         raised it alongside the stage strip. `rate` (col 9) stays out:
+         pricing is hidden from every grid system-wide. */
+      size: safeStr(row[2]),
+      type: safeStr(row[3]),
+      location: safeStr(row[6]),
+      deployedDate: fmtCell(row[7]),
+      validUpto: fmtCell(row[8]),
+      raisedBy: safeStr(row[OL_STAGE_INFO[1].statusCol - 1]),
       stages: c.stages,
       approvalStatus: c.approvalStatus,
       currentStage: c.currentStage,
@@ -1160,7 +1763,14 @@ export async function getOffLeaseDashboardData() {
 /* =============================================
    DASHBOARD — OFF-LEASE CONTAINER LOOKUP
 ============================================= */
-export async function getOffLeaseContainerDetail(containerNo) {
+/**
+ * @param containerNo the container to look up
+ * @param leaseId     optional — picks ONE record when the container has been
+ *                    off-leased more than once. Without it, a container with
+ *                    several records returns the candidate list instead of
+ *                    silently showing the first.
+ */
+export async function getOffLeaseContainerDetail(containerNo, leaseId) {
   const want = normKey(containerNo);
   if (!want) return { found: false, message: 'Enter a container number.' };
 
@@ -1169,12 +1779,48 @@ export async function getOffLeaseContainerDetail(containerNo) {
   const leaseInfo = await _findLeaseInfoForContainer(want);
   res.orderNos = leaseInfo.orders.join(', ');
 
-  await _ensureOffLeaseSheet();
-  const { headers, rows } = await getSheetData(OL_SHEET);
-  let row = null, rowNum = -1;
+  /* Read-only lookup: served from the Mongo mirror, with no
+     _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to widen
+     the sheet before a WRITE — on this path it only added a Sheets round trip
+     to a read, and on an exhausted quota it failed the whole container detail.
+     Same fix already applied to the dashboard and the stage lists. */
+  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+
+  /* A container can appear more than once — the same box off-leased by two
+     different clients at different times (e.g. TRIU6681671). Collect every
+     match rather than breaking on the first, or the second client's record
+     is unreachable and the first is shown as if it were the only one. */
+  const matches = [];
   for (let r = 0; r < rows.length; r++) {
-    if (normKey(rows[r][0]) === want) { row = rows[r]; rowNum = r + 2; break; }
+    if (normKey(rows[r][0]) === want) matches.push({ row: rows[r], rowNum: r + 2 });
   }
+
+  const wantLease = safeStr(leaseId).trim().toLowerCase();
+  let picked = matches[0] || null;
+  if (wantLease) {
+    picked = matches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
+    if (!picked) return { found: false, message: `No record for ${safeStr(containerNo)} under lease ${safeStr(leaseId)}.` };
+  } else if (matches.length > 1) {
+    // Let the caller choose which record they mean.
+    return {
+      found: true,
+      container: safeStr(matches[0].row[0]),
+      multiple: true,
+      matches: matches.map((m) => ({
+        leaseId: safeStr(m.row[1]),
+        clientName: safeStr(m.row[5]) || _clientNameFallback(leaseInfo),
+        clientCode: safeStr(m.row[4]),
+        size: safeStr(m.row[2]),
+        type: safeStr(m.row[3]),
+        deployedDate: formatDateVal(m.row[7]),
+        validUpto: formatDateVal(m.row[8]),
+        currentStage: _classifyOffLeaseStages(headers, m.row).currentStage
+      }))
+    };
+  }
+
+  const row = picked ? picked.row : null;
+  const rowNum = picked ? picked.rowNum : -1;
 
   if (!row) {
     try {
@@ -1229,8 +1875,27 @@ export async function getOffLeaseContainerDetail(containerNo) {
   res.approvalUser = apUsCol >= 0 ? safeStr(row[apUsCol]) : '';
 
   const stages = [];
-  for (let s = 1; s <= 8; s++) {
+  /* WORKFLOW ORDER, not 1..8 ascending. Internal stage numbers do not run in
+     workflow order (the sequence is 1 -> 6 -> 7 -> 3 -> 5 -> 8), so counting
+     up listed the container's history as Intimation, Inspection, Billing,
+     Transportation, Get In — the stages jumbled, and out of step with the
+     progress board and the dashboard, which both read OL_ACTIVE_STAGE_NUMS.
+
+     Retired stages are skipped EXCEPT when the row already has data for one —
+     a container that completed Stage 2 or 4 before they were retired should
+     still show that stage and its fields in the lookup and the PDF. They have
+     no place in the sequence, so they follow it, labelled as retired and
+     carrying their own completion date. */
+  const retiredWithData = [...OL_RETIRED_STAGES].filter((s) => {
     const info = OL_STAGE_INFO[s];
+    return info && safeStr(row[info.statusCol]).trim() !== '';
+  }).sort((a, b) => a - b);
+
+  for (const s of [...OL_ACTIVE_STAGE_NUMS, ...retiredWithData]) {
+    const info = OL_STAGE_INFO[s];
+    // Stage 4's columns were deleted from the sheet, so it has no entry at all
+    // — skip rather than dereference undefined.
+    if (!info) continue;
     const st = safeStr(row[info.statusCol]).trim();
 
     const fields = [];
@@ -1239,11 +1904,50 @@ export async function getOffLeaseContainerDetail(containerNo) {
       if (sv.trim() === '') continue;
       fields.push({ label: OL_HEADERS[c] || `Col ${c + 1}`, value: sv });
     }
+    /* Stage 3's inspection columns are reported as a structured `inspection`
+       table rather than 44 loose label/value fields — see below. Everything
+       else in the extras (the six photo slots) stays an ordinary field. */
+    let inspection = null;
+    let machine = null;
+    let cabin = null;
+    let technician = null;
     if (s === 3) {
       for (const eci of OL_STAGE3_EXTRA_COLS) {
+        if (OL_INSPECTION_COL_SET.has(eci)) continue;
         const sv2 = fmtCell(row[eci]);
         if (sv2.trim() === '') continue;
         fields.push({ label: OL_HEADERS[eci] || `Col ${eci + 1}`, value: sv2 });
+      }
+
+      /* safeStr, not fmtCell, for the text cells — a remark or status must not
+         be reinterpreted as a date. Estimates go through fmtNumCell. */
+      const readPoints = (defs) => defs.map((p) => ({
+        n: p.n,
+        item: p.item,
+        status: safeStr(row[p.status]).trim(),
+        estimate: fmtNumCell(row[p.estimate]),
+        photo: safeStr(row[p.photo]).trim(),
+        remark: safeStr(row[p.remark]).trim()
+      })).filter((p) => p.status || p.estimate || p.photo || p.remark);
+
+      const insp = readPoints(OL_INSPECTION_POINTS);
+      if (insp.length) inspection = insp;
+      const mach = readPoints(OL_MACHINE_POINTS);
+      if (mach.length) machine = mach;
+
+      const cab = OL_CABIN_ITEMS
+        .map((c, i) => ({
+          n: i + 1,
+          item: c.item,
+          qty: cabinExpectedQty(c, safeStr(row[2])), // col 2 = Size
+          available: fmtNumCell(row[c.col])
+        }))
+        .filter((c) => c.available !== '');
+      if (cab.length) cabin = cab;
+
+      const hours = fmtNumCell(row[OL_TECHNICIAN_HOURS_COL]);
+      if (hours !== '') {
+        technician = { hours, rate: OL_TECHNICIAN_RATE_PER_HOUR, cost: fmtNumCell(row[OL_TECHNICIAN_COST_COL]) };
       }
     }
     if (s === 4) {
@@ -1256,23 +1960,41 @@ export async function getOffLeaseContainerDetail(containerNo) {
 
     stages.push({
       stage: s,
+      displayStage: displayStageNum(s),
       label: OL_STAGE_LABELS[s],
       done: st !== '',
       status: st,
       timestamp: formatDateVal(row[info.statusCol - 2]),
       user: safeStr(row[info.statusCol - 1]),
-      fields
+      fields,
+      ...(inspection ? { inspection } : {}),
+      ...(machine ? { machine } : {}),
+      ...(cabin ? { cabin } : {}),
+      ...(technician ? { technician } : {})
     });
   }
   res.stages = stages;
+
+  /* Invoices for the report come from the Accounts & Collection API — the same
+     call and the same response the Stage 1 panel renders, so the print view,
+     PDF and Excel can never disagree with it. The Google Sheet is deliberately
+     NOT consulted: no fallback, no merge. */
+  try {
+    const { getOutstandingForContainer } = await import('./accountsApi.service.js');
+    res.outstanding = await getOutstandingForContainer(res.container || containerNo, res.clientName);
+  } catch (e) {
+    console.error('[OL-DETAIL] outstanding fetch failed:', e?.message || e);
+    res.outstanding = null;
+  }
 
   /* Fill base fields still blank in the Off-Lease sheet (Rate, Location,
      dates) from the Deployed sheet. Never the client — see helper's note. */
   await _fillBlanksFromDeployed(res, want);
 
   const apLower = approval.toLowerCase();
-  if (!stages[0].done) {
-    res.currentStage = `Stage 1 · ${OL_STAGE_LABELS[1]}`;
+  const stage1 = stages.find((s) => s.stage === 1);
+  if (!stage1?.done) {
+    res.currentStage = stageCaption(1);
     res.stageClass = 'stage';
   } else if (apLower === '') {
     res.currentStage = 'Pending Approval';
@@ -1281,10 +2003,16 @@ export async function getOffLeaseContainerDetail(containerNo) {
     res.currentStage = 'Rejected — container stays on lease';
     res.stageClass = 'rejected';
   } else {
-    let cur = 0;
-    for (let s2 = 1; s2 < 8; s2++) { if (!stages[s2].done) { cur = s2 + 1; break; } }
-    if (cur === 0) { res.currentStage = 'Completed — container released'; res.stageClass = 'done'; }
-    else { res.currentStage = `Stage ${cur} · ${OL_STAGE_LABELS[cur]}`; res.stageClass = 'stage'; }
+    /* By stage number, not array index — `stages` above skips retired stages
+       that carry no data, so the sequence has gaps. A retired stage that IS
+       present (historical data) must not count as "still pending" either. */
+    /* Workflow order, skipping the first entry and any retired stage that only
+       appears here because it holds historical data. */
+    const next = OL_ACTIVE_STAGE_NUMS.slice(1)
+      .map((n) => stages.find((s) => s.stage === n))
+      .find((s) => s && !s.done);
+    if (!next) { res.currentStage = 'Completed — container released'; res.stageClass = 'done'; }
+    else { res.currentStage = stageCaption(next.stage); res.stageClass = 'stage'; }
   }
 
   return res;

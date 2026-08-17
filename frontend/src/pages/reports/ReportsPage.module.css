@@ -1,0 +1,58 @@
+.kpiRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.kpiRow > * { flex: 0 1 260px; min-width: 220px; }
+
+/* One filter for the whole page, above every report it controls. */
+.filterBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.filterLabel {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.filterLabel + .monthSelect { margin-right: 10px; }
+/* Pushed to the right so the filters read as one group and the action sits
+   apart from them. */
+.exportBtn { margin-left: auto; }
+
+.hint { margin: 0 0 12px; font-size: 12.5px; color: var(--text-2); line-height: 1.5; }
+
+/* Month opens its container list in place. */
+.link {
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 800;
+  color: var(--accent);
+  cursor: pointer;
+}
+.link:hover { text-decoration: underline; }
+
+.monthSelect {
+  padding: 6px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.monthSelect:focus { outline: none; border-color: var(--accent); }

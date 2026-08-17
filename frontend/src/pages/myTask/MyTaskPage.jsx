@@ -38,7 +38,7 @@ const CARD_DEFS = [
   { key: 'olStage4', label: 'Off-Lease Stage 4: Quotation', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage5', label: 'Off-Lease Stage 5: Billing', owner: 'Shivani Maam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage6', label: 'Off-Lease Stage 6: Transport', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage7', label: 'Off-Lease Stage 7: Get In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage7', label: 'Off-Lease Stage 7: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage8', label: 'Off-Lease Stage 8: FMS Closure', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
 ];
 

@@ -25,11 +25,22 @@ import { isGoogleQuotaError } from './errorHandler.js';
  * cached (and possibly permission-gated) response; it always falls through
  * to the route's own requireAuth, which 401s it as before.
  *
- * Any successful (2xx) non-GET request (a save/approve/upload/etc.) busts
- * that user's cached GET entries under the same top-level resource path
- * (e.g. POST /api/verify/12/action clears every cached
- * GET /api/verify... for that user), so a follow-up reload reflects the
- * change immediately rather than serving stale pre-mutation data.
+ * Any successful (2xx) non-GET request (a save/approve/upload/etc.) busts the
+ * cached GET entries for the resource it touches AND every resource coupled to
+ * it, FOR ALL USERS, so a follow-up reload reflects the change immediately
+ * rather than serving stale pre-mutation data.
+ *
+ * Both of those were once narrower, and both were wrong:
+ *
+ *  - Busting only the writer's own entries left every OTHER user looking at a
+ *    pre-mutation list for the full 90s. The underlying sheets are shared, so
+ *    a cache of them cannot be invalidated per-user.
+ *  - Busting only the written path meant a write to one domain never cleared
+ *    the domains that read the SAME sheets. Marking a container off-lease
+ *    (POST /api/offlease/tracking) cleared /api/offlease but not /api/expiry,
+ *    so the container stayed on the Lease Expiry list for up to 90s after the
+ *    spreadsheet had already been updated — reported as "the sheet updates
+ *    instantly but the other panel takes time".
  */
 
 const SUCCESS_TTL_SECONDS = Number(process.env.SHEETS_CACHE_TTL_SECONDS) || 90;
@@ -51,6 +62,23 @@ function topResourcePath(originalPath) {
   return '/' + parts.slice(0, 2).join('/');
 }
 
+/**
+ * Domains that read the SAME underlying sheets, so a write to any one of them
+ * can change what the others return.
+ *
+ * All four are views over the Deployed sheet and the workflow sheets hanging
+ * off it: a container leaving Lease Expiry for Off-Lease is one write that
+ * changes two lists. They are invalidated as a group rather than by a pairwise
+ * map, which would need editing every time a service starts reading one more
+ * sheet — and would silently go stale when nobody remembered to.
+ */
+const COUPLED_RESOURCES = ['/api/verify', '/api/approve', '/api/expiry', '/api/offlease'];
+
+/** Every resource whose cached GETs a write to `resource` invalidates. */
+function resourcesToBust(resource) {
+  return COUPLED_RESOURCES.includes(resource) ? COUPLED_RESOURCES : [resource];
+}
+
 export function responseCache(req, res, next) {
   if (SKIP_PREFIXES.some((p) => req.path.startsWith(p))) return next();
   if (!req.user) return next(); // unauthenticated — never touches the cache, let requireAuth handle it downstream
@@ -70,7 +98,11 @@ export function responseCache(req, res, next) {
     const originalJson = res.json.bind(res);
     res.json = (body) => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        cacheRemoveByPrefix(`httpcache:${req.user.empId}:${topResourcePath(req.path)}`);
+        /* Trailing ':' so the prefix matches the resource segment exactly and
+           cannot spill into a longer resource name that starts the same way. */
+        for (const r of resourcesToBust(topResourcePath(req.path))) {
+          cacheRemoveByPrefix(`httpcache:${r}:`);
+        }
       } else if (res.statusCode === 429 || isGoogleQuotaError({ message: body?.error })) {
         cachePut(GLOBAL_LOCK_KEY, { expiresAt: Date.now() + LOCKOUT_SECONDS * 1000 }, LOCKOUT_SECONDS);
       }
@@ -79,7 +111,13 @@ export function responseCache(req, res, next) {
     return next();
   }
 
-  const cacheKey = `httpcache:${req.user.empId}:${req.originalUrl}`;
+  /* Resource FIRST, then the user: the entries for one resource have to be
+     removable across every user in a single prefix sweep. With the user first
+     that was impossible, which is why invalidation used to be per-user. The
+     response body is still cached per user — permission-gated endpoints return
+     different data per employee, so entries can never be SHARED between
+     users, only invalidated together. */
+  const cacheKey = `httpcache:${topResourcePath(req.path)}:${req.user.empId}:${req.originalUrl}`;
   const forceRefresh = req.query.refresh === '1';
   if (!forceRefresh) {
     const hit = cacheGet(cacheKey);

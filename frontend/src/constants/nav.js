@@ -40,6 +40,11 @@ export const NAV_TREE = {
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
     { key: 'returnDashboard', label: 'Return Dashboard', path: ROUTES.RETURN_DASHBOARD, icon: 'refresh', sidebarKey: 'returnDashboard', section: 'Returns' },
+    /* No sidebarKey: the Sidebar Access sheet is read POSITIONALLY against
+       SIDEBAR_KEYS, so a new key needs a matching column added there before it
+       grants anything. Left unkeyed (always visible) until that column exists,
+       rather than shipping a nav item nobody can see. */
+    { key: 'reports', label: 'Reports', path: ROUTES.REPORTS, icon: 'list', section: 'Reports' },
     // No sidebarKey/permKey — always shown, same as the main app's own nav
     // (navConfig.js's `adminOnly: true` is decorative there too); real access
     // control is the server-side 403 (roles.service.js's assertRolesAdmin),

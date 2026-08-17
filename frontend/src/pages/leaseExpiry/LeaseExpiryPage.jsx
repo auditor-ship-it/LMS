@@ -8,7 +8,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchExpiryList, actionExpiryRow } from '../../services/expiry.service.js';
-import { trackContainer } from '../../services/offlease.service.js';
+import { trackContainer } from '../../services/offLease.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import styles from './LeaseExpiryPage.module.css';
 

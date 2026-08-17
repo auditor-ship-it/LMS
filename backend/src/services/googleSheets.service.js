@@ -135,13 +135,20 @@ export async function getSheetData(sheetName, ssId = env.googleSheetId, range = 
   return { headers, rows, values };
 }
 
-export async function getRange(sheetName, a1Range, ssId = env.googleSheetId) {
+/**
+ * @param renderOption 'UNFORMATTED_VALUE' (default) or 'FORMULA'. FORMULA
+ *   returns the cell's formula rather than its result, which is the only way
+ *   to recover a link from a =HYPERLINK() cell — values.get otherwise hands
+ *   back just the display text. Use it on a narrow range: under FORMULA,
+ *   dates come back as serial numbers rather than formatted strings.
+ */
+export async function getRange(sheetName, a1Range, ssId = env.googleSheetId, renderOption = 'UNFORMATTED_VALUE') {
   logSheetsAccess(`getRange (values.get ${a1Range})`, sheetName, ssId);
   const sheets = getSheetsClient();
   const res = await withQuotaRetry(`getRange(${sheetName})`, () => sheets.spreadsheets.values.get({
     spreadsheetId: ssId,
     range: `'${sheetName}'!${a1Range}`,
-    valueRenderOption: 'UNFORMATTED_VALUE',
+    valueRenderOption: renderOption,
     dateTimeRenderOption: 'FORMATTED_STRING'
   }));
   return res.data.values || [];
@@ -199,6 +206,41 @@ export async function updateCell(sheetName, rowNum, col0, value, ssId = env.goog
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [[value]] }
   }));
+}
+
+/**
+ * Widens a sheet's grid so it has at least `minCols` columns.
+ *
+ * The values API cannot write outside the existing grid — it fails with
+ * "Range (...) exceeds grid limits" rather than growing the sheet. Anything
+ * that appends new columns has to call this first.
+ *
+ * No-ops when the grid is already wide enough, so it is safe to call on every
+ * pass. Returns the number of columns added.
+ */
+export async function ensureColumnCount(sheetName, minCols, ssId = env.googleSheetId) {
+  const sheets = getSheetsClient();
+  const meta = await withQuotaRetry(`ensureColumnCount.get(${sheetName})`, () => sheets.spreadsheets.get({
+    spreadsheetId: ssId,
+    fields: 'sheets(properties(sheetId,title,gridProperties(columnCount)))'
+  }));
+  const sheet = (meta.data.sheets || []).find((s) => s.properties.title === sheetName);
+  if (!sheet) throw new Error(`Sheet not found: '${sheetName}'`);
+
+  const current = sheet.properties.gridProperties?.columnCount ?? 0;
+  if (current >= minCols) return 0;
+
+  const add = minCols - current;
+  logSheetsAccess(`ensureColumnCount (+${add} cols -> ${minCols})`, sheetName, ssId);
+  await withQuotaRetry(`ensureColumnCount.append(${sheetName})`, () => sheets.spreadsheets.batchUpdate({
+    spreadsheetId: ssId,
+    requestBody: {
+      requests: [{
+        appendDimension: { sheetId: sheet.properties.sheetId, dimension: 'COLUMNS', length: add }
+      }]
+    }
+  }));
+  return add;
 }
 
 export async function updateRange(sheetName, a1Range, values2D, ssId = env.googleSheetId) {

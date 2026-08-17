@@ -4,11 +4,14 @@
   background: var(--scrim);
   backdrop-filter: blur(2px);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 40px 16px;
+  padding: 16px;
   z-index: var(--z-modal);
-  overflow-y: auto;
+  /* The BODY is the only scroller. With the backdrop scrolling too there were
+     two scrollbars stacked at the right edge, plus the page behind showing a
+     third. */
+  overflow: hidden;
 }
 
 .modal {
@@ -17,10 +20,260 @@
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-4);
   width: 100%;
-  max-width: 780px;
-  max-height: calc(100vh - 80px);
+  /* Wide rather than tall: the FMS cards sit three across, and the screens
+     this runs on have far more horizontal room than vertical. */
+  max-width: min(1720px, calc(100vw - 28px));
+  max-height: calc(100vh - 36px);
   display: flex;
   flex-direction: column;
+}
+
+/* ---- STAGE-8 -> 9 -> 10 steps ---- */
+.fmsWrap { margin-top: 6px; }
+
+.stepRow { display: flex; align-items: stretch; gap: 0; margin-bottom: 8px; }
+/* Connector with an ARROWHEAD — the steps run 8 -> 9 -> 10 in sequence, and a
+   plain rule left that direction to be inferred. */
+.stepLine {
+  flex: 1;
+  align-self: center;
+  position: relative;
+  height: 2px;
+  background: var(--line);
+}
+.stepLine::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid var(--line);
+  border-right: 2px solid var(--line);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.step:hover { filter: brightness(0.97); }
+
+/* A step that HAS data is green — the whole button, so "which legs exist"
+   reads from across the room. Steps with no record keep the plain surface. */
+.step_found { background: var(--success-bg); border-color: var(--success); }
+.step_unread { background: var(--error-bg); border-color: var(--error); }
+
+/* Selection is a ring, not a fill — filling would fight the green/grey state
+   the button is already carrying. */
+.stepActive { box-shadow: 0 0 0 3px var(--accent-soft); border-color: var(--accent); }
+
+.stepNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.step_found .stepNum { background: var(--success); color: #fff; }
+.step_unread .stepNum { background: var(--error); color: #fff; }
+
+.stepLabel { font-size: 12.5px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.stepState {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.step_found .stepState { color: var(--success); }
+.step_unread .stepState { color: var(--error); }
+
+/* Fields flow into COLUMNS — 60-odd short values stacked in one column would
+   be several times the height of the modal. Columns fill the width instead,
+   which is the axis there is room on. */
+/* Fewer, wider columns. Five narrow ones forced labels to wrap onto two lines
+   and turned the panel into a wall of text; three give each field room to sit
+   on one line. */
+/* ---- grouped field sections ----
+   Each group is a CARD, not an underlined heading: segregation you can see at
+   a glance is the whole point, and the app already reads as cards on a tinted
+   ground everywhere else. Tokens only — navy accent, --r-md, --shadow-1,
+   Manrope for headings — so this matches the rest of the system in both
+   themes. */
+/* MASONRY, not grid. A grid puts every tile in a row and sizes that row to the
+   tallest one, so a 5-field tile beside a 13-field tile left a block of dead
+   space beneath it. Multi-column flow lets each tile take exactly its own
+   height and the next one start immediately underneath — no gaps anywhere.
+   (CSS `grid-template-rows: masonry` would be the direct expression of this
+   but is not shipping in stable browsers yet.) */
+/* Explicit columns, filled in JS (balanceIntoColumns). Equal-width tracks that
+   always span the full row — no balancing heuristic to leave one empty. */
+.fmsGroups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+  margin-top: 10px;
+}
+.fmsCol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+@media (max-width: 900px) {
+  .fmsGroups { grid-template-columns: 1fr; }
+}
+
+/* Per-group tint. Built with color-mix off the SYSTEM tokens rather than
+   hard-coded colours, so every tile re-derives itself correctly in dark mode
+   instead of staying a pale wash on a dark ground. */
+.fmsGroup {
+  --tone: var(--accent);
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--tone) 26%, var(--line));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--tone) 4%, var(--surface));
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.tone_navy    { --tone: var(--accent); }
+.tone_info    { --tone: var(--info); }
+.tone_success { --tone: var(--success); }
+.tone_teal    { --tone: #0F9B8E; }
+.tone_violet  { --tone: #7C5CD6; }
+.tone_slate   { --tone: var(--text-2); }
+/* Amber and warn are LIGHT in both themes, so white ink on them fails
+   contrast — they take the system's on-amber colour instead. */
+.tone_amber   { --tone: var(--amber-c); --on-tone: var(--on-amber, #010101); }
+.tone_warn    { --tone: var(--warn); --on-tone: var(--on-amber, #010101); }
+
+/* SOLID header bar. A 13% wash read as another row of the card rather than as
+   its heading; filling it with the tone makes each section unmistakable. */
+.fmsGroupTitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin: 0;
+  padding: 7px 10px;
+  border: none;
+  background: var(--tone);
+  font-family: var(--f-display);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  text-align: left;
+  /* Text sits on the tone, so it takes the SURFACE colour: tones are dark on a
+     light theme and light on a dark one, and surface inverts with them. Amber
+     is light in both themes, so it overrides to the system's on-amber ink. */
+  color: var(--on-tone, var(--surface));
+  cursor: pointer;
+}
+.fmsGroupTitle:hover { filter: brightness(1.08); }
+
+/* Boxed, rotating chevron — the affordance that says "this opens and closes".
+   Points right when collapsed, down when open. */
+.fmsChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  flex: none;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--on-tone, var(--surface)) 22%, transparent);
+  transform: rotate(-90deg);
+  transition: transform var(--dur-base, 180ms) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.fmsChevronOpen { transform: rotate(0deg); }
+.fmsGroupTitle:hover .fmsChevron {
+  background: color-mix(in srgb, var(--on-tone, var(--surface)) 36%, transparent);
+}
+
+.fmsGroupCount {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  /* Translucent white/black rather than a solid chip, so it reads as part of
+     the bar instead of a sticker on top of it. */
+  background: color-mix(in srgb, var(--on-tone, var(--surface)) 24%, transparent);
+  font-family: var(--f-body);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  color: var(--on-tone, var(--surface));
+}
+
+.fmsFields { padding: 4px 6px 6px; }
+
+/* Label and value on ONE line, label left and value right, separated by a
+   rule — the eye follows a single row instead of decoding stacked pairs. */
+/* Alternating tint instead of a rule on every row: banding carries the eye
+   across a wide label-to-value gap far better than a hairline, and with three
+   columns of 20+ rows a border on each one added visual noise the data did
+   not need. */
+/* Tightened to fit at 100% zoom: the panel previously only showed whole at
+   80%, which is not a setting anyone should have to find. */
+.fmsItem {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 7px;
+  border-radius: var(--r-sm);
+}
+/* Banding picks up the tile's own tone, so rows sit ON the card rather than
+   looking like a grey strip pasted over it. */
+.fmsItem:nth-child(odd) { background: color-mix(in srgb, var(--tone) 7%, var(--surface)); }
+
+.fmsLabel {
+  flex: 0 0 46%;
+  font-size: 9.5px;
+  font-weight: 600;
+  /* Sentence case, not uppercase: these are sheet headers up to five words
+     long, and uppercase is slower to read at this size. */
+  color: var(--text-2);
+  line-height: 1.35;
+}
+.fmsValue {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  /* Figures line up down the column — these are IDs, amounts and dates. */
+  font-variant-numeric: tabular-nums;
+}
+.fmsEmpty {
+  margin: 0;
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+  .stepRow { flex-wrap: wrap; gap: 8px; }
+  .stepLine { display: none; }
 }
 
 .header {
@@ -43,7 +296,7 @@
 }
 .closeBtn:hover { color: var(--text); }
 
-.body { padding: 20px 22px 22px; overflow-y: auto; }
+.body { padding: 14px 16px 16px; overflow-y: auto; }
 
 .baseGrid {
   display: grid;
@@ -94,6 +347,285 @@
 .field select:disabled,
 .field textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* ---- Stage 3 container inspection checklist ---- */
+/* Client-wide DR / CR summary under the invoice table. */
+.drCrRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 26px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.drCrItem { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.drCrLabel {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.drCrValue {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.drCrDebit { color: var(--error); }
+.drCrCredit { color: var(--success); }
+
+/* Invoice number as a link to its PDF — the ↗ mirrors Accounts & Collection. */
+.invLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+.invLink:hover span { text-decoration: underline; }
+.invLinkIcon { width: 11px; height: 11px; flex: none; opacity: 0.8; }
+
+/* Invoice-document cell: a real target to click, and a plainly inert marker
+   when that invoice has no file — so "no document" never reads as a link. */
+.invFileBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.invFileBtn:hover { background: var(--accent); color: #fff; }
+.invFileBtn svg { width: 12px; height: 12px; }
+
+.invNoFile {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3, var(--text-2));
+  opacity: 0.65;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* ---- file upload control ---- */
+.drop {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1.5px dashed var(--line-strong, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* Attached files get a SOLID border — dashed says "drop here", solid says
+   "something is here". */
+.drop_pending {
+  border-style: solid;
+  border-color: var(--amber-c);
+  background: var(--amber-soft, var(--surface-2));
+}
+.drop_done {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+.drop_busy { opacity: 0.7; cursor: progress; }
+.dropOver { border-color: var(--accent); background: var(--accent-soft); }
+
+.dropIcon { width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.drop_done .dropIcon { color: var(--success); }
+.drop_pending .dropIcon { color: var(--warn); }
+
+.dropText { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.dropName {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropHint { font-size: 10px; color: var(--text-3); }
+
+.dropView {
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--accent);
+  text-decoration: none;
+}
+.dropView:hover { background: var(--accent-soft); }
+
+/* ---- grouped stage form ---- */
+.formSections { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+
+.formSection {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 12px 14px 14px;
+}
+
+.formSectionTitle {
+  margin: 0 0 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--f-display);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--accent);
+}
+
+.sectionTitle {
+  margin: 26px 0 10px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+}
+.sectionHint {
+  margin: -6px 0 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.inspTable {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.inspTable th {
+  text-align: left;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1.5px solid var(--line);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-2);
+}
+.inspTable th:last-child { width: 240px; }
+.inspTable td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--text);
+  vertical-align: middle;
+}
+.inspTable tr:last-child td { border-bottom: none; }
+
+.inspPoint { font-weight: 600; }
+.inspNum { color: var(--text-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+/* Status dropdown — one control per checklist row, tinted by what's chosen. */
+.statusSelect {
+  width: 100%;
+  max-width: 220px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.statusSelect:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.statusSelect:disabled { opacity: 0.6; cursor: not-allowed; }
+.statusGood { border-color: var(--success, #16a34a); background: var(--success-bg, #ecfdf5); color: var(--success, #16a34a); }
+.statusDamage { border-color: var(--error); background: var(--error-bg); color: var(--error); }
+.statusNA { border-color: var(--text-3); background: var(--surface-2); color: var(--text-2); }
+/* The dropdown list itself inherits the tint otherwise — keep options neutral. */
+.statusSelect option { background: var(--surface); color: var(--text); font-weight: 600; }
+
+.inspChoices { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Segmented Good/Damage control — the selected Damage state goes red, as on
+   the printed inspection sheet. */
+.inspChoice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.inspChoice:hover { border-color: var(--text-3); }
+.inspChoice input { margin: 0; accent-color: currentColor; }
+.inspChoiceGood { border-color: var(--success, #16a34a); background: var(--success-bg, #ecfdf5); color: var(--success, #16a34a); }
+.inspChoiceDamage { border-color: var(--error); background: var(--error-bg); color: var(--error); }
+.inspChoiceNA { border-color: var(--text-3); background: var(--surface-2); color: var(--text-2); }
+.inspChoice.disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Revealed only when an item is marked Damage. */
+.inspDamageCell { padding: 0 !important; background: var(--error-bg); }
+.inspDamageBox {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 18px;
+  padding: 14px 14px 16px 32px;
+  border-left: 3px solid var(--error);
+}
+
+.cabinQty {
+  width: 90px;
+  padding: 7px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text);
+}
+.cabinQty:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.cabinQty:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Fewer present than the cabin spec expects. */
+.cabinShort { border-color: var(--error); background: var(--error-bg); color: var(--error); font-weight: 700; }
+
+/* Inputs that belong to a checklist but aren't a point — e.g. technician hours. */
+.checklistFooter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 18px;
+  padding: 14px 2px 0;
+}
+.computed {
+  display: block;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
 .error {
   margin-top: 16px;
   padding: 10px 14px;
@@ -104,6 +636,21 @@
   font-weight: 600;
 }
 
+/* Shown in place of the form once a report stage has been saved. */
+.savedPanel {
+  padding: 26px 22px;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.savedTitle { margin: 0 0 6px; font-size: 15px; font-weight: 800; color: var(--success, #16a34a); }
+.savedHint { margin: 0 0 18px; font-size: 13px; color: var(--text-2); }
+.savedActions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* Pushed left so the report sits apart from Cancel / Save. */
+.reportBtn { margin-right: auto; }
+
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -111,4 +658,137 @@
   margin-top: 22px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+/* Tally outstanding summary on Stage 1 */
+/* A single card now — sized to its content rather than stretched across the
+   modal, which a full-width grid track would do. */
+.outstandingRow {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.outstandingRow > * { min-width: 200px; }
+.outstandingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.outstandingLabel {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.outstandingValue { font-size: 18px; font-weight: 800; color: var(--text); }
+.outstandingOpen { color: var(--error); font-weight: 700; }
+
+/* Container list under an invoice — several per row, so it wraps rather than
+   forcing the table wide. */
+.containerList {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  max-width: 260px;
+  word-break: break-word;
+}
+.containerCount { color: var(--text-3); font-weight: 700; }
+
+/* Invoice groups: containers stack on their own rows, so only the first row of
+   each group carries a divider — inner rows stay visually joined to it. */
+.invoiceGroupStart td { border-top: 1.5px solid var(--line); }
+.inspTable tbody tr:not(.invoiceGroupStart) td { border-bottom: none; }
+.containerCell { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---- Invoice table: compact accounting/ERP layout, A4-print friendly ---- */
+.invTable {
+  width: 100%;
+  max-width: 720px;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.35;
+  table-layout: fixed;
+}
+.colInvoice { width: 20%; }
+.colContainers { width: 26%; }
+.colMonth { width: 12%; }
+.colAmount { width: 15%; }
+/* FMS pipeline: STAGE-8 -> 9 -> 10 for this container. */
+.fmsRow { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 4px; }
+.fmsStep {
+  flex: 1 1 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--line);
+  border-left-width: 4px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.fmsNum { font-size: 10px; font-weight: 800; letter-spacing: 0.6px; color: var(--text-3); }
+.fmsNum::before { content: 'STAGE '; }
+.fmsLabel { font-size: 13px; font-weight: 700; color: var(--text); }
+.fmsState { font-size: 11px; font-weight: 700; }
+
+.fms_found { border-left-color: var(--success); }
+.fms_found .fmsState { color: var(--success); }
+.fms_missing { border-left-color: var(--line-strong); }
+.fms_missing .fmsState { color: var(--text-3); }
+.fms_unread { border-left-color: var(--error); }
+.fms_unread .fmsState { color: var(--error); }
+
+.colAge { width: 9%; }
+/* Holds a single 📎, so it takes only what the icon needs. */
+.colAttachment { width: 8%; }
+
+.invTable thead th {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-2);
+  text-align: left;
+  white-space: nowrap;
+}
+.invTable tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: top;
+}
+.invTable tbody tr:last-child td { border-bottom: none; }
+
+.invNo { font-weight: 700; word-break: break-word; }
+.tRight { text-align: right; font-variant-numeric: tabular-nums; }
+.tCenter { text-align: center; }
+.invOpen { color: var(--error); font-weight: 700; }
+
+/* Containers stacked tightly — all listed, minimal vertical cost. */
+.cnList { margin: 0; padding: 0; list-style: none; }
+.cnList li {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.invTable tfoot td {
+  padding: 7px 10px;
+  border-top: 1.5px solid var(--line);
+  background: var(--surface-2);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--text);
 }

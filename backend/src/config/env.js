@@ -40,6 +40,20 @@ export const env = {
   googleDriveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
   enableCron: String(process.env.ENABLE_CRON || '').toLowerCase() === 'true',
 
+  /* Accounts & Collection app — Tally outstanding shown on Off-Lease Stage 1.
+     Server-side only: these credentials must never reach the browser. */
+  accountsApiUrl: process.env.ACCOUNTS_API_URL || 'https://accounts-collection.vercel.app',
+  accountsApiEmpId: process.env.ACCOUNTS_API_EMP_ID || '',
+  accountsApiPassword: process.env.ACCOUNTS_API_PASSWORD || '',
+
+  /* SMTP. MAIL_PASS must be a Gmail APP PASSWORD (2-Step Verification on, then
+     Security > App passwords) — an account password is rejected by Google. */
+  mailHost: process.env.MAIL_HOST || '',
+  mailPort: process.env.MAIL_PORT || '587',
+  mailUser: process.env.MAIL_USER || '',
+  mailPass: process.env.MAIL_PASS || '',
+  mailFrom: process.env.MAIL_FROM || '',
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
