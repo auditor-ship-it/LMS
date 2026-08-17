@@ -13,7 +13,12 @@
   width: 100%;
   font-size: 12.5px;
   table-layout: auto;
-  overflow-wrap: anywhere;
+  /* break-word, NOT anywhere. `anywhere` splits mid-word whenever a column is
+     tight, which turned "Renewed" into "Rene wed" and container numbers into
+     "TITU725108 0". This breaks only tokens that genuinely cannot fit, and
+     prefers word boundaries. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .table thead th {
   position: sticky;
@@ -44,3 +49,8 @@
 /* Headers stay on one line; they are short and wrapping them costs more
    vertical space than it saves horizontally. */
 .table thead th { white-space: nowrap; }
+
+/* Short status words and identifiers must never be split. A column that is
+   too narrow for them should widen, not hyphenate the value. */
+.table td:has(> span[class*='badge']),
+.table td:has(> span[class*='status']) { white-space: nowrap; }

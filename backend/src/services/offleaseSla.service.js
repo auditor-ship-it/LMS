@@ -22,24 +22,24 @@ const DAY = 24 * HOUR;
  * Budget per step, keyed by INTERNAL stage number ('approval' for the gate).
  * Internal numbers are the stage's identity; display numbers renumber.
  *
- *   1  Off-Lease Intimation   1 hour
- *   -  Intimation Approval    1 hour
- *   6  Transportation         3 days
- *   7  Gate In                2 hours
- *   3  Inspection Checklist   1 hour
- *   5  Billing Reconciliation 1 hour
- *
- * FMS Closure (8) has no stated budget, so it has no timer rather than an
- * invented one.
+ * Transportation is the only step measured in days — a container physically
+ * moves. Everything else is desk work with a one-hour turnaround.
  */
 export const SLA_MS = {
-  1: 1 * HOUR,
-  approval: 1 * HOUR,
-  6: 3 * DAY,
-  7: 2 * HOUR,
-  3: 1 * HOUR,
-  5: 1 * HOUR
+  1: 1 * HOUR,          // Off-Lease Intimation
+  approval: 1 * HOUR,   // Intimation Approval
+  6: 2 * DAY,           // Transportation — the only multi-day step
+  7: 1 * HOUR,          // Gate In
+  3: 1 * HOUR,          // Inspection Checklist
+  5: 1 * HOUR,          // Billing Reconciliation
+  8: 1 * HOUR           // FMS Closure
 };
+
+/** "1h", "2d" — the budget itself, for a column header or a TAT cell. */
+export function budgetLabel(ms) {
+  if (!ms) return '';
+  return ms >= DAY ? `${Math.round(ms / DAY)}d` : `${Math.round(ms / HOUR)}h`;
+}
 
 /** "dd/MM/yyyy HH:mm:ss" (and the date-only form) -> Date, or null.
  *  Parsed by component: Date() reads dd/MM as MM/dd and would silently shift

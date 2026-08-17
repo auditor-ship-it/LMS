@@ -123,6 +123,15 @@ export async function getExpiryDataByFilter(filterType) {
   for (const row of allRows) {
     if (!row[0] || String(row[0]).trim() === '') continue;
     const vVal = row[21], wVal = row[22];
+
+    /* A container marked Off-Lease has LEFT this stage — it belongs to the
+       Off-Lease pipeline now and must not appear here under any filter.
+       The 'pending' test below only asks whether the Update cell is empty,
+       so a row whose Status said Off-Lease still showed up whenever that
+       cell had not been stamped. Status is the authority on which stage a
+       container is in; Update is just when it last changed. */
+    if (String(wVal || '').trim().toLowerCase().replace(/[\s-]/g, '') === 'offlease') continue;
+
     let include = false;
     if (filterType === 'pending') include = (!vVal || String(vVal).trim() === '');
     else if (filterType === 'renewed') include = (wVal && String(wVal).trim().toLowerCase() === 'renewed');

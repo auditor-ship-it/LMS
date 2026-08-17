@@ -441,6 +441,13 @@ function OutstandingPanel({ data, loading }) {
     if (no && link) invoiceFiles[normInvoiceNo(no)] = link;
   }
 
+  /* Each invoice's OWN document. `invoiceUrl` comes from the Accounts &
+     Collection ledger, which holds one distinct file per invoice number — the
+     same ↗ their modal shows. The Billing Sales join is the fallback for
+     invoices only that sheet carries. Never another invoice's file: an invoice
+     with no document renders as "No file" and stays in the table. */
+  const fileFor = (i) => i.invoiceUrl || invoiceFiles[normInvoiceNo(i.invoiceNo)] || '';
+
   /* The API is the only source. An empty response says so plainly rather than
      falling back to any other data — there is no sheet fallback by design. */
   if (!data.invoiceTotals?.length) {
@@ -505,11 +512,11 @@ function OutstandingPanel({ data, loading }) {
                     Collection. Plain text when no file is on the sheet — a
                     link that goes nowhere is worse than no link. */}
                 <td className={styles.invNo}>
-                  {invoiceFiles[normInvoiceNo(i.invoiceNo)]
+                  {fileFor(i)
                     ? (
                       <a
                         className={styles.invLink}
-                        href={invoiceFiles[normInvoiceNo(i.invoiceNo)]}
+                        href={fileFor(i)}
                         target="_blank"
                         rel="noreferrer"
                         title={`Open ${i.invoiceNo}`}
@@ -532,11 +539,23 @@ function OutstandingPanel({ data, loading }) {
                 <td className={styles.tCenter}>{i.period || '—'}</td>
                 <td className={styles.tRight}>{inr(i.amount)}</td>
                 <td className={styles.tCenter}>{i.overdueDays ? `${i.overdueDays}d` : '—'}</td>
-                {/* The invoice PDF, keyed on invoice number from Billing Sales
-                    — a 📎 that opens the file, or a dash when none is on the
-                    sheet for it. */}
+                {/* That invoice's own document. Disabled marker, not a hidden
+                    row, when the invoice genuinely has no file. */}
                 <td className={styles.tCenter}>
-                  {renderCellValue(invoiceFiles[normInvoiceNo(i.invoiceNo)] || '')}
+                  {fileFor(i)
+                    ? (
+                      <a
+                        className={styles.invFileBtn}
+                        href={fileFor(i)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`Open invoice ${i.invoiceNo}`}
+                        aria-label={`Open invoice ${i.invoiceNo}`}
+                      >
+                        <Icon name="external" />
+                      </a>
+                    )
+                    : <span className={styles.invNoFile} title="No invoice file">No file</span>}
                 </td>
               </tr>
             ))}

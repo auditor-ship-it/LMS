@@ -104,7 +104,13 @@ export function StagePageBase({ stageNumber, embedded }) {
         </div>
 
         <DataGrid
-          headers={readOnly ? [...visibleHeaders, 'Status'] : visibleHeaders}
+          headers={[
+            ...visibleHeaders,
+            ...(readOnly ? ['Status'] : []),
+            /* Budget in the header, so every cell below reads as "elapsed"
+               without repeating "of 1h" on every row. */
+            ...(data?.tatBudget ? [`TAT (${data.tatBudget})`] : [])
+          ]}
           rows={pageRows}
           loading={loading}
           error={error}
@@ -118,7 +124,19 @@ export function StagePageBase({ stageNumber, embedded }) {
                (that is what puts it in the queue), so "Pending" said nothing.
                What a reader wants to know is how far the container has got
                through STAGE-8 -> 9 -> 10. */
-            ...(readOnly ? [<td key="status"><FmsDots item={item} /></td>] : [])
+            ...(readOnly ? [<td key="status"><FmsDots item={item} /></td>] : []),
+            ...(data?.tatBudget
+              ? [<td key="tat">{item?.tat
+                ? (
+                  <span
+                    className={item.tat.delayed ? styles.tatLate : styles.tatOk}
+                    title={`Waiting since ${item.tat.startedAt}`}
+                  >
+                    {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
+                  </span>
+                )
+                : '—'}</td>]
+              : [])
           ]}
           /* A read-only stage still opens — canEdit is false there, so the
              button reads View and the modal comes up with its fields locked

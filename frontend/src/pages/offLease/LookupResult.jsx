@@ -250,7 +250,26 @@ function InvoicesSection({ invoices }) {
               <tr key={i}>
                 {row.map((cell, c) => (
                   <td key={c} className={`${align[c]} ${c === 0 ? styles.invNo : ''}`}>
-                    {renderCellValue(cell)}
+                    {/* Last column is that invoice's own document URL. It is
+                        kept as a raw string in the row so the Excel and PDF
+                        exports carry the link; only the on-screen table turns
+                        it into an icon. Empty means the invoice genuinely has
+                        no file — shown as inert text, never another
+                        invoice's link. */}
+                    {c === INVOICE_HEAD.length - 1
+                      ? (cell
+                        ? (
+                          <a
+                            className={styles.invFileBtn}
+                            href={cell}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open invoice ${row[0]}`}
+                            aria-label={`Open invoice ${row[0]}`}
+                          >↗</a>
+                        )
+                        : <span className={styles.invNoFile}>No file</span>)
+                      : renderCellValue(cell)}
                   </td>
                 ))}
               </tr>

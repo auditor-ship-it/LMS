@@ -199,7 +199,11 @@ export function RenewDocumentPage() {
             </div>
 
             <DataGrid
-              headers={[...tableHeaders, 'Action']}
+              /* No 'Action' header here: DataGrid appends its own 'Actions'
+                 column whenever renderActions is passed. Adding one manually
+                 gave two headers for one cell, so the button sat under
+                 'Action' and 'Actions' rendered permanently empty. */
+              headers={tableHeaders}
               rows={pageRows}
               loading={loading}
               error={error}

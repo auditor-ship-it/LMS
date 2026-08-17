@@ -8,6 +8,19 @@
 }
 .count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
 
+/* TAT — time waiting at this stage against its budget. */
+.tatOk { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tatLate {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--error-bg);
+  color: var(--error);
+  font-weight: 800;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* FMS chain (STAGE-8 -> 9 -> 10) in the Status column. */
 .dots {
   display: inline-flex;

@@ -224,6 +224,30 @@
 .tRight { text-align: right; }
 .tCenter { text-align: center; }
 .invNo { font-weight: 700; white-space: nowrap; }
+
+/* Invoice-document cell — same treatment as the Stage 1 panel's table. */
+.invFileBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  font-size: 12px;
+  line-height: 1;
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.invFileBtn:hover { background: var(--accent); color: #fff; }
+.invNoFile {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3, var(--text-2));
+  opacity: 0.65;
+  white-space: nowrap;
+}
 .histTable tfoot .invTotalRow td {
   padding: 9px 12px;
   background: var(--surface-2);

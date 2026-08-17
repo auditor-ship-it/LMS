@@ -162,6 +162,37 @@ export async function getOutstandingForContainer(containerNo, clientName) {
   out.containerShare = out.invoices.reduce((s, i) => s + i.amount, 0);
   out.containerOutstanding = out.invoices.reduce((s, i) => s + i.outstanding, 0);
 
+  /* Per-invoice document link, containers and bill date.
+   *
+   * /api/payment-advice/party-ledger is the ONLY endpoint that carries these:
+   * it returns, per bill ref, `invoiceCopyUrl` (a distinct Drive file per
+   * invoice), `containers` (the real list, not just the searched one) and
+   * `billDate`. It is the source behind the ↗ icons in the Accounts &
+   * Collection ledger modal.
+   *
+   * Not from /api/search (no URL field at all), not from our own Billing Sales
+   * sheet — that has a row for only one of Takshavi's six invoices, so five
+   * would have shown no link while the ledger has a real file for each. */
+  const ledgerByRef = new Map();
+  if (out.matchedParty) {
+    try {
+      const led = await apiGet(`/api/payment-advice/party-ledger?party=${encodeURIComponent(out.matchedParty)}`);
+      for (const b of [...(led?.invoices || []), ...(led?.openBills || []), ...(led?.receipts || [])]) {
+        const ref = String(b?.ref || '').trim();
+        if (!ref || ledgerByRef.has(ref)) continue;
+        ledgerByRef.set(ref, {
+          containers: (Array.isArray(b.containers) ? b.containers : [])
+            .map((c) => String(c || '').trim()).filter(Boolean),
+          invoiceUrl: String(b.invoiceCopyUrl || '').trim(),
+          invoiceDate: String(b.billDate || '').trim()
+        });
+      }
+    } catch (e) {
+      // Links are an enhancement: the table still renders without them.
+      logger.error('[ACCOUNTS-API] party-ledger failed:', e.message);
+    }
+  }
+
   /* INVOICE-WISE totals.
    *
    * One invoice covers several containers, and /api/search returns BOTH a
@@ -212,16 +243,25 @@ export async function getOutstandingForContainer(containerNo, clientName) {
          still on the invoice (the party matched it), so it is used rather than
          leaving the cell blank. That mirrors the modal's own
          "Container no. matched on N of N invoice(s)". */
-      const containers = [...new Set(
+      const led = ledgerByRef.get(no) || {};
+      const fromSearch = [...new Set(
         rows.map((i) => String(i.containerNo || '').trim()).filter(Boolean)
       )].sort();
-      /* NO FALLBACK to the searched container.
-         Searching by invoice number returns a single consolidated row with an
-         empty containerNo, so this used to substitute the container you looked
-         up — which reads as "this invoice covers this container" when it only
-         means "you searched for it". For QUA/JUL263/26-27 that showed one
-         container where the invoice actually covers three. An empty list is
-         rendered as a dash, which is the truth. */
+      /* The ledger's list wins: it is per-invoice and complete, where
+         /api/search returns only splits it happens to hold. */
+      const containers = led.containers?.length ? [...new Set(led.containers)].sort() : fromSearch;
+      /* When the API returns no split rows for an invoice, fall back to the
+         container we searched.
+         The party was matched BY that container's invoices, so the container
+         is genuinely on this invoice — /api/search simply returns one
+         consolidated row with an empty containerNo when queried by invoice
+         number. Takshavi's six monthly rentals are all SEGU9511192, and
+         blanking them lost real information.
+         `partial` marks the case where the invoice may cover further
+         containers the API did not return, so the UI can say so rather than
+         imply the list is complete. */
+      const partial = !containers.length && !!containerNo;
+      if (partial) containers.push(String(containerNo).trim());
       /* Amount and age come from the PARTY BILL, which is what the
          /tally-outstanding modal renders — /api/search reports a per-container
          slice for some invoices (AUG31 showed 69,384 against the modal's
@@ -234,6 +274,10 @@ export async function getOutstandingForContainer(containerNo, clientName) {
         outstanding: bill ? num(bill.pending) : num(src.outstanding),
         overdueDays: bill ? num(bill.overdueDays) : num(src.overdueDays),
         period: fmtPeriod(src.period),
+        invoiceDate: led.invoiceDate || '',
+        /* Empty string, never another invoice's URL — the UI shows a disabled
+           icon for these rather than hiding the invoice. */
+        invoiceUrl: led.invoiceUrl || '',
         containers,
         containerCount: containers.length,
         consolidated: !!header
@@ -251,7 +295,11 @@ export async function getOutstandingForContainer(containerNo, clientName) {
      pending (a journal voucher credit carries no flag). */
   out.receipts = out.bills
     .filter((b) => b.isReceipt || b.pending < 0)
-    .map((b) => ({ ref: b.ref, amount: Math.abs(num(b.pending)) }));
+    .map((b) => ({
+      ref: b.ref,
+      amount: Math.abs(num(b.pending)),
+      invoiceUrl: ledgerByRef.get(String(b.ref).trim())?.invoiceUrl || ''
+    }));
 
   out.totalDr = out.bills.filter((b) => !b.isReceipt && b.pending > 0)
     .reduce((s, b) => s + num(b.pending), 0);

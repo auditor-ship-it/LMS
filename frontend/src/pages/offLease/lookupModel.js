@@ -283,15 +283,15 @@ export const BILLING_HEAD = ['#', 'Container No', 'Client Name', 'Invoice No', '
  * the order returned — no month filter, no grouping, no deduplication, no
  * truncation. The Google Sheet is never consulted here.
  */
-export const INVOICE_HEAD = ['Invoice No.', 'Container No(s).', 'Month', 'Total Amount', 'Age', 'Attachment'];
+export const INVOICE_HEAD = ['Invoice No.', 'Container No(s).', 'Month', 'Total Amount', 'Age', 'Invoice'];
 
 /**
  * Invoice number -> its attachment link, from the Billing Sales sheet.
  *
- * The Accounts & Collection API carries the money but not the document, and
- * the Billing Sales sheet carries the document but not the consolidated
- * totals — so the file is joined on here, by invoice number, rather than
- * either source being made to answer for the other.
+ * FALLBACK ONLY. The primary source is the Accounts & Collection ledger's
+ * per-invoice `invoiceCopyUrl` (see accountsApi.service.js), which has a file
+ * for every open invoice. This sheet join covers the reverse case: Billing
+ * Sales holds a row the ledger does not.
  */
 const normInvoiceNo = (v) => cellText(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -326,7 +326,12 @@ export function buildInvoices(result) {
       cellText(i.period) || '—',
       money(i.amount) || '—',
       i.overdueDays ? `${i.overdueDays}d` : '—',
-      files.get(normInvoiceNo(i.invoiceNo)) || '—'
+      /* The invoice's OWN document, from the Accounts & Collection ledger
+         (`invoiceCopyUrl`) — one distinct file per invoice number. The Billing
+         Sales join stays as a fallback for invoices that sheet happens to
+         carry and the ledger does not. Empty string, never a neighbouring
+         invoice's file: the cell renders as "No file" instead. */
+      cellText(i.invoiceUrl) || files.get(normInvoiceNo(i.invoiceNo)) || ''
     ]),
     grandTotal: money(o.grandTotal),
     grandOutstanding: money(o.grandOutstanding)

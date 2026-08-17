@@ -83,6 +83,7 @@ import { sendMail } from './email.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { getCollection } from './mongo.service.js';
+import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
@@ -1055,13 +1056,45 @@ export async function addToOffLeaseTracking(containerNo) {
     console.log(`[OL-ADD] Writing rate: index=${colMap.rate}, val=${rateVal}, type=${typeof rateVal}`);
     newRow[9] = typeof rateVal === 'number' ? rateVal : safeStr(rateVal);
 
-    await appendRow(OL_SHEET, newRow);
+    const { rowNum } = await appendRow(OL_SHEET, newRow);
 
     // Also mark the Deployed sheet — removes it from Pending
+    const stamp = dmyTime(new Date());
     await batchUpdateValues([
-      { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[dmyTime(new Date())]] },
+      { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[stamp]] },
       { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] }
     ]);
+
+    /* MIRROR BOTH WRITES INTO MONGO IMMEDIATELY.
+     *
+     * Every off-lease screen reads the Mongo mirror, but this function wrote
+     * only to Sheets — so a container off-leased from Lease Expiry did not
+     * appear under Off-Lease until the reconcile job next ran, up to five
+     * minutes later. saveOffLeaseStage already does this for the same reason;
+     * this path was simply missed.
+     *
+     * Best-effort: reconcile remains the source of truth, so a failure here
+     * must never fail a write that already succeeded on the sheet. */
+    try {
+      /* Keyed by POSITION. Container numbers are not unique on this sheet
+         (TRIU6681671 has two records), so `row_<n>` is the only safe address.
+         `rowNum` is 1-based including the header, and data row 2 is row_0. */
+      if (rowNum) {
+        await getCollection(OL_SHEET).updateOne(
+          { key: `row_${rowNum - 2}` },
+          { $set: { key: `row_${rowNum - 2}`, row: newRow } },
+          { upsert: true }
+        );
+      }
+      /* Deployed's Update (V) and Status (W) too — they drive the Lease Expiry
+         list and seed Stage 1's SLA clock. */
+      await getCollection(SHEETS.DEPLOYED).updateOne(
+        { key: `row_${deployedTargetRow - 2}` },
+        { $set: { 'row.21': stamp, 'row.22': 'Off-Lease' } }
+      );
+    } catch (e) {
+      console.error('[OL-ADD] mirror update failed (reconcile will correct):', e?.message || e);
+    }
 
     return 'OK';
   });
@@ -1195,6 +1228,71 @@ export async function getOffLeaseData(stage, opts = {}) {
     finalData.push(item);
   }
   return { headers: displayHeaders, data: finalData, stage, stageLabel: info.label, statusCol: info.statusCol };
+}
+
+/**
+ * Attaches a `tat` to every row of a stage list, in place.
+ *
+ * The clock starts when the stage became actionable, not when the container
+ * entered off-lease: for Stage 1 that is the Deployed sheet's Off-Lease stamp,
+ * and for every later stage it is the previous stage's completion. Measured
+ * against now, because these rows are by definition still pending.
+ *
+ * The Deployed sheet is read ONCE and indexed, rather than per row — a list of
+ * 20 containers would otherwise mean 20 reads of the same data.
+ */
+export async function attachStageTat(result, stage) {
+  const stageNum = Number(stage);
+  const budget = SLA_MS[stageNum];
+  if (!budget || !result?.data?.length) return result;
+
+  const prevNum = _prevActiveStage(stageNum);
+  const prevInfo = prevNum ? OL_STAGE_INFO[prevNum] : null;
+
+  /* The off-lease entry stamp, ALWAYS built — not only for Stage 1.
+     It is the fallback whenever the previous stage carries no timestamp, which
+     is the normal case for Stage 3: those containers were released by the FMS
+     delivery rule, so Stage 2's status column was never written and there is
+     no completion time to start the clock from. Without this the TAT column
+     rendered a dash on every row. */
+  const entryByContainer = new Map();
+  {
+    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const updCol = _findOlColumnMulti(dh, ['update']);
+    const stsCol = _findOlColumnMulti(dh, ['status']);
+    if (updCol >= 0) {
+      for (const r of dr) {
+        if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+        const k = normKey(r[0]);
+        if (k && !entryByContainer.has(k)) entryByContainer.set(k, safeStr(r[updCol]).trim());
+      }
+    }
+  }
+
+  const { rows } = await getSheetDataFromMongo(OL_SHEET);
+
+  for (const item of result.data) {
+    const row = rows[item._rowNum - 2] || [];
+    const entry = entryByContainer.get(normKey(item.row?.[0])) || '';
+    /* Previous stage's completion, falling back to the off-lease entry stamp
+       when that stage was never stamped. */
+    const startRaw = (prevInfo ? safeStr(row[prevInfo.statusCol - 2]).trim() : '') || entry;
+
+    const start = parseStamp(startRaw);
+    if (!start) { item.tat = null; continue; }
+
+    const elapsed = Date.now() - start.getTime();
+    item.tat = {
+      startedAt: startRaw,
+      budget: budgetLabel(budget),
+      elapsed: humanize(elapsed),
+      elapsedMs: elapsed,
+      delayed: elapsed > budget,
+      overdueBy: elapsed > budget ? humanize(elapsed - budget) : ''
+    };
+  }
+  result.tatBudget = budgetLabel(budget);
+  return result;
 }
 
 export async function getOffLeaseStageDetail(containerNo, stage) {

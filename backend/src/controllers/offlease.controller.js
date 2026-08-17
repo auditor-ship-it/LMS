@@ -31,6 +31,15 @@ export async function getData(req, res) {
 
   const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys });
   if (stage === STAGE2_INTERNAL) await stage8Service.enrichWithStage8Movements(data);
+
+  /* TAT per row — how long this container has been waiting AT THIS STAGE
+     against its budget. Additive: a failure must not cost the caller its list. */
+  try {
+    await offLeaseService.attachStageTat(data, stage);
+  } catch (e) {
+    console.error('[OL-TAT]', e?.message || e);
+  }
+
   res.json(data);
 }
 

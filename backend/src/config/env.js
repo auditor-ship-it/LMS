@@ -46,6 +46,14 @@ export const env = {
   accountsApiEmpId: process.env.ACCOUNTS_API_EMP_ID || '',
   accountsApiPassword: process.env.ACCOUNTS_API_PASSWORD || '',
 
+  /* SMTP. MAIL_PASS must be a Gmail APP PASSWORD (2-Step Verification on, then
+     Security > App passwords) — an account password is rejected by Google. */
+  mailHost: process.env.MAIL_HOST || '',
+  mailPort: process.env.MAIL_PORT || '587',
+  mailUser: process.env.MAIL_USER || '',
+  mailPass: process.env.MAIL_PASS || '',
+  mailFrom: process.env.MAIL_FROM || '',
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',

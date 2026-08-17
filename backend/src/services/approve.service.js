@@ -88,48 +88,28 @@ export async function getApproveData(doWrite) {
      Only a MANUAL approval seeds history (AE user is a real email, not
      "Auto-approved") — an auto-approval can never itself justify the next
      one, so every recurring chain still traces back to one human decision. */
+  /* HISTORY of container + client pairs, built from the WHOLE sheet — every
+     row, every month, not just recent ones or the row above.
+
+     A pair counts as history only once it has been APPROVED. Mere existence is
+     not enough: two entries can be created in the same batch before anyone has
+     looked at either, and treating the first as history would auto-approve the
+     second while the first is still awaiting the human decision that the whole
+     rule exists to require.
+
+     An AUTO-approval never seeds history, so a chain cannot bootstrap itself —
+     every recurring pair traces back to exactly one manual decision. */
   const approvedPairs = new Set();
   for (let i = 0; i < n; i++) {
     if (String(allRows[i][29] || '').trim().toLowerCase() !== 'approved') continue;
     if (String(allRows[i][30] || '').trim().toLowerCase() === 'auto-approved') continue;
-    const cn = normKey(allRows[i][0]);
+    /* Multi-container cells: each container is history in its own right. */
     const client = String(allRows[i][2] || '').trim().toLowerCase();
-    if (cn && client) approvedPairs.add(`${cn}|${client}`);
-  }
-
-  /* DEPLOYED-SHEET MATCH — the second, independent way a row qualifies.
-   *
-   * A container+client already ON the Deployed sheet is an existing, live
-   * deployment: this Operation row is the next billing cycle for a lease that
-   * physically exists, so it auto-approves. A pair NOT on Deployed has never
-   * gone out under that client — a genuinely new lease — and stays manual.
-   *
-   * This complements the approval-history rule rather than replacing it: a
-   * first-ever lease still needs one human decision before deployment, and
-   * after deployment the repeat cycles no longer do.
-   *
-   * Deployed columns are 0 = Container No, 1 = Customer Name; Operation is
-   * 0 = Container No., 2 = Client Name — the two sheets name them differently.
-   */
-  const deployedPairs = new Set();
-  try {
-    const { rows: depRows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
-    for (const r of depRows) {
-      const client = normClientName(r[1]);
-      if (!client) continue;
-      /* Multi-container cells occur here too, so each part is indexed
-         separately — otherwise a two-container deployment would only ever
-         match a two-container Operation row written the same way. */
-      for (const p of splitContainers(String(r[0] || ''))) {
-        const cn = normKey(p);
-        if (cn) deployedPairs.add(`${cn}|${client}`);
-      }
+    if (!client) continue;
+    for (const p of splitContainers(String(allRows[i][0] || ''))) {
+      const cn = normKey(p);
+      if (cn) approvedPairs.add(`${cn}|${client}`);
     }
-  } catch (e) {
-    /* Fail CLOSED: with no Deployed data the pairs set stays empty, so nothing
-       auto-approves on that basis and everything falls back to manual. The
-       opposite default would approve rows because a read failed. */
-    console.error('[AUTO-APPROVE] Deployed sheet unavailable — deployed-match rule inactive:', e?.message || e);
   }
 
   const now = dmyTime(new Date());
@@ -140,17 +120,25 @@ export async function getApproveData(doWrite) {
     if (!cn) continue;
     if (String(allRows[i][29] || '').trim().toLowerCase() === 'approved') continue;
     const client = String(allRows[i][2] || '').trim().toLowerCase();
-    const depClient = normClientName(allRows[i][2]);
 
-    /* Multi-container cell safe: EVERY part must qualify under this same
-       client. One unknown container in a multi-container row makes the whole
-       row a human decision — approving the row approves all of it. */
+    /* Multi-container cell safe: EVERY part must have approval history under
+       this same client. One unknown container in a multi-container row makes
+       the whole row a human decision — approving the row approves all of it. */
     const parts = splitContainers(cn);
 
+    /* PRIOR MANUAL APPROVAL is the only thing that auto-approves a row.
+     *
+     * The first entry for a container + client is a new lease and needs a
+     * person; every later month for that same pair is the recurring billing of
+     * a relationship someone has already signed off.
+     *
+     * A "container is on the Deployed sheet" rule was tried here and removed:
+     * it matched 1,208 of 1,216 rows, so first entries auto-approved too and
+     * the manual gate effectively disappeared. Being deployed says the box is
+     * out on lease — it says nothing about whether anyone approved THIS row. */
     const hasHistory = client !== '' && parts.every((p) => approvedPairs.has(`${normKey(p)}|${client}`));
-    const isDeployed = depClient !== '' && parts.every((p) => deployedPairs.has(`${normKey(p)}|${depClient}`));
 
-    if (!hasHistory && !isDeployed) continue; // new container+client -> manual
+    if (!hasHistory) continue; // no prior manual approval for this pair -> manual
 
     allRows[i][28] = now;             // AC = timestamp
     allRows[i][29] = 'Approved';      // AD = status
