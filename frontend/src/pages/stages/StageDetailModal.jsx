@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Button } from '../../components/ui/Button.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
+import { Icon } from '../../components/ui/Icon.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
@@ -73,6 +74,16 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  /* Lock the page behind while the modal is open. Without it the page keeps
+     its own scrollbar alongside the modal's, and scrolling past the end of the
+     modal silently scrolls the page underneath. The previous value is restored
+     rather than assumed to be "" — another overlay may already have set it. */
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
   const setField = (key, v) => setValues((prev) => ({ ...prev, [key]: v }));
 
@@ -253,40 +264,17 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
               {/* `fields` is the WHOLE matched row, labelled with that tab's
                   own headers — every column it actually filled in, not a
                   hand-picked subset. */}
-              {/* FMS pipeline at a glance — which of STAGE-8/9/10 actually has
-                  a record for this container, without scrolling three cards. */}
+              {/* The steps ARE the pipeline summary — a separate status strip
+                  above them repeated the same three states twice. */}
               {identityOnly && (
-                <FmsPipeline steps={[
-                  { n: 8, label: 'Movement', state: fmsState(movement) },
-                  { n: 9, label: 'Transport', state: fmsState(transport) },
-                  { n: 10, label: 'Site Delivery', state: fmsState(delivery) }
-                ]} />
+                <FmsSteps
+                  steps={[
+                    { n: 8, label: 'Movement', record: movement, empty: 'No Offlease movement in STAGE-8 for this container and client.' },
+                    { n: 9, label: 'Transport', record: transport, empty: 'No Offlease transport in STAGE-9 for this container and client.' },
+                    { n: 10, label: 'Site Delivery', record: delivery, empty: "No STAGE-10 record for this container's DO number." }
+                  ]}
+                />
               )}
-
-              {/* undefined = the sheet could not be read; null = read fine,
-                  no matching row. Those are different facts and must not read
-                  the same to the user. */}
-              <SourceCard
-                show={identityOnly}
-                title="Stage 8 — Offlease Movement"
-                unread={movement === undefined}
-                empty="No Offlease movement logged in STAGE-8 for this container and client."
-                rows={movement?.fields}
-              />
-              <SourceCard
-                show={identityOnly}
-                title="Stage 9 — Transport"
-                unread={transport === undefined}
-                empty="No Offlease transport logged in STAGE-9 for this container and client."
-                rows={transport?.fields}
-              />
-              <SourceCard
-                show={identityOnly}
-                title="Stage 10 — Site Delivery"
-                unread={delivery === undefined}
-                empty="No STAGE-10 record found for this container's DO number."
-                rows={delivery?.fields}
-              />
 
               {stageNumber === 1 && (
                 <OutstandingPanel data={outstanding} loading={outstandingLoading} />
@@ -298,7 +286,20 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                   Stage 2 is a read-only master list, so opening a row is for
                   looking up who and what the container is — its stage fields
                   are not part of that. */}
-              {!identityOnly && (
+              {/* Fields carrying a `group` are rendered in labelled sections;
+                  ungrouped stages keep the single flat grid they had. */}
+              {!identityOnly && plainFields.some((f) => f.group) && (
+                <FormSections
+                  fields={plainFields}
+                  values={values}
+                  pendingFiles={pendingFiles}
+                  disabled={readOnly || busy}
+                  onChange={setField}
+                  onFile={(key, payload) => { setPendingFiles((p) => ({ ...p, [key]: payload })); setField(key, payload.fileName); }}
+                />
+              )}
+
+              {!identityOnly && !plainFields.some((f) => f.group) && (
               <div className={styles.fieldGrid}>
                 {plainFields.map((f) => (
                   <Field
@@ -500,7 +501,25 @@ function OutstandingPanel({ data, loading }) {
           <tbody>
             {data.invoiceTotals.map((i, k) => (
               <tr key={`${i.invoiceNo}-${k}`}>
-                <td className={styles.invNo}>{i.invoiceNo || '—'}</td>
+                {/* Invoice number opens its PDF, matching the ↗ in Accounts &
+                    Collection. Plain text when no file is on the sheet — a
+                    link that goes nowhere is worse than no link. */}
+                <td className={styles.invNo}>
+                  {invoiceFiles[normInvoiceNo(i.invoiceNo)]
+                    ? (
+                      <a
+                        className={styles.invLink}
+                        href={invoiceFiles[normInvoiceNo(i.invoiceNo)]}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`Open ${i.invoiceNo}`}
+                      >
+                        <span>{i.invoiceNo}</span>
+                        <Icon name="external" className={styles.invLinkIcon} />
+                      </a>
+                    )
+                    : (i.invoiceNo || '—')}
+                </td>
                 <td>
                   {i.containers?.length
                     ? (
@@ -531,6 +550,35 @@ function OutstandingPanel({ data, loading }) {
           </tfoot>
         </table>
       )}
+
+      {/* CLIENT-WIDE position. The table above is invoice-wise; this is the
+          party's full DR / CR balance, matching the Accounts & Collection
+          modal's summary strip. Receipts explain why the open figure differs
+          from the net. */}
+      {(data.totalDr > 0 || data.totalCr > 0) && (
+        <div className={styles.drCrRow}>
+          <div className={styles.drCrItem}>
+            <span className={styles.drCrLabel}>Total DR</span>
+            <span className={`${styles.drCrValue} ${styles.drCrDebit}`}>{inr(data.totalDr)}</span>
+          </div>
+          <div className={styles.drCrItem}>
+            <span className={styles.drCrLabel}>Total CR</span>
+            <span className={`${styles.drCrValue} ${styles.drCrCredit}`}>{inr(data.totalCr)}</span>
+          </div>
+          <div className={styles.drCrItem}>
+            <span className={styles.drCrLabel}>Net Balance</span>
+            <span className={styles.drCrValue}>{inr(data.netBalance)}</span>
+          </div>
+          {data.receipts?.length > 0 && (
+            <div className={styles.drCrItem}>
+              <span className={styles.drCrLabel}>Receipts</span>
+              <span className={styles.drCrValue}>
+                {data.receipts.map((r) => `${r.ref} ${inr(r.amount)}`).join(' · ')}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -541,22 +589,228 @@ function OutstandingPanel({ data, loading }) {
  * explicit note when it was consulted but found no match — "no row matched" is
  * information, whereas a silently absent section reads as an oversight.
  */
-/** undefined = sheet unreadable, null = read but no row, object = found. */
-const fmsState = (v) => (v === undefined ? 'unread' : v ? 'found' : 'missing');
+/**
+ * Field groups for the FMS panels.
+ *
+ * These sheets are 30-80 columns of mixed concerns — references, route,
+ * vehicle, money, documents, approvals — and a flat list of them reads as
+ * noise however it is styled. Grouping is what makes the panel scannable:
+ * a reader looking for the LR number goes to Vehicle & Driver rather than
+ * sweeping every field.
+ *
+ * Matched on the label text because the three tabs name their columns
+ * differently and by position would break the moment a column moved. First
+ * matching group wins, so ORDER MATTERS here — "Delivery Order Number" is a
+ * reference, not a route field, so Reference is tested first.
+ */
+const FMS_GROUPS = [
+  { title: 'Reference', tone: 'navy', re: /quotation|order (received )?number|booking order|do number|delivery order|cleaned_do|timestamp|^user$|email/i },
+  { title: 'Client & Container', tone: 'info', re: /client|customer|container|size|type|movement|wt\b|quantity/i },
+  { title: 'Route', tone: 'teal', re: /city|address|pin ?code|yard|location|destination|pickup|pick-up|delivery(?! order)/i },
+  { title: 'Vehicle & Driver', tone: 'violet', re: /vehicle|truck|driver|lr |lr no|transporter|person|mobile|pan|licence|license|rc book/i },
+  { title: 'Dates & Transit', tone: 'amber', re: /date|transit|days/i },
+  { title: 'Charges', tone: 'success', re: /cost|amount|charge|freight|advance|balance|payment|memo|km\b|bill/i },
+  { title: 'Documents & Photos', tone: 'slate', re: /photo|video|copy|scan|attachment|file|interchange|sign/i },
+  { title: 'Approval', tone: 'warn', re: /^_|approver|status|remark|followup/i }
+];
 
-const FMS_TEXT = { found: 'Fetched', missing: 'No record', unread: 'Unavailable' };
+/** Splits a record's fields into the groups above, preserving sheet order
+ *  inside each. Empty groups are dropped, and anything unmatched collects
+ *  under "Other" rather than being silently hidden. */
+function groupFields(fields) {
+  const buckets = new Map(FMS_GROUPS.map((g) => [g.title, []]));
+  const other = [];
 
-/** STAGE-8 -> 9 -> 10, showing which legs this container actually has. */
-function FmsPipeline({ steps }) {
+  for (const pair of fields) {
+    const g = FMS_GROUPS.find((x) => x.re.test(pair[0]));
+    (g ? buckets.get(g.title) : other).push(pair);
+  }
+
+  const out = FMS_GROUPS
+    .map((g) => ({ title: g.title, tone: g.tone, items: buckets.get(g.title) }))
+    .filter((g) => g.items.length);
+  if (other.length) out.push({ title: 'Other', tone: 'slate', items: other });
+  return out;
+}
+
+/**
+ * Spreads the groups across `n` columns, always adding the next group to the
+ * SHORTEST column so far.
+ *
+ * Neither CSS approach worked here. A grid sizes every row to its tallest tile,
+ * leaving dead space under the short ones. Multi-column balances to a single
+ * computed height and stops once the content fits, which left the right-hand
+ * columns completely empty. Distributing explicitly fills every column and
+ * leaves no gaps.
+ *
+ * Height is estimated from the field count plus a constant for the header —
+ * close enough to balance, and it needs no DOM measurement or re-layout.
+ */
+function balanceIntoColumns(groups, n) {
+  const cols = Array.from({ length: n }, () => []);
+  const heights = new Array(n).fill(0);
+
+  for (const g of groups) {
+    const shortest = heights.indexOf(Math.min(...heights));
+    cols[shortest].push(g);
+    heights[shortest] += g.items.length + 2;   // +2 ≈ header and card padding
+  }
+  return cols.filter((c) => c.length);          // drop unused columns entirely
+}
+
+/**
+ * One group as a collapsible bento tile.
+ *
+ * Open by default — collapsing is for putting a group you have finished with
+ * out of the way, not for hiding data behind a click the first time you look.
+ * Tiles flow in a masonry column layout, so each takes only its own height and
+ * no size hint is needed.
+ */
+function FmsGroupCard({ group }) {
+  const [open, setOpen] = useState(true);
+
   return (
-    <div className={styles.fmsRow}>
-      {steps.map((s) => (
-        <div key={s.n} className={`${styles.fmsStep} ${styles[`fms_${s.state}`]}`}>
-          <span className={styles.fmsNum}>{s.n}</span>
-          <span className={styles.fmsLabel}>{s.label}</span>
-          <span className={styles.fmsState}>{FMS_TEXT[s.state]}</span>
+    <section className={`${styles.fmsGroup} ${styles[`tone_${group.tone}`]}`}>
+      <button
+        type="button"
+        className={styles.fmsGroupTitle}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {/* A real control, not a text glyph: a boxed chevron that ROTATES on
+            toggle is what makes a card read as an accordion. */}
+        <span className={`${styles.fmsChevron} ${open ? styles.fmsChevronOpen : ''}`} aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9.5l6 6 6-6" />
+          </svg>
+        </span>
+        {group.title}
+        <span className={styles.fmsGroupCount}>{group.items.length}</span>
+      </button>
+
+      {open && (
+        <div className={styles.fmsFields}>
+          {group.items.map(([label, value]) => (
+            <div key={label} className={styles.fmsItem}>
+              <span className={styles.fmsLabel}>{label}</span>
+              <span className={styles.fmsValue}>{renderCellValue(value)}</span>
+            </div>
+          ))}
         </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * A stage form split into labelled sections, one per field `group`.
+ *
+ * Twenty fields in a single grid — nine of them near-identical "Choose file"
+ * links — meant reading the whole form to find one input. Sections turn that
+ * into four short, self-describing blocks, so the reader only looks at the one
+ * they need.
+ *
+ * Group order follows the field order in stageFields.js; the same reason the
+ * FMS panel keeps sheet order rather than sorting.
+ */
+function FormSections({ fields, values, pendingFiles, disabled, onChange, onFile }) {
+  const sections = [];
+  for (const f of fields) {
+    const title = f.group || '';
+    const last = sections[sections.length - 1];
+    if (last && last.title === title) last.items.push(f);
+    else sections.push({ title, items: [f] });
+  }
+
+  return (
+    <div className={styles.formSections}>
+      {sections.map((s) => (
+        <section key={s.title} className={styles.formSection}>
+          {s.title && <h4 className={styles.formSectionTitle}>{s.title}</h4>}
+          <div className={styles.fieldGrid}>
+            {s.items.map((f) => (
+              <Field
+                key={f.key}
+                field={f}
+                value={values[f.key]}
+                pendingFileName={pendingFiles[f.key]?.fileName}
+                onChange={(v) => onChange(f.key, v)}
+                onFile={(payload) => onFile(f.key, payload)}
+                disabled={disabled}
+              />
+            ))}
+          </div>
+        </section>
       ))}
+    </div>
+  );
+}
+
+/** undefined = sheet unreadable; null = read but no match; object = found.
+ *  Three different facts — a failed read must never read as "no record". */
+const fmsState = (record) => (record === undefined ? 'unread' : record?.fields?.length ? 'found' : 'missing');
+const FMS_STATE_TEXT = { found: 'Fetched', missing: 'No record', unread: 'Unavailable' };
+
+/**
+ * STAGE-8 -> 9 -> 10 as clickable steps, with only the selected step's detail
+ * shown.
+ *
+ * Three columns side by side still scrolled: STAGE-9 alone returns 66 fields.
+ * One step at a time, in a grid that flows into columns, fits the detail in
+ * the modal without any vertical scrolling.
+ */
+function FmsSteps({ steps }) {
+  /* Opens on the first step that actually has data — landing on an empty
+     STAGE-8 would hide the two populated ones behind a click. */
+  const firstWithData = steps.find((s) => fmsState(s.record) === 'found')?.n ?? steps[0].n;
+  const [active, setActive] = useState(firstWithData);
+  const step = steps.find((s) => s.n === active) || steps[0];
+  const state = fmsState(step.record);
+
+  return (
+    <div className={styles.fmsWrap}>
+      <div className={styles.stepRow} role="tablist">
+        {steps.map((s, i) => {
+          const st = fmsState(s.record);
+          return (
+            <Fragment key={s.n}>
+              {i > 0 && <span className={styles.stepLine} aria-hidden="true" />}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={s.n === active}
+                className={`${styles.step} ${styles[`step_${st}`]} ${s.n === active ? styles.stepActive : ''}`}
+                onClick={() => setActive(s.n)}
+              >
+                <span className={styles.stepNum}>{s.n}</span>
+                <span className={styles.stepLabel}>{s.label}</span>
+                <span className={styles.stepState}>{FMS_STATE_TEXT[st]}</span>
+              </button>
+            </Fragment>
+          );
+        })}
+      </div>
+
+      {state === 'found'
+        ? (
+          /* Grouped into sections, each flowing into columns. Sheet order is
+             kept WITHIN a group, so related fields stay adjacent as they are
+             on the sheet. */
+          <div className={styles.fmsGroups}>
+            {balanceIntoColumns(groupFields(step.record.fields), 3).map((col, i) => (
+              <div className={styles.fmsCol} key={i}>
+                {col.map((g) => <FmsGroupCard key={g.title} group={g} />)}
+              </div>
+            ))}
+          </div>
+        )
+        : (
+          <p className={styles.fmsEmpty}>
+            {state === 'unread'
+              ? 'Sheet could not be read — Google Sheets read quota exhausted.'
+              : step.empty}
+          </p>
+        )}
     </div>
   );
 }
@@ -902,19 +1156,71 @@ function FileFieldInput({ value, pendingFileName, onFile, disabled }) {
     }
   };
 
+  const [dragging, setDragging] = useState(false);
+
+  const take = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const base64Data = await readFileAsBase64(file);
+      onFile({ base64Data, mimeType: file.type || 'application/octet-stream', fileName: file.name });
+    } finally { setBusy(false); }
+  };
+
+  const uploaded = value && /^https?:\/\//.test(value);
+  const state = busy ? 'busy' : pendingFileName ? 'pending' : uploaded ? 'done' : 'empty';
+
+  /* A dashed drop target that fills in once a file is attached, rather than a
+     text link. The three states are visually distinct because "not uploaded",
+     "chosen but not saved yet" and "already on the record" are three different
+     situations, and a single blue link said nothing about which one you were
+     looking at. */
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-      {value && /^https?:\/\//.test(value) && (
-        <a href={value} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--blue-600)' }}>View current file</a>
+    <label
+      className={`${styles.drop} ${styles[`drop_${state}`]} ${dragging ? styles.dropOver : ''}`}
+      onDragOver={(e) => { if (!disabled) { e.preventDefault(); setDragging(true); } }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => { if (disabled) return; e.preventDefault(); setDragging(false); take(e.dataTransfer.files?.[0]); }}
+    >
+      <Icon name={state === 'done' ? 'check' : 'upload'} className={styles.dropIcon} />
+
+      <span className={styles.dropText}>
+        {state === 'busy' && 'Reading…'}
+        {state === 'pending' && (
+          <>
+            <span className={styles.dropName}>{pendingFileName}</span>
+            <span className={styles.dropHint}>Not saved yet</span>
+          </>
+        )}
+        {state === 'done' && (
+          <>
+            <span className={styles.dropName}>File attached</span>
+            <span className={styles.dropHint}>Click to replace</span>
+          </>
+        )}
+        {state === 'empty' && (
+          <>
+            <span className={styles.dropName}>Upload</span>
+            <span className={styles.dropHint}>or drop a file</span>
+          </>
+        )}
+      </span>
+
+      {/* Opening the stored file must NOT also open the file picker. */}
+      {uploaded && (
+        <a
+          href={value}
+          target="_blank"
+          rel="noreferrer"
+          className={styles.dropView}
+          onClick={(e) => e.stopPropagation()}
+        >
+          View
+        </a>
       )}
-      {pendingFileName && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{pendingFileName} (pending upload)</span>}
-      {!disabled && (
-        <label style={{ fontSize: 12, cursor: 'pointer', color: 'var(--blue-600)', fontWeight: 700 }}>
-          {busy ? 'Reading…' : value ? 'Replace file' : 'Choose file'}
-          <input type="file" onChange={handleChange} disabled={busy} hidden />
-        </label>
-      )}
-    </div>
+
+      {!disabled && <input type="file" onChange={handleChange} disabled={busy} hidden />}
+    </label>
   );
 }
 

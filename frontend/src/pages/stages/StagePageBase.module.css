@@ -9,15 +9,26 @@
 .count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
 
 /* FMS chain (STAGE-8 -> 9 -> 10) in the Status column. */
-.dots { display: inline-flex; gap: 3px; }
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;   /* "10" must never wrap onto its own line */
+}
 .dot {
-  min-width: 22px;
-  padding: 2px 5px;
+  /* Fixed box, centred content: "8" and "10" are different widths, and
+     letting them size themselves left the three chips visibly ragged down
+     the column. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
   border-radius: var(--r-sm);
-  text-align: center;
   font-size: 10.5px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
   cursor: default;
 }
 .dot_found { background: var(--success-bg); color: var(--success); }

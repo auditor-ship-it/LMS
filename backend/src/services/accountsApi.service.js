@@ -215,7 +215,13 @@ export async function getOutstandingForContainer(containerNo, clientName) {
       const containers = [...new Set(
         rows.map((i) => String(i.containerNo || '').trim()).filter(Boolean)
       )].sort();
-      if (!containers.length && containerNo) containers.push(String(containerNo).trim());
+      /* NO FALLBACK to the searched container.
+         Searching by invoice number returns a single consolidated row with an
+         empty containerNo, so this used to substitute the container you looked
+         up — which reads as "this invoice covers this container" when it only
+         means "you searched for it". For QUA/JUL263/26-27 that showed one
+         container where the invoice actually covers three. An empty list is
+         rendered as a dash, which is the truth. */
       /* Amount and age come from the PARTY BILL, which is what the
          /tally-outstanding modal renders — /api/search reports a per-container
          slice for some invoices (AUG31 showed 69,384 against the modal's
@@ -238,6 +244,19 @@ export async function getOutstandingForContainer(containerNo, clientName) {
     if (!out.error) out.error = e.message;
     logger.error('[ACCOUNTS-API] invoice totals failed:', e.message);
   }
+
+  /* CLIENT-WIDE position, not just the invoices this container appears on —
+     the same DR / CR / Net summary the Accounts & Collection modal shows.
+     Receipts are the party's credits: they carry isReceipt, or a non-positive
+     pending (a journal voucher credit carries no flag). */
+  out.receipts = out.bills
+    .filter((b) => b.isReceipt || b.pending < 0)
+    .map((b) => ({ ref: b.ref, amount: Math.abs(num(b.pending)) }));
+
+  out.totalDr = out.bills.filter((b) => !b.isReceipt && b.pending > 0)
+    .reduce((s, b) => s + num(b.pending), 0);
+  out.totalCr = out.receipts.reduce((s, r) => s + r.amount, 0);
+  out.netBalance = out.totalDr - out.totalCr;
 
   out.invoiceCount = out.invoiceTotals.length;
   out.grandTotal = out.invoiceTotals.reduce((s, i) => s + i.amount, 0);

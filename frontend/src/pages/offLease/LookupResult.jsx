@@ -1,7 +1,7 @@
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import {
   buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices,
-  HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD
+  HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD, slaText
 } from './lookupModel.js';
 import styles from './LookupResult.module.css';
 
@@ -159,6 +159,11 @@ function HistoryTable({ rows }) {
                 <td><span className={tone ? styles[tone] : styles.histNeutral}>{r.status}</span></td>
                 <td>{r.on || '—'}</td>
                 <td>{r.by || '—'}</td>
+                <td className={styles.slaCell}>
+                  {r.sla
+                    ? <span className={r.sla.delayed ? styles.slaLate : styles.slaOk}>{slaText(r.sla)}</span>
+                    : '—'}
+                </td>
                 <td>{r.detail || '—'}</td>
               </tr>
             );

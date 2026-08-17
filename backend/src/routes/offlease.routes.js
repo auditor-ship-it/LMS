@@ -11,6 +11,8 @@ router.use(requireAuth);
    than via a static requirePermission(...) at the route level. */
 router.get('/', asyncHandler(offLeaseController.getData)); // ?stage=1..8
 router.get('/next-lease-id', asyncHandler(offLeaseController.nextLeaseId));
+/* Pending count per stage, for the tab badges. */
+router.get('/stage-counts', asyncHandler(offLeaseController.getStageCounts));
 
 /* Stage 9 — container movement log (append-only, its own sheet, outside the
    1..8 pipeline). Declared BEFORE the '/:containerNo/...' routes so a literal

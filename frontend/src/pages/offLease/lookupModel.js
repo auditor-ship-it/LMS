@@ -64,7 +64,8 @@ export function buildProgressRows(result) {
     name: 'Intimation Approval',
     status: APPROVAL_LABEL[approvalLower] || 'Pending',
     on: decided ? cellText(approvalDate) : '',
-    by: decided ? cellText(approvalUser) : ''
+    by: decided ? cellText(approvalUser) : '',
+    sla: result.approvalSla || null
   };
 
   return stages.flatMap((s, i) => {
@@ -73,7 +74,8 @@ export function buildProgressRows(result) {
       name: cellText(s.label),
       status: s.done ? 'Completed' : 'Pending',
       on: s.done ? cellText(s.timestamp) : '',
-      by: s.done ? cellText(s.user) : ''
+      by: s.done ? cellText(s.user) : '',
+      sla: s.sla || null
     };
     return i === 0 ? [row, gateRow] : [row];
   });
@@ -114,7 +116,20 @@ export function buildMovements(result) {
  * pipeline and can happen at any point in it — their own date column carries
  * when each actually occurred.
  */
-export const HISTORY_HEAD = ['Stage', 'Event', 'Status', 'Date', 'By', 'Details'];
+export const HISTORY_HEAD = ['Stage', 'Event', 'Status', 'Date', 'By', 'SLA', 'Details'];
+
+/** "2h 15m of 1h · 1h 15m late" — the budget, what was used, and by how much
+ *  it slipped. An "SLA" column saying only "Delayed" would not say whether it
+ *  slipped by a minute or a month. */
+export function slaText(sla) {
+  if (!sla) return '';
+  const budget = sla.budgetMs >= 86400000
+    ? `${Math.round(sla.budgetMs / 86400000)}d`
+    : `${Math.round(sla.budgetMs / 3600000)}h`;
+  const base = `${sla.elapsed} of ${budget}`;
+  if (sla.delayed) return `${base} · ${sla.overdueBy} late`;
+  return sla.running ? `${base} · running` : `${base} · on time`;
+}
 
 export function buildHistoryRows(result) {
   /* Retired stages are left out of the history: they are not part of the
@@ -125,6 +140,7 @@ export function buildHistoryRows(result) {
     .filter((r) => r.stage !== 'Retired')
     .map((r) => ({ ...r, detail: '' }));
 
+  /* Stage 9 movements are a journal, not a timed step — no SLA applies. */
   const movementRows = (result.movements || []).map((m) => ({
     stage: 'Stage 9',
     name: `Movement — ${cellText(m.movementType) || 'Unspecified'}`,

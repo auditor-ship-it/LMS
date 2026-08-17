@@ -11,6 +11,8 @@ export function IconSprite() {
       <defs>
         <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5" /><path d="M5.5 9.5V20h13V9.5" /><path d="M9.5 20v-6h5v6" /></symbol>
         <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></symbol>
+        <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6" /><path d="M20 4l-8.5 8.5" /><path d="M18 14v5.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 19.5v-11A1.5 1.5 0 0 1 5.5 7H11" /></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4" /><path d="M7.5 8.5L12 4l4.5 4.5" /><path d="M4 16v2.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V16" /></symbol>
         <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21.5s6.5-6.4 6.5-11.5a6.5 6.5 0 0 0-13 0c0 5.1 6.5 11.5 6.5 11.5z" /><circle cx="12" cy="10" r="2.4" /></symbol>
         <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3.5 5.5h17l-6.5 8v6l-4 2v-8z" /></symbol>
         <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5 9.5 17.5 19.5 6.5" /></symbol>

@@ -25,6 +25,9 @@ export const getOffLeaseContainerDetail = (containerNo, leaseId) =>
 export const addToOffLeaseTracking = (containerNo) =>
   apiClient.post('/offlease/tracking', { containerNo }).then((r) => r.data.message);
 
+/** GET /api/offlease/stage-counts — pending count per stage, for tab badges. */
+export const getStageCounts = () => apiClient.get('/offlease/stage-counts').then((r) => r.data.counts || {});
+
 /** GET /api/offlease/dashboard — pipeline overview (KPI counts + every active container's current stage). */
 export const getOffLeaseDashboardData = () => apiClient.get('/offlease/dashboard').then((r) => r.data);
 

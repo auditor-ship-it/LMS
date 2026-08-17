@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf';
 import {
   buildIdentityRows, buildProgressRows, buildFilledStages, lookupFileStamp,
   checklistHead, buildEstimateTotals, buildEstimateRows, ESTIMATE_HEAD, money, CABIN_HEAD,
-  buildInvoices, INVOICE_HEAD, buildHistoryRows, HISTORY_HEAD, buildMovements, MOVEMENT_HEAD
+  buildInvoices, INVOICE_HEAD, buildHistoryRows, HISTORY_HEAD, buildMovements, MOVEMENT_HEAD, slaText
 } from './lookupModel.js';
 import {
   createReport, drawTitle, drawBrand, drawHeaderBand, drawStageHeader, drawFieldGrid, drawDataTable,
@@ -58,7 +58,7 @@ export function exportLookupToExcel(result) {
   const history = buildHistoryRows(result);
   if (history.length) {
     summaryAoa.push([], ['Container History — Stage 1 to Stage 9'], HISTORY_HEAD);
-    history.forEach((r) => summaryAoa.push([r.stage, r.name, r.status, r.on, r.by, r.detail]));
+    history.forEach((r) => summaryAoa.push([r.stage, r.name, r.status, r.on, r.by, slaText(r.sla), r.detail]));
   }
 
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryAoa);
@@ -174,8 +174,8 @@ export function exportLookupToPdf(result) {
     drawSubHeading(rpt, doc, 'Container History — Stage 1 to Stage 9');
     drawDataTable(
       rpt, doc, HISTORY_HEAD,
-      history.map((r) => [r.stage, r.name, r.status, r.on, r.by, r.detail || '—']),
-      [18, 40, 22, 24, 34, 36], { compact: true }
+      history.map((r) => [r.stage, r.name, r.status, r.on, r.by, slaText(r.sla) || '—', r.detail || '—']),
+      [16, 32, 20, 22, 30, 34, 28], { compact: true }
     );
     rpt.closeCard();
   }

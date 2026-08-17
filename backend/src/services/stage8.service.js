@@ -350,6 +350,18 @@ async function readStage9OffleaseRows() {
   return out;
 }
 
+/** Last row for this container, ignoring client. See the note in
+ *  getFmsForContainer on why client name is not a usable key here. */
+function matchByContainer(rows, containerNo) {
+  const key = normContainer(containerNo);
+  if (!key) return null;
+  let found = null;
+  for (const r of rows) {
+    if (normContainer(r.containerNo) === key) found = r;   // later rows are more recent
+  }
+  return found;
+}
+
 /** Last row matching container + client, or null. Shared by both tabs. */
 function matchRow(rows, containerNo, clientName) {
   const key = normContainer(containerNo);
@@ -395,12 +407,75 @@ export async function getFmsForContainer(containerNo, clientName) {
   const rows9 = pick(S9_CACHE_KEY);
   const rows10 = pick(S10_CACHE_KEY);
 
-  const movement = rows8 ? (matchRow(rows8, containerNo, clientName) || null) : undefined;
-  const transport = rows9 ? (matchRow(rows9, containerNo, clientName) || null) : undefined;
+  /* CONTAINER ONLY, matching getDeliveredKeys.
+   *
+   * Client name is not a usable key across these sheets: STAGE-8 records
+   * GSOU6384240 under "Dr Reddy C JNPT" where the tracking sheet says
+   * "Dr Reddy's Laboratories Ltd CTO3" — the same customer under a site alias,
+   * which no normalisation or edit distance can bridge. A container number is
+   * globally unique and the rows are already filtered to Movement Type =
+   * Offlease, so the container alone identifies the record.
+   *
+   * This also removes a real inconsistency: progression used container-only
+   * while these cards used container + client, so a container could be
+   * released to Stage 3 while its own panel reported "No record". */
+  const movement = rows8 ? (matchByContainer(rows8, containerNo) || null) : undefined;
+  const transport = rows9 ? (matchByContainer(rows9, containerNo) || null) : undefined;
   const doKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo, transport?.doNumber].filter(Boolean);
   const delivery = rows10 ? (matchByDo(rows10, doKeys) || null) : undefined;
 
   return { movement, transport, delivery };
+}
+
+/**
+ * "CONTAINER|client" keys for every container whose SITE DELIVERY is recorded
+ * in STAGE-10 — the signal that its Stage 2 transport leg is finished and it
+ * belongs in Stage 3 (Gate In).
+ *
+ * STAGE-10 carries no container number, so the chain is: STAGE-8 (or STAGE-9)
+ * gives the container its DO number, and a STAGE-10 row against that DO means
+ * delivered. Cache and disk only — this runs on every stage-list load and must
+ * never trigger a live read.
+ */
+export async function getDeliveredKeys() {
+  const pick = (key) => cacheGet(key) || getLastGood(key);
+  const rows8 = pick(CACHE_KEY);
+  const rows9 = pick(S9_CACHE_KEY);
+  const rows10 = pick(S10_CACHE_KEY);
+  const keys = new Set();
+  /* ALL THREE tabs are required, so all three must have been read. Releasing
+     on a partial view would complete Stage 2 for a container whose missing leg
+     simply had not loaded. */
+  if (!rows8 || !rows9 || !rows10) return keys;
+
+  /* Keyed on CONTAINER ONLY, not container + client.
+   *
+   * Client names are demonstrably unreliable across these sheets — STAGE-9
+   * spells the same customer "Drager India Pvt.Ltd" where the tracking sheet
+   * has "Draeger India Pvt Ltd" — and requiring both matched nothing at all.
+   * A delivery is a physical event for the box, so the container is the right
+   * granularity, and the rows are already filtered to Movement Type = Offlease.
+   */
+  /* Stage 2 completes only when the container has an Offlease record in
+     STAGE-8 *and* STAGE-9 *and* a STAGE-10 site delivery — the movement was
+     booked, transported and delivered. Previously any one of 8 or 9 plus a
+     STAGE-10 hit was enough, which released containers whose transport leg had
+     not been recorded and let Stage 3 open too early. */
+  const in8 = new Set((rows8 || []).map((r) => normContainer(r.containerNo)).filter(Boolean));
+  const in9 = new Set((rows9 || []).map((r) => normContainer(r.containerNo)).filter(Boolean));
+
+  for (const src of [rows8, rows9]) {
+    for (const r of src) {
+      const k = normContainer(r.containerNo);
+      if (!k || keys.has(k)) continue;
+      if (!in8.has(k) || !in9.has(k)) continue;          // must be in BOTH 8 and 9
+      const dos = [r.deliveryOrderNo, r.bookingOrderNo, r.doNumber].filter(Boolean);
+      if (!dos.length) continue;
+      if (!matchByDo(rows10, dos)) continue;              // ...and delivered in 10
+      keys.add(k);
+    }
+  }
+  return keys;
 }
 
 /**

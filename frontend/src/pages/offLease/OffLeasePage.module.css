@@ -11,6 +11,26 @@
   overflow-y: hidden;
   scrollbar-width: thin;
 }
+/* Pending count beside the tab label. Amber so it reads as "work waiting"
+   rather than as part of the tab name. */
+.tabCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--amber-c);
+  color: var(--on-amber);
+  font-size: 10px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .tab {
   padding: 8px 0;
   margin-bottom: -1.5px;

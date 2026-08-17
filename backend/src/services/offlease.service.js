@@ -331,8 +331,20 @@ const OL_LEASE_ID_PAD = 4;
  * Retired: 2 (Lifting / Arrival) and 4 (Quotation / Order, whose columns were
  * deleted from the sheet). Their data is preserved and still reported.
  */
-const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 8];
+export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 8];
 const OL_RETIRED_STAGES = new Set([2, 4]);
+
+/* Internal numbers for the two stages the STAGE-10 hand-off moves between:
+   the tab shown as "Stage 2 (Transportation)" and the one shown as
+   "Stage 3 (Gate In)". Named because the display numbers are not the internal
+   ones and reading `6` or `7` inline invites the wrong assumption. */
+const OL_STAGE2_INTERNAL = 6;
+const OL_STAGE3_INTERNAL = 7;
+
+/** Container key for cross-sheet lookups — upper-cased alphanumerics only, so
+ *  spacing and punctuation differences between sheets cannot miss. Must stay
+ *  identical to normContainer() in stage8.service.js. */
+const _containerKey = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 /**
  * Stage numbers shown to users, so the workflow reads 1..7 with no gap where
@@ -1058,7 +1070,56 @@ export async function addToOffLeaseTracking(containerNo) {
 /* =============================================
    STAGE LIST / DETAIL
 ============================================= */
-export async function getOffLeaseData(stage) {
+/**
+ * @param opts.deliveredKeys Set of "CONTAINER|client" that have a STAGE-10
+ *   site-delivery record. Those containers are treated as finished with
+ *   Stage 2 and released to Stage 3 (Gate In).
+ *
+ *   Stage 2 is read-only and has no form, so its status column can never be
+ *   filled — without this, Gate In would gate on a column nothing can write
+ *   and no container would ever reach it. STAGE-10 being filled IS the
+ *   completion signal for that leg.
+ *
+ *   Done as a read-time rule rather than by writing "Completed" into the
+ *   tracking sheet: that sheet currently has 212 columns where the code
+ *   expects 289, so a positional write to a stage status column would land in
+ *   the wrong place. This achieves the same movement with no write at all, and
+ *   stays correct once the columns are re-synced.
+ */
+/**
+ * When a container was marked Off-Lease on the Deployed sheet — the moment it
+ * entered the off-lease workflow, and therefore when Stage 1's clock starts.
+ *
+ * Read from the "Update" column on the row whose "Status" is Off-Lease. Both
+ * are found BY HEADER, not position: this sheet has had columns inserted
+ * before, and a positional read would silently return a neighbouring column.
+ *
+ * Stage 1's SLA previously started from the deployed date, which is when the
+ * container went out on lease — often years earlier — so every container
+ * looked like a 600-day breach.
+ */
+export async function getOffLeaseEntryStamp(containerNo) {
+  const want = normKey(containerNo);
+  if (!want) return '';
+  try {
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const updCol = _findOlColumnMulti(headers, ['update']);
+    const stsCol = _findOlColumnMulti(headers, ['status']);
+    if (updCol < 0) return '';
+
+    for (const r of rows) {
+      if (normKey(r[0]) !== want) continue;
+      if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+      const stamp = safeStr(r[updCol]).trim();
+      if (stamp) return stamp;
+    }
+  } catch (e) {
+    console.error('[OL-ENTRY-STAMP]', e?.message || e);
+  }
+  return '';
+}
+
+export async function getOffLeaseData(stage, opts = {}) {
   // Display-only list read, no embedded write in this function — safe to
   // serve from the Mongo mirror (Phase 1b), and therefore no
   // _ensureOffLeaseSheet(): see the note in getOffLeaseDashboardData.
@@ -1066,6 +1127,7 @@ export async function getOffLeaseData(stage) {
   const info = OL_STAGE_INFO[stage];
   if (!rows.length || !info) return { headers: [], data: [], stage };
 
+  const { deliveredKeys } = opts;
   const displayIndices = [0, 1, 2, 3, 5, 6, 7, 8, 9];
   const displayHeaders = ['Container No', 'Lease ID', 'Size', 'Type', 'Client Name', 'Location', 'Deployed Date', 'Valid Upto', 'Rate'];
   /* The gate is the previous ACTIVE stage, not stage-1: with Stage 4 retired,
@@ -1073,7 +1135,14 @@ export async function getOffLeaseData(stage) {
      status column nothing can ever fill. */
   const prevNum = _prevActiveStage(stage);
   const prevInfo = prevNum ? OL_STAGE_INFO[prevNum] : null;
-  const intApprovalCol = Number(stage) === 2
+  /* The Intimation Approval gate sits immediately after Stage 1, so it applies
+     to whichever stage FOLLOWS Stage 1 in the workflow — currently internal 6.
+     This was keyed on `stage === 2`, the RETIRED Lifting/Arrival stage, so the
+     gate never fired: all 6 containers awaiting approval were also listed as
+     pending at Transportation, and the tab badges summed to 43 against 37
+     active records. */
+  const gatedByApproval = prevNum === 1;
+  const intApprovalCol = gatedByApproval
     ? _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status'])
     : -1;
 
@@ -1085,11 +1154,33 @@ export async function getOffLeaseData(stage) {
     const statusVal = row[info.statusCol];
     if (statusVal && String(statusVal).trim() !== '') continue;
 
-    if (prevInfo) {
-      const prevStatus = row[prevInfo.statusCol];
-      if (!prevStatus || String(prevStatus).trim() === '') continue;
+    /* Has this container's site delivery been recorded in STAGE-10? Keyed on
+       container alone — see getDeliveredKeys() for why client is not used. */
+    const delivered = deliveredKeys ? deliveredKeys.has(_containerKey(row[0])) : false;
 
-      if (Number(stage) === 2 && intApprovalCol >= 0) {
+    /* Stage 2 (internal 6) is DONE once STAGE-10 has its delivery — drop it
+       from that queue so it is not shown as still awaiting transport. Only
+       once it has actually reached Stage 2, though: a row still sitting at
+       Stage 1 must stay there. */
+    if (Number(stage) === OL_STAGE2_INTERNAL && delivered
+        && safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '') continue;
+
+    if (prevInfo) {
+      /* ...and released into the next stage on the same signal, regardless of
+         the (unfillable) Stage 2 status column.
+
+         Stage 1 must still be COMPLETE. The delivery signal substitutes for
+         the Stage 2 gate only — it is not a licence to skip the rest of the
+         chain. Without this check a container whose delivery was recorded but
+         whose intimation was never completed appeared in Stage 1 and Stage 3
+         at the same time, which is how 7 + 20 + 10 came to 37 against 36
+         records. */
+      const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
+      const releasedByDelivery = Number(stage) === OL_STAGE3_INTERNAL && delivered && stage1Done;
+      const prevStatus = row[prevInfo.statusCol];
+      if (!releasedByDelivery && (!prevStatus || String(prevStatus).trim() === '')) continue;
+
+      if (gatedByApproval && intApprovalCol >= 0) {
         const intApproval = row[intApprovalCol];
         if (!intApproval || String(intApproval).trim().toLowerCase() !== 'approved') continue;
       }
@@ -1590,8 +1681,12 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId) {
   const leaseInfo = await _findLeaseInfoForContainer(want);
   res.orderNos = leaseInfo.orders.join(', ');
 
-  await _ensureOffLeaseSheet();
-  const { headers, rows } = await getSheetData(OL_SHEET);
+  /* Read-only lookup: served from the Mongo mirror, with no
+     _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to widen
+     the sheet before a WRITE — on this path it only added a Sheets round trip
+     to a read, and on an exhausted quota it failed the whole container detail.
+     Same fix already applied to the dashboard and the stage lists. */
+  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
 
   /* A container can appear more than once — the same box off-leased by two
      different clients at different times (e.g. TRIU6681671). Collect every
