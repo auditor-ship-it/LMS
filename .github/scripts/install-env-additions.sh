@@ -16,6 +16,10 @@ set -uo pipefail
 
 TARGET="${TARGET_ENV:-/etc/lease-management/lease-management.env}"
 SOURCE="${SOURCE_ENV:-/home/lease-management/deploy/env-additions.env}"
+# Keys that must REPLACE an existing production value rather than be skipped.
+# Deliberately a separate file: "add if absent" is safe to run blind, whereas
+# overwriting a live value is not, so the two cannot be confused.
+OVERRIDES="${OVERRIDE_ENV:-/home/lease-management/deploy/env-overrides.env}"
 UNIT="${UNIT:-lease-management}"
 BACKUP_DIR="${BACKUP_DIR:-/home/lease-management/backups}"
 
@@ -51,6 +55,32 @@ skipped=0
     fi
   done < "$SOURCE"
 } >> "$TARGET"
+
+# ---- overrides: replace a wrong production value in place ----
+# GOOGLE_DRIVE_FOLDER_ID is the reason this exists. Production pointed at a
+# Google Forms "File responses" folder in someone's MY DRIVE. A service account
+# has no storage quota of its own, so any upload there fails with "Service
+# Accounts do not have storage quota" — it can only create files inside a
+# Shared Drive, where the drive owns them rather than the account.
+if [ -f "$OVERRIDES" ]; then
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    key="${line%%=*}"
+    esc=$(printf '%s' "$line" | sed 's/[&|]/\\&/g')
+    if grep -qE "^${key}=" "$TARGET"; then
+      old=$(grep -m1 -E "^${key}=" "$TARGET")
+      if [ "$old" = "$line" ]; then
+        echo "  override already correct: $key"
+      else
+        sed -i "s|^${key}=.*|${esc}|" "$TARGET"
+        echo "  OVERRODE: $key"
+      fi
+    else
+      printf '%s\n' "$line" >> "$TARGET"
+      echo "  added (override key absent): $key"
+    fi
+  done < "$OVERRIDES"
+fi
 
 # Ownership and mode must survive untouched — the service account reads this
 # file by group, and anything wider would expose production credentials.
