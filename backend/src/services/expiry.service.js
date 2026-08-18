@@ -41,6 +41,7 @@ import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { cacheGet, cachePut } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
+import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 
 /* =============================================
    getExpiryDataByFilter — LMS.js 1358-1406
@@ -96,7 +97,7 @@ export async function _expiryOrderNoMap() {
   return map;
 }
 
-export async function getExpiryDataByFilter(filterType) {
+export async function getExpiryDataByFilter(filterType, user) {
   // Same reasoning as _expiryOrderNoMap above: this is the read backing the
   // Lease Expiry / Renew & Document list views, matched by container number
   // rather than row position, so the Mongo mirror is safe here. The actual
@@ -114,6 +115,34 @@ export async function getExpiryDataByFilter(filterType) {
     if (allHeaders[h] && String(allHeaders[h]).toLowerCase().indexOf('valid') !== -1) { colIdx = h; break; }
   }
   if (colIdx === -1) return { headers: allHeaders.slice(0, 15), data: [], validColIdx: -1 };
+
+  /* USER-WISE VISIBILITY. `user` is req.user — the identity requireAuth
+   * resolved from the bearer token, never a frontend-supplied name/email/id.
+   * A scoped caller (see salePersonAccess.service.js) only ever gets rows
+   * whose "Sale Person" cell is theirs; everyone else (admins, and anyone
+   * with no mapped Sale Person identity) is unaffected — same list as before
+   * this feature existed.
+   *
+   * Located by header, not hardcoded to its current index 9: this sheet has
+   * had columns inserted/removed by hand before (see the Off-Lease Tracking
+   * drift elsewhere in this codebase), and a positional read would silently
+   * filter by the wrong column instead of failing loudly. */
+  const salePersonScope = salePersonScopeFor(user);
+  let salePersonCol = -1;
+  if (salePersonScope) {
+    for (let h = 0; h < allHeaders.length; h++) {
+      if (String(allHeaders[h] || '').trim().toLowerCase() === 'sale person') { salePersonCol = h; break; }
+    }
+    /* The column could not be located — fail CLOSED (show nothing) rather
+       than fail open (show everyone's records) for a scoped user. This is a
+       confidentiality feature: an empty list reads as a bug to report, which
+       is the safe failure; a leaked list is not. Unscoped callers (the
+       overwhelming majority) are entirely unaffected by this branch. */
+    if (salePersonCol === -1) {
+      console.error('[EXPIRY-ACCESS] "Sale Person" column not found — showing nothing to a scoped user rather than everyone.');
+      return { headers: allHeaders.slice(0, 15), data: [], validColIdx: (colIdx >= 1 ? colIdx + 1 : colIdx) };
+    }
+  }
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -138,6 +167,8 @@ export async function getExpiryDataByFilter(filterType) {
     else if (filterType === 'documents') include = (wVal && String(wVal).trim().toLowerCase() === 'documents pending');
     // off-lease stages removed
     if (!include) continue;
+
+    if (salePersonScope && !matchesSalePersonScope(row[salePersonCol], salePersonScope)) continue;
 
     const expRaw = row[colIdx];
     const expDate = parseDate(expRaw); // Sheets API returns formatted strings, not Date objects — see format.js

@@ -18,10 +18,6 @@ export async function saveFollowUp(req, res) {
   res.json({ message });
 }
 
-export async function getReturnDashboard(req, res) {
-  res.json(await verifyService.getReturnDashboardData());
-}
-
 export async function editLease(req, res) {
   const { updates } = req.body;
   const message = await verifyService.updateVerifyLeaseFields(req.params.containerNo, updates, req.user.email);

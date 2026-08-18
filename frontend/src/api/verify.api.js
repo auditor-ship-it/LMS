@@ -11,9 +11,6 @@ export const saveVerifyAction = (containerNo, { timestamp, status, billingType, 
 export const saveVerifyFollowUp = (containerNo, { timestamp, remarks, issue }) =>
   apiClient.post(`/verify/${encodeURIComponent(containerNo)}/follow-up`, { timestamp, remarks, issue }).then((r) => r.data);
 
-/** GET /api/verify/return-dashboard */
-export const getReturnDashboardData = () => apiClient.get('/verify/return-dashboard').then((r) => r.data);
-
 /** PUT /api/verify/:containerNo/edit — updates is a { columnIndex: value } map. */
 export const editVerifyLease = (containerNo, updates) =>
   apiClient.put(`/verify/${encodeURIComponent(containerNo)}/edit`, { updates }).then((r) => r.data);

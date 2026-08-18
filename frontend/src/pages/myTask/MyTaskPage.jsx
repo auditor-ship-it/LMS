@@ -32,14 +32,19 @@ const CARD_DEFS = [
   { key: 'expiring7', label: 'Expiring in 7 Days', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'warn', icon: 'alert' },
   { key: 'expired', label: 'Already Expired', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'error', icon: 'alert' },
   { key: 'renewPending', label: 'Renew Pending', path: ROUTES.RENEW_DOCUMENT, group: GROUPS.EXPIRY, tint: 'info', icon: 'edit' },
+  /* Labels only, updated 2026-08-18 to match constants/stages.js's live
+   * WORKFLOW order (1 Intimation, 2 Transportation, 3 Gate In, 4 Inspection,
+   * 5 Billing, 6 FMS Closure) instead of the pre-reorder internal numbering
+   * these had drifted to. Keys (olStage1..8) are untouched — they still
+   * index getMyTasks()'s response 1:1 by internal stage number. */
   { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Yastika', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage2', label: 'Off-Lease Stage 2: Lifting', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage3', label: 'Off-Lease Stage 3: Inspection', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage4', label: 'Off-Lease Stage 4: Quotation', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage5', label: 'Off-Lease Stage 5: Billing', owner: 'Shivani Maam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage6', label: 'Off-Lease Stage 6: Transport', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage7', label: 'Off-Lease Stage 7: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage8', label: 'Off-Lease Stage 8: FMS Closure', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
+  { key: 'olStage2', label: 'Off-Lease (Retired) Lifting / Arrival', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage4', label: 'Off-Lease (Retired) Quotation / Order', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage5', label: 'Off-Lease Stage 5: Billing Reconciliation', owner: 'Shivani Maam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage6', label: 'Off-Lease Stage 2: Transportation', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage8', label: 'Off-Lease Stage 6: FMS Closure', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
 ];
 
 const CATEGORY_OPTIONS = Object.values(GROUPS).map((g) => ({ value: g, label: g }));
@@ -60,7 +65,15 @@ export function MyTaskPage() {
   const [category, setCategory] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
 
-  const tiles = useMemo(() => CARD_DEFS.map((def) => ({ ...def, value: data ? data[def.key] : 0 })), [data]);
+  /* data.visibleKeys (backend/src/services/tasks.service.js's getMyTasks) is
+     null for most users — show every card, unchanged. For a Sale-Person-scoped
+     login (Gauri/Kedar/Sagar/Sapna today) it's the small set of cards that are
+     actually theirs, so "Pending Verify (Yastika)" and every Off-Lease stage
+     card — someone else's desk, not their lease work — don't show up here. */
+  const tiles = useMemo(() => {
+    const defs = data?.visibleKeys ? CARD_DEFS.filter((d) => data.visibleKeys.includes(d.key)) : CARD_DEFS;
+    return defs.map((def) => ({ ...def, value: data ? data[def.key] : 0 }));
+  }, [data]);
 
   const filtered = useMemo(() => {
     const t = debouncedSearch.trim().toLowerCase();

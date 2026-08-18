@@ -47,7 +47,20 @@ const TABS = [
  * this single-page tab bar covering the whole off-lease workflow.
  */
 export function OffLeasePage() {
-  const [tab, setTab] = useState('dashboard');
+  const { canAct } = usePermission();
+  /* Dashboard and Container Lookup are gated like every other Off-Lease
+     permission (offleasedashboard/offleaselookup — see permissions.config.js).
+     Both default to visible for anyone who already has some Off-Lease access,
+     since that was every user's experience before this gate existed; Roles &
+     Access can now narrow either one. The per-stage tabs are unaffected —
+     they were never gated at the tab level, only their save actions were. */
+  const visibleTabs = useMemo(() => TABS.filter((t) => {
+    if (t.key === 'dashboard') return canAct('offleasedashboard');
+    if (t.key === 'lookup') return canAct('offleaselookup');
+    return true;
+  }), [canAct]);
+
+  const [tab, setTab] = useState(() => visibleTabs[0]?.key || 'dashboard');
   const stageMatch = tab.match(/^stage(\d)$/);
   /* One request for every badge — six stage-list calls from the client would
      be six round trips to render a row of numbers.
@@ -66,7 +79,7 @@ export function OffLeasePage() {
       />
 
       <div className={styles.tabRow}>
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -84,9 +97,12 @@ export function OffLeasePage() {
         ))}
       </div>
 
-      {tab === 'dashboard' && <PipelineDashboard onOpenTab={setTab} />}
+      {/* canAct checked again here, not just in visibleTabs above — belt and
+          braces against `tab` state ever landing on a gated key another way
+          (e.g. a stale value from before a permission was revoked). */}
+      {tab === 'dashboard' && canAct('offleasedashboard') && <PipelineDashboard onOpenTab={setTab} />}
       {tab === 'approval' && <ApprovalQueue />}
-      {tab === 'lookup' && <ContainerLookup />}
+      {tab === 'lookup' && canAct('offleaselookup') && <ContainerLookup />}
       {stageMatch && <StagePageBase stageNumber={Number(stageMatch[1])} embedded />}
     </>
   );

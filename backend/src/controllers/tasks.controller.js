@@ -2,7 +2,7 @@ import * as tasksService from '../services/tasks.service.js';
 
 export async function myTasks(req, res) {
   const force = req.query.force === 'true' || req.query.force === '1';
-  res.json(await tasksService.getMyTasks(force));
+  res.json(await tasksService.getMyTasks(req.user, force));
 }
 
 export async function employeeTasks(req, res) {

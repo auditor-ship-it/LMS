@@ -1,9 +1,11 @@
 import * as expiryService from '../services/expiry.service.js';
 
-/** GET /api/expiry?filter=pending|renewed|documents */
+/** GET /api/expiry?filter=pending|renewed|documents
+ *  req.user (never a query/body field) determines which rows come back —
+ *  see salePersonAccess.service.js. */
 export async function list(req, res) {
   const filterType = req.query.filter || 'pending';
-  res.json(await expiryService.getExpiryDataByFilter(filterType));
+  res.json(await expiryService.getExpiryDataByFilter(filterType, req.user));
 }
 
 /** GET /api/expiry/renewal-log — Renewal Log rows for the month-wise report. */

@@ -35,11 +35,9 @@ export const NAV_TREE = {
     { key: 'verify', label: 'Verify Lease', path: ROUTES.VERIFY_LEASE, icon: 'search', sidebarKey: 'verify', section: 'Agreements', taskKey: 'pendingVerify' },
     { key: 'approve', label: 'Approve Lease', path: ROUTES.APPROVE_LEASE, icon: 'check', sidebarKey: 'approve', section: 'Agreements', taskKey: 'pendingApprovals' },
     { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', sidebarKey: 'renewDocument', section: 'Agreements', taskKey: 'renewPending' },
-    { key: 'agreementForm', label: 'Agreement Form', path: ROUTES.AGREEMENT_FORM, icon: 'edit', sidebarKey: 'agreementForm', section: 'Agreements' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
-    { key: 'returnDashboard', label: 'Return Dashboard', path: ROUTES.RETURN_DASHBOARD, icon: 'refresh', sidebarKey: 'returnDashboard', section: 'Returns' },
     /* No sidebarKey: the Sidebar Access sheet is read POSITIONALLY against
        SIDEBAR_KEYS, so a new key needs a matching column added there before it
        grants anything. Left unkeyed (always visible) until that column exists,
