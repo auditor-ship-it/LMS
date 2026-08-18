@@ -109,7 +109,15 @@ fi
 
 # Catches syntax errors, bad import paths and case-mismatched imports before
 # the service is restarted onto them. Same check CI runs.
+#
+# The checkout needs its own node_modules for this: the smoke test IMPORTS
+# every module, and an import of 'express' cannot resolve without them. Full
+# install, not --omit=dev, because a missing dependency should surface here
+# rather than after the service has already been restarted onto it.
 if [ -f "$REPO/.github/scripts/smoke-import.mjs" ]; then
+  log "  installing backend deps (for the smoke test)"
+  (cd "$REPO/backend" && npm ci --no-audit --no-fund) >>"$LOG" 2>&1 || fail "backend npm ci in checkout"
+
   log "  smoke-testing backend modules"
   ( cd "$REPO/backend" \
     && GOOGLE_PROJECT_ID=ci GOOGLE_CLIENT_EMAIL=ci@example.com GOOGLE_PRIVATE_KEY=ci \
