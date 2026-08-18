@@ -14,12 +14,16 @@ jobs:
     name: Lint, build and smoke-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # Node 20 to match the VPS exactly (node v20.20.2 there). Building on a
-      # newer major than production can hide syntax/API problems that only
-      # surface after deploy.
-      - uses: actions/setup-node@v4
+      # Node 20 to match the VPS runtime exactly (node v20.20.2 there).
+      # Building on a newer major than production can hide syntax/API problems
+      # that only surface after deploy.
+      #
+      # This is unrelated to the "Node.js 20 is deprecated" warning GitHub
+      # emits: that is about the runtime the ACTIONS themselves run on (fixed
+      # by using @v5 actions above), not the Node this project builds with.
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -34,47 +38,24 @@ jobs:
 
       - name: Build frontend
         run: npm run build --prefix frontend
+        env:
+          # REQUIRED here, not optional. frontend/.env is gitignored, so on a
+          # CI runner there is nothing to supply this and the build silently
+          # falls back to http://localhost:4001/api — which the assert below
+          # would then flag, failing every single run. Same value as deploy.yml
+          # so CI builds exactly what production builds.
+          VITE_API_URL: ${{ vars.VITE_API_URL || 'https://lease.crystalgrp.xyz/api' }}
 
       # The backend has no test suite, so this is the honest substitute: import
       # every module so a syntax error, a bad import path or a missing export
-      # fails the build. It is also the ONLY check that catches case-mismatched
-      # imports — Windows/macOS resolve them fine and the Linux VPS does not,
-      # which has already broken one deploy (commit c88461a).
+      # fails the build. It also carries the case-sensitivity check that caught
+      # the class of bug behind commit c88461a.
       - name: Smoke-test backend modules
         working-directory: backend
-        run: |
-          node --input-type=module -e '
-            import { readdir } from "node:fs/promises";
-            import { join } from "node:path";
-            async function walk(dir) {
-              const out = [];
-              for (const e of await readdir(dir, { withFileTypes: true })) {
-                const p = join(dir, e.name);
-                if (e.isDirectory()) out.push(...await walk(p));
-                else if (e.name.endsWith(".js")) out.push(p);
-              }
-              return out;
-            }
-            const files = await walk("src");
-            let failed = 0;
-            for (const f of files) {
-              try { await import("./" + f.split("\\").join("/")); }
-              catch (err) {
-                // A module that needs real credentials at import time is not a
-                // build failure; a broken import path is.
-                if (/Cannot find module|Unexpected|SyntaxError|does not provide an export/i.test(err.message)) {
-                  console.error("FAIL " + f + " :: " + err.message); failed++;
-                } else {
-                  console.log("skip " + f + " (runtime env: " + err.message.slice(0, 60) + ")");
-                }
-              }
-            }
-            console.log(files.length + " modules checked, " + failed + " broken");
-            process.exit(failed ? 1 : 0);
-          '
+        run: node ../.github/scripts/smoke-import.mjs
         env:
           # Dummy values so config/env.js passes its required-vars gate. These
-          # never connect to anything — the check is "does the code load", not
+          # never connect to anything - the check is "does the code load", not
           # "does it talk to Google/Mongo".
           GOOGLE_PROJECT_ID: ci
           GOOGLE_CLIENT_EMAIL: ci@example.com
@@ -84,12 +65,13 @@ jobs:
           MONGO_DB_NAME: ci
 
       # The frontend bakes its API URL in at BUILD time and silently falls back
-      # to http://localhost:4001/api when VITE_API_URL is unset — which, served
-      # to a browser, points at the USER'S machine. Fail loudly here instead.
+      # to http://localhost:4001/api when VITE_API_URL is unset - which, served
+      # to a browser, points at the USER'S machine rather than the server. This
+      # asserts the value above actually reached the build.
       - name: Assert no localhost API URL in the bundle
         run: |
-          if grep -rq "localhost:4001" frontend/dist/assets 2>/dev/null; then
-            echo "::error::Built bundle contains http://localhost:4001 — VITE_API_URL was not set at build time."
+          if grep -rq 'localhost:4001' frontend/dist/assets 2>/dev/null; then
+            echo '::error::Built bundle contains http://localhost:4001 - VITE_API_URL did not reach the build.'
             exit 1
           fi
-          echo "OK - no localhost fallback baked into the bundle"
+          echo 'OK - no localhost fallback baked into the bundle'
