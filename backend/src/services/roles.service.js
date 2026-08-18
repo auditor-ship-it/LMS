@@ -225,14 +225,33 @@ export async function dynamicSidebarVisible(email, tabId) {
  * column and silently corrupt Sidebar Access data.
  *
  * Same problem, same fix, on the action-permissions grid: PERMISSION_KEYS'
- * last two entries (billing/receivables) gate Accounts & Collection's own
- * pages — confirmed unused anywhere in this app's frontend (no
- * canAct('billing')/canAct('receivables') call exists here) — so they're
- * excluded from display the same way, leaving saveEmailPermission's column
- * math against the full array untouched.
+ * billing/receivables entries gate Accounts & Collection's own pages —
+ * confirmed unused anywhere in this app's frontend (no canAct('billing')/
+ * canAct('receivables') call exists here) — so they're excluded from display
+ * the same way, leaving saveEmailPermission's column math against the full
+ * array untouched.
+ *
+ * offlease2/offlease4 joined them 2026-08-18 for the same reason, confirmed
+ * the same way: Stage 2 (Lifting/Arrival) and Stage 4 (Quotation/Order) were
+ * retired from the live workflow, StagePageBase is only ever reached with a
+ * stage number OffLeasePage's own tab strip offers (constants/stages.js'
+ * STAGES, which excludes both), and no other route passes stageNumber 2 or 4
+ * — so canAct('offlease2')/canAct('offlease4') can never be evaluated by any
+ * reachable screen. Their DATA is still preserved and shown on the container
+ * report; only the now-meaningless permission toggle is hidden.
+ *
+ * offlease9 is DIFFERENT and included at the requester's explicit choice, not
+ * by the same "confirmed unused" reasoning as the other three: Stage9Page.jsx
+ * actively calls canAct('offlease9') and is routed — hiding it here does not
+ * disable that check, it only removes the admin's ability to grant/revoke it
+ * through this grid. Whoever is in ACTION_PERMISSIONS.offleasedashboard's
+ * sibling, offlease9, in permissions.config.js keeps working exactly as
+ * today; nobody's access changes, but a NEW hire can no longer be added to
+ * Stage 9 without a code change (or offlease9 being taken back out of this
+ * set) until this is revisited.
  */
 const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'approve', 'expiry', 'renewDocument', 'offLease', 'deployedSummary']);
-const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables']);
+const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables', 'offlease2', 'offlease4', 'offlease9']);
 
 export async function getRolesAndAccessData(callerEmail) {
   assertRolesAdmin(callerEmail);

@@ -41,6 +41,8 @@ import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { cacheGet, cachePut } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
+import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
+import { getSalePersonResolver } from './salesCrmLeads.service.js';
 
 /* =============================================
    getExpiryDataByFilter — LMS.js 1358-1406
@@ -53,6 +55,19 @@ function padRow(row, len) {
   const out = row ? row.slice(0, len) : [];
   while (out.length < len) out.push('');
   return out;
+}
+
+/** First column whose header exactly matches one of `names` (case/space
+ *  insensitive), or -1. Located by header rather than hardcoded index: this
+ *  sheet has had columns inserted/removed by hand before (see the Off-Lease
+ *  Tracking drift elsewhere in this codebase), and a positional read would
+ *  silently use the wrong column instead of failing loudly. */
+function findHeaderCol(headers, ...names) {
+  for (let h = 0; h < headers.length; h++) {
+    const hd = String(headers[h] || '').trim().toLowerCase();
+    if (names.includes(hd)) return h;
+  }
+  return -1;
 }
 
 /**
@@ -96,7 +111,7 @@ export async function _expiryOrderNoMap() {
   return map;
 }
 
-export async function getExpiryDataByFilter(filterType) {
+export async function getExpiryDataByFilter(filterType, user) {
   // Same reasoning as _expiryOrderNoMap above: this is the read backing the
   // Lease Expiry / Renew & Document list views, matched by container number
   // rather than row position, so the Mongo mirror is safe here. The actual
@@ -114,6 +129,43 @@ export async function getExpiryDataByFilter(filterType) {
     if (allHeaders[h] && String(allHeaders[h]).toLowerCase().indexOf('valid') !== -1) { colIdx = h; break; }
   }
   if (colIdx === -1) return { headers: allHeaders.slice(0, 15), data: [], validColIdx: -1 };
+
+  /* USER-WISE VISIBILITY. `user` is req.user — the identity requireAuth
+   * resolved from the bearer token, never a frontend-supplied name/email/id.
+   * A scoped caller (see salePersonAccess.service.js) only ever gets rows
+   * whose "Sale Person" cell is theirs; everyone else (admins, and anyone
+   * with no mapped Sale Person identity) is unaffected — same list as before
+   * this feature existed.
+   *
+   * Located by header, not hardcoded to its current index 9 — see
+   * findHeaderCol above. */
+  const salePersonScope = salePersonScopeFor(user);
+  const salePersonCol = findHeaderCol(allHeaders, 'sale person');
+  if (salePersonScope && salePersonCol === -1) {
+    /* The column could not be located — fail CLOSED (show nothing) rather
+       than fail open (show everyone's records) for a scoped user. This is a
+       confidentiality feature: an empty list reads as a bug to report, which
+       is the safe failure; a leaked list is not. Unscoped callers (the
+       overwhelming majority) are entirely unaffected by this branch. */
+    console.error('[EXPIRY-ACCESS] "Sale Person" column not found — showing nothing to a scoped user rather than everyone.');
+    return { headers: allHeaders.slice(0, 15), data: [], validColIdx: (colIdx >= 1 ? colIdx + 1 : colIdx) };
+  }
+
+  /* ★ LIVE SALE PERSON. The sheet's own "Sale Person" cell is a stale copy —
+     when an admin reassigns a company to another salesperson, that happens in
+     the Sales CRM and the sheet is never updated. Resolve each row's owner
+     from the CRM's existing_leads collection instead, keyed by Customer Name
+     (salesCrmLeads.service.js — READ-ONLY; this app never reassigns anyone).
+     A company the CRM doesn't know keeps the sheet value, so the column can
+     never go blank, and a CRM outage degrades to exactly today's behaviour. */
+  const customerCol = findHeaderCol(allHeaders, 'customer name', 'client name');
+  const resolveSalePerson = await getSalePersonResolver();
+  const liveSalePerson = (row) => {
+    if (salePersonCol === -1) return '';
+    const sheetValue = safeStr(row[salePersonCol]);
+    if (customerCol === -1) return sheetValue;
+    return resolveSalePerson(row[customerCol]) || sheetValue;
+  };
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -139,6 +191,13 @@ export async function getExpiryDataByFilter(filterType) {
     // off-lease stages removed
     if (!include) continue;
 
+    /* Filter on the SAME value the row will display. Filtering on the stale
+       sheet cell while showing the live CRM name would hand a scoped user
+       rows visibly labelled with someone else's name (and hide rows that had
+       just been reassigned TO them). */
+    const salePerson = liveSalePerson(row);
+    if (salePersonScope && !matchesSalePersonScope(salePerson, salePersonScope)) continue;
+
     const expRaw = row[colIdx];
     const expDate = parseDate(expRaw); // Sheets API returns formatted strings, not Date objects — see format.js
     let days = '';
@@ -151,7 +210,12 @@ export async function getExpiryDataByFilter(filterType) {
       else band = 'safe';
     }
 
-    const displayRow = buildDisplayRow(row, 15, allHeaders);
+    /* Substitute the resolved owner on a COPY — the untouched `row` is what
+       the Update/Status/PO/agreement reads below still use, and nothing here
+       is ever written back to the sheet or to either database. */
+    const displaySrc = row.slice();
+    if (salePersonCol !== -1) displaySrc[salePersonCol] = salePerson;
+    const displayRow = buildDisplayRow(displaySrc, 15, allHeaders);
     /* ★ Order No as the 2nd column (joined from New Lease by container) */
     displayRow.splice(1, 0, ordMap[_normKey(row[0])] || '');
     if (filterType === 'renewed' || filterType === 'offlease') {

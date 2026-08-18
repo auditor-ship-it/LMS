@@ -10,6 +10,12 @@ export const getNewLeaseReport = () => apiClient.get('/expiry/new-lease-report')
 export const getExpiryData = (filter = 'pending') =>
   apiClient.get('/expiry', { params: { filter } }).then((r) => r.data);
 
+/** POST /api/expiry/sale-person/refresh — re-reads the Sales CRM's company ->
+ *  salesperson assignments right now, instead of waiting for the server's
+ *  30-minute cache to lapse. Resolves to { companies, syncedAt }. */
+export const refreshSalePersons = () =>
+  apiClient.post('/expiry/sale-person/refresh').then((r) => r.data);
+
 /** POST /api/expiry/action — Renew | Off-Lease row action. */
 export const saveExpiryAction = (rowId, timestamp, status) =>
   apiClient.post('/expiry/action', { rowId, timestamp, status }).then((r) => r.data.result);

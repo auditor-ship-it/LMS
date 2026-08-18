@@ -24,6 +24,14 @@
   margin: 0 0 12px;
 }
 
+/* Confirmation line for the "Sync Sale Person" button — an outcome, not a
+   failure, so it reads as muted text rather than the red .actionError. */
+.syncNote {
+  color: var(--text-3);
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+
 .clickCell { cursor: pointer; }
 
 /* Fits every column within the screen width — no horizontal scrollbar.

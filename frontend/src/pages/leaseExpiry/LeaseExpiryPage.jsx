@@ -7,7 +7,7 @@ import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchExpiryList, actionExpiryRow } from '../../services/expiry.service.js';
+import { fetchExpiryList, actionExpiryRow, syncSalePersons } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import styles from './LeaseExpiryPage.module.css';
@@ -54,6 +54,8 @@ export function LeaseExpiryPage() {
   const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState('');
 
   const headers = data?.headers || [];
   // Container No. alone isn't a unique row identifier — the same container
@@ -124,6 +126,28 @@ export function LeaseExpiryPage() {
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
   const handleBandChange = (v) => { setBand(v); resetPage(); };
 
+  /* "Sale Person" is not this sheet's own column any more — it is resolved
+     live from the Sales CRM, which the server caches for 30 minutes. This
+     button skips that wait: it makes the server re-read the CRM collection
+     now and re-fetches the list, so a company reassigned moments ago shows
+     its new owner immediately. It only ever READS the CRM — reassignment
+     happens in the Sales CRM and nowhere else. */
+  const handleSyncSalePersons = async () => {
+    setSyncing(true);
+    setSyncNote('');
+    setActionError('');
+    try {
+      const res = await syncSalePersons();
+      await reload();
+      const at = new Date(res?.syncedAt || Date.now()).toLocaleTimeString();
+      setSyncNote(`Sale Person updated from the Sales CRM — ${res?.companies ?? 0} companies, synced ${at}.`);
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const runAction = async (item, status) => {
     const containerNo = item.row?.[0];
     const key = `${containerNo}-${status}`;
@@ -169,7 +193,14 @@ export function LeaseExpiryPage() {
       <PageHeader
         title="Lease Expiry"
         subtitle="Deployed containers approaching or past their lease expiry date"
-        actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}
+        actions={
+          <>
+            <Button variant="secondary" size="sm" loading={syncing} onClick={handleSyncSalePersons}>
+              Sync Sale Person
+            </Button>
+            <Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>
+          </>
+        }
       />
 
       <div className={styles.kpiRow}>
@@ -189,6 +220,7 @@ export function LeaseExpiryPage() {
 
       <Card>
         {actionError && <p className={styles.actionError}>{actionError}</p>}
+        {syncNote && <p className={styles.syncNote}>{syncNote}</p>}
 
         {!selected ? (
           <>

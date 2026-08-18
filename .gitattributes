@@ -1,0 +1,8 @@
+# Shell scripts and Node scripts MUST keep LF endings. A .sh file checked out
+# with CRLF fails on Linux with "\r: command not found" — and these run on the
+# CI runner and the VPS, so a Windows checkout committing CRLF would break
+# deploys in a way that is genuinely hard to read from the error message.
+*.sh text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
