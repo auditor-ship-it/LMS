@@ -6,6 +6,13 @@
  * — same GET /api/expiry?filter=... endpoint, different `filter` value) both
  * read that sheet, so filtering happens once here and both pages inherit it.
  *
+ * NOTE: the value fed to matchesSalePersonScope() is no longer that sheet
+ * cell verbatim — expiry.service.js first resolves the row's owner from the
+ * Sales CRM (salesCrmLeads.service.js), falling back to the sheet cell only
+ * for companies the CRM does not carry. That is deliberate: the name a
+ * scoped user is filtered BY must be the name the row DISPLAYS, or they
+ * would be shown rows labelled with somebody else's name.
+ *
  * This is a DIFFERENT ownership axis from the off-lease workflow-role
  * filtering already in tasks.service.js (MY_TASK_BY_EMAIL_BACKEND — who
  * verifies/approves/bills, a fixed set of desks). That one stays untouched;
@@ -22,8 +29,10 @@
 import { isRolesAdmin } from './roles.service.js';
 import { safeStr } from '../utils/format.js';
 
-/** Login email -> the exact Deployed-sheet "Sale Person" value that login
- *  is restricted to. Add a login here to bring it under this filter. */
+/** Login email -> the exact "Sale Person" value that login is restricted to.
+ *  Add a login here to bring it under this filter. These four names all exist
+ *  verbatim in the Sales CRM's `assignedTo` field as well as in the sheet, so
+ *  the switch to CRM-resolved owners did not change who any of them sees. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',

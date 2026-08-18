@@ -54,11 +54,33 @@ export const env = {
   mailPass: process.env.MAIL_PASS || '',
   mailFrom: process.env.MAIL_FROM || '',
 
+  /* -- Sales CRM (READ-ONLY) ---------------------------------------------
+     A SEPARATE Atlas cluster owned by the Sales CRM app. Its
+     `existing_leads` collection is the source of truth for which
+     salesperson a company is assigned to (admins reassign leads there, and
+     only there). Lease Expiry mirrors that onto its "Sale Person" column --
+     see services/salesCrmLeads.service.js. This app never writes to it.
+
+     Optional on purpose: leave SALES_CRM_MONGODB_URI unset and Lease Expiry
+     keeps showing the Deployed sheet's own "Sale Person" cell, exactly as it
+     did before this integration existed. */
+  salesCrmUri: process.env.SALES_CRM_MONGODB_URI || '',
+  salesCrmDbName: process.env.SALES_CRM_DB_NAME || 'sales_crm',
+  salesCrmLeadsCollection: process.env.SALES_CRM_LEADS_COLLECTION || 'existing_leads',
+  /* How long the company -> salesperson map is held in memory. A reassignment
+     in the CRM shows up on Lease Expiry within this window (plus the 90s HTTP
+     response cache in middlewares/responseCache.middleware.js). */
+  salesCrmCacheSecs: Number(process.env.SALES_CRM_CACHE_SECONDS) || 120,
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
   outboxPollMs: Number(process.env.OUTBOX_POLL_MS) || 7000
 };
+
+if (!env.salesCrmUri) {
+  console.warn('[env] SALES_CRM_MONGODB_URI not set — Lease Expiry will show the Deployed sheet\'s own "Sale Person" values instead of the live Sales CRM assignment. See README.md.');
+}
 
 if (!env.googleDriveFolderId) {
   console.warn('[env] GOOGLE_DRIVE_FOLDER_ID not set — file uploads (verify docs, payment proofs, agreements) will fail until you share a Drive folder with the service account and set this var. See README.md.');
