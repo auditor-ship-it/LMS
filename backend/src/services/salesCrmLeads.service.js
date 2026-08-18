@@ -33,6 +33,7 @@ import { findLeads, isSalesCrmConfigured } from '../config/salesCrmDb.js';
 import { env } from '../config/env.js';
 import { normClientName } from '../utils/normalize.js';
 import { logger } from '../utils/logger.js';
+import { AppError } from '../utils/AppError.js';
 
 /** Case/punctuation-insensitive company key. Deliberately stricter than
  *  normClientName: it keeps "Cipla Unit 1" distinct from "Cipla Unit 2",
@@ -53,10 +54,12 @@ function leadTimestamp(lead) {
 /* Module-level cache. `inFlight` collapses concurrent builds into one CRM
    read — My Task calls getExpiryDataByFilter twice per request, and several
    employees hit these pages at the same time each morning. */
-let cache = null;        // { exact: Map, fuzzy: Map, expiresAt: number }
+let cache = null;        // { exact: Map, fuzzy: Map, gen: number, expiresAt: number }
 let inFlight = null;
+let generation = 0;      // ordering tag, see commit()
 
 async function buildIndex() {
+  const gen = ++generation;
   const leads = await findLeads({}, { companyName: 1, assignedTo: 1, _reassignedAt: 1, _lastUpdatedAt: 1 });
 
   const exact = new Map();          // key -> { who, ts }
@@ -91,14 +94,23 @@ async function buildIndex() {
   }
 
   logger.info(`[SALES-CRM] Lead index built: ${leads.length} leads | ${exact.size} exact keys | ${fuzzy.size} fuzzy keys${dropped ? ` | ${dropped} ambiguous fuzzy keys skipped` : ''}`);
-  return { exact, fuzzy, expiresAt: Date.now() + env.salesCrmCacheSecs * 1000 };
+  return { exact, fuzzy, gen, expiresAt: Date.now() + env.salesCrmCacheSecs * 1000 };
+}
+
+/** Publishes a built index, UNLESS a newer build has started since — an
+ *  older read that happens to finish last must not overwrite a newer one, or
+ *  pressing "Sync Sale Person" could be silently undone a moment later by a
+ *  concurrent page load whose CRM read began before the button was pressed. */
+function commit(idx) {
+  if (idx.gen === generation) cache = idx;
+  return idx;
 }
 
 async function getIndex() {
   if (cache && Date.now() < cache.expiresAt) return cache;
   if (inFlight) return inFlight;
   inFlight = buildIndex()
-    .then((idx) => { cache = idx; return idx; })
+    .then(commit)
     .finally(() => { inFlight = null; });
   return inFlight;
 }
@@ -131,8 +143,28 @@ export async function getSalePersonResolver() {
   };
 }
 
-/** Drops the cached index so the next read re-queries the CRM. Exposed for
- *  an explicit "Refresh" path; the TTL handles the normal case. */
+/** Drops the cached index so the next read re-queries the CRM. The TTL
+ *  (env.salesCrmCacheSecs) handles the normal case on its own. */
 export function invalidateSalesCrmCache() {
   cache = null;
+}
+
+/**
+ * Forces an immediate re-read of the CRM collection, backing the "Sync Sale
+ * Person" button on Lease Expiry. Still a pure READ — it re-runs the same
+ * projected find() and rebuilds the in-memory index; nothing is written to
+ * the CRM cluster.
+ *
+ * Returns a small summary for the button to report back, and THROWS on
+ * failure: a user who pressed a button deserves to be told the sync failed,
+ * unlike the passive page load, which silently falls back to sheet values.
+ */
+export async function refreshSalesCrmLeadIndex() {
+  if (!isSalesCrmConfigured()) {
+    throw new AppError('Sales CRM is not configured on this server (SALES_CRM_MONGODB_URI is unset).');
+  }
+  cache = null;
+  inFlight = null;
+  const idx = commit(await buildIndex());
+  return { companies: idx.exact.size, syncedAt: new Date().toISOString() };
 }

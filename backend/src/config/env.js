@@ -67,10 +67,12 @@ export const env = {
   salesCrmUri: process.env.SALES_CRM_MONGODB_URI || '',
   salesCrmDbName: process.env.SALES_CRM_DB_NAME || 'sales_crm',
   salesCrmLeadsCollection: process.env.SALES_CRM_LEADS_COLLECTION || 'existing_leads',
-  /* How long the company -> salesperson map is held in memory. A reassignment
-     in the CRM shows up on Lease Expiry within this window (plus the 90s HTTP
-     response cache in middlewares/responseCache.middleware.js). */
-  salesCrmCacheSecs: Number(process.env.SALES_CRM_CACHE_SECONDS) || 120,
+  /* How long the company -> salesperson map is held in memory: a background
+     re-read every 30 minutes, in effect. A reassignment made in the CRM
+     appears on Lease Expiry within this window on its own; the "Sync Sale
+     Person" button on that page (POST /api/expiry/sale-person/refresh) drops
+     the cache and re-reads immediately for anyone who cannot wait. */
+  salesCrmCacheSecs: Number(process.env.SALES_CRM_CACHE_SECONDS) || 1800,
 
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,

@@ -15,6 +15,13 @@ router.get('/', asyncHandler(expiryController.list));
 router.get('/renewal-log', asyncHandler(expiryController.renewalLog));
 router.get('/new-lease-report', asyncHandler(expiryController.newLeaseReport));
 
+/* Read-only refresh of the Sales CRM salesperson map — it mutates nothing,
+   in this app or the CRM, so it follows the same open-read convention as the
+   GETs above rather than sitting behind an action permission. POST (not GET)
+   because it must bust the cached reads, which responseCache only does for
+   non-GET requests. */
+router.post('/sale-person/refresh', asyncHandler(expiryController.refreshSalePersons));
+
 router.post('/documents/upload', requirePermission('document'), asyncHandler(expiryController.uploadDocument));
 router.post('/documents/complete', requirePermission('document'), asyncHandler(expiryController.completeDocumentStage));
 

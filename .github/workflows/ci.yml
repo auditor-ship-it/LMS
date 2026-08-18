@@ -1,0 +1,95 @@
+# Runs on every push and pull request. Catches breakage BEFORE it can reach
+# main, so the deploy workflow (deploy.yml) is only ever handed code that has
+# already been linted, built and smoke-tested.
+name: CI
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    name: Lint, build and smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 20 to match the VPS exactly (node v20.20.2 there). Building on a
+      # newer major than production can hide syntax/API problems that only
+      # surface after deploy.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install backend deps
+        run: npm ci --prefix backend
+
+      - name: Install frontend deps
+        run: npm ci --prefix frontend
+
+      - name: Lint frontend
+        run: npm run lint --prefix frontend
+
+      - name: Build frontend
+        run: npm run build --prefix frontend
+
+      # The backend has no test suite, so this is the honest substitute: import
+      # every module so a syntax error, a bad import path or a missing export
+      # fails the build. It is also the ONLY check that catches case-mismatched
+      # imports — Windows/macOS resolve them fine and the Linux VPS does not,
+      # which has already broken one deploy (commit c88461a).
+      - name: Smoke-test backend modules
+        working-directory: backend
+        run: |
+          node --input-type=module -e '
+            import { readdir } from "node:fs/promises";
+            import { join } from "node:path";
+            async function walk(dir) {
+              const out = [];
+              for (const e of await readdir(dir, { withFileTypes: true })) {
+                const p = join(dir, e.name);
+                if (e.isDirectory()) out.push(...await walk(p));
+                else if (e.name.endsWith(".js")) out.push(p);
+              }
+              return out;
+            }
+            const files = await walk("src");
+            let failed = 0;
+            for (const f of files) {
+              try { await import("./" + f.split("\\").join("/")); }
+              catch (err) {
+                // A module that needs real credentials at import time is not a
+                // build failure; a broken import path is.
+                if (/Cannot find module|Unexpected|SyntaxError|does not provide an export/i.test(err.message)) {
+                  console.error("FAIL " + f + " :: " + err.message); failed++;
+                } else {
+                  console.log("skip " + f + " (runtime env: " + err.message.slice(0, 60) + ")");
+                }
+              }
+            }
+            console.log(files.length + " modules checked, " + failed + " broken");
+            process.exit(failed ? 1 : 0);
+          '
+        env:
+          # Dummy values so config/env.js passes its required-vars gate. These
+          # never connect to anything — the check is "does the code load", not
+          # "does it talk to Google/Mongo".
+          GOOGLE_PROJECT_ID: ci
+          GOOGLE_CLIENT_EMAIL: ci@example.com
+          GOOGLE_PRIVATE_KEY: ci
+          GOOGLE_SHEET_ID: ci
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          MONGO_DB_NAME: ci
+
+      # The frontend bakes its API URL in at BUILD time and silently falls back
+      # to http://localhost:4001/api when VITE_API_URL is unset — which, served
+      # to a browser, points at the USER'S machine. Fail loudly here instead.
+      - name: Assert no localhost API URL in the bundle
+        run: |
+          if grep -rq "localhost:4001" frontend/dist/assets 2>/dev/null; then
+            echo "::error::Built bundle contains http://localhost:4001 — VITE_API_URL was not set at build time."
+            exit 1
+          fi
+          echo "OK - no localhost fallback baked into the bundle"
