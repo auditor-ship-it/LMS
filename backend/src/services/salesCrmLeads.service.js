@@ -17,17 +17,20 @@
  * MATCHING
  * The two systems name companies by hand, so they never match byte-for-byte.
  * Two passes, strictest first:
- *   1. EXACT — case/punctuation-insensitive equality. Measured against live
- *      data on 2026-08-18: 333 of 355 Lease Expiry rows.
+ *   1. EXACT — case/punctuation-insensitive equality, after stripping the
+ *      CRM's "(New)"/"(Added)" provenance marker (stripProvenance below).
  *   2. FUZZY — normClientName() (drops "c/o ..." tails, "unit N", corporate
  *      suffixes), and ONLY when that key resolves to exactly ONE salesperson
  *      across the whole CRM. Covers a further 8 rows ("LAURUS LABS LIMITED"
  *      vs "Laurus Labs Ltd"). A fuzzy key naming two different salespeople
  *      is dropped rather than guessed — the same measurement found zero such
  *      keys today, but a future lead could create one.
- * Anything still unmatched (14 rows today, e.g. "HATSUN AGRO PRODUCT
- * LIMITED", which has no CRM lead at all) keeps the sheet's own value. The
- * column never goes blank because of this feature.
+ * Anything still unmatched keeps the sheet's own value, so the column never
+ * goes blank because of this feature. That is 4 of 354 rows today — one
+ * customer the CRM spells differently enough that only a human can call it
+ * ("ORBITTAL ... ENGINEERING PROJECTS PVT LTD" vs the CRM's "Orbittal ...
+ * Engineering Project Pvt"), where both systems happen to name the same
+ * owner anyway.
  */
 import { findLeads, isSalesCrmConfigured } from '../config/salesCrmDb.js';
 import { env } from '../config/env.js';
@@ -35,11 +38,68 @@ import { normClientName } from '../utils/normalize.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../utils/AppError.js';
 
+/**
+ * The CRM records how a lead ENTERED the system by appending a marker to the
+ * company name: "(New)" (98 leads today) and "(Added)" (21). That is
+ * provenance, not identity — "KPN FARM FRESH PRIVATE LIMITED (New)" is the
+ * same customer the Deployed sheet calls "KPN FARM FRESH PRIVATE LIMITED",
+ * and leaving the marker in the key is exactly what kept that container
+ * showing its stale sheet owner ("Pushpalata") after the lead had been
+ * reassigned to Gauri.
+ *
+ * ONLY these two, and only in trailing position. Every other trailing
+ * parenthetical this collection uses is identifying and must be preserved:
+ * "(SEZ)", "(EOU)", "(Unit VI)", "(Karnataka)", "(Hyderabad)" distinguish
+ * real sites of one company that can belong to DIFFERENT salespeople —
+ * Dr Reddy's alone has eleven such leads. Stripping parentheticals in
+ * general would merge them and start attributing containers to whichever
+ * site's owner happened to sort last.
+ */
+const LEAD_PROVENANCE_SUFFIX = /\s*\((?:new|added)\)\s*$/i;
+
+function stripProvenance(name) {
+  return String(name == null ? '' : name).replace(LEAD_PROVENANCE_SUFFIX, '');
+}
+
+/** Corporate suffixes that carry no identity — same list normClientName
+ *  drops, needed separately here to test an initialism against the words
+ *  that actually name the company. */
+const NAME_STOPWORDS = new Set(['pvt', 'private', 'ltd', 'limited', 'llp', 'company', 'co', 'corporation', 'corp', 'inc', 'and', 'the']);
+
+/**
+ * Drops a trailing "(ABC)" ONLY when ABC is the initialism of the words
+ * before it — "Hatsun Agro Product Ltd (HAP)" is the same customer the
+ * Deployed sheet calls "HATSUN AGRO PRODUCT LIMITED".
+ *
+ * The rule is self-validating, which is the whole point of shaping it this
+ * way rather than keeping a list of abbreviations to strip: "(SEZ)", "(EOU)",
+ * "(India)", "(Karnataka)" are not initialisms of the names they follow, so
+ * they survive untouched and the site-level leads they distinguish stay
+ * distinct. It fires on exactly one lead in the collection today.
+ */
+function stripInitialism(name) {
+  const m = String(name).trim().match(/^(.*?)\s*\(([A-Za-z]{2,6})\)$/);
+  if (!m) return String(name);
+  const words = m[1].toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w && !NAME_STOPWORDS.has(w));
+  return words.map((w) => w[0]).join('') === m[2].toLowerCase() ? m[1] : String(name);
+}
+
+/** The company name reduced to the parts that actually identify the customer,
+ *  before either matching pass keys off it. */
+function canonicalName(name) {
+  return stripInitialism(stripProvenance(name));
+}
+
 /** Case/punctuation-insensitive company key. Deliberately stricter than
- *  normClientName: it keeps "Cipla Unit 1" distinct from "Cipla Unit 2",
- *  which are separate leads with potentially separate owners. */
+ *  fuzzyKey: it keeps "Cipla Unit 1" distinct from "Cipla Unit 2", which are
+ *  separate leads with potentially separate owners. */
 function exactKey(name) {
-  return String(name == null ? '' : name).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return canonicalName(name).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** Looser key for pass 2 — see the MATCHING note in the file header. */
+function fuzzyKey(name) {
+  return normClientName(canonicalName(name));
 }
 
 /** When two CRM leads collapse to the same key, the most recently touched
@@ -76,7 +136,7 @@ async function buildIndex() {
       if (!prev || ts >= prev.ts) exact.set(ek, { who, ts });
     }
 
-    const fk = normClientName(lead.companyName);
+    const fk = fuzzyKey(lead.companyName);
     if (fk) {
       if (!fuzzyRaw.has(fk)) fuzzyRaw.set(fk, new Map());
       const owners = fuzzyRaw.get(fk);
@@ -138,7 +198,7 @@ export async function getSalePersonResolver() {
     if (!ek) return null;
     const hit = idx.exact.get(ek);
     if (hit) return hit.who;
-    const fk = normClientName(customerName);
+    const fk = fuzzyKey(customerName);
     return (fk && idx.fuzzy.get(fk)) || null;
   };
 }
