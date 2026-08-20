@@ -1,0 +1,168 @@
+.banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border-left: 3px solid transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.bannerSuccess { background: var(--success-bg); color: var(--success); border-left-color: var(--success); }
+.bannerError { background: var(--error-bg); color: var(--error); border-left-color: var(--error); }
+
+/* ---------------- key table ---------------- */
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; font-size: 13px; border-collapse: collapse; }
+.table thead th {
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--f-display);
+  text-transform: uppercase;
+  font-size: 9.5px;
+  letter-spacing: 0.9px;
+  font-weight: 700;
+  padding: 10px 13px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.table tbody td { padding: 10px 13px; border-bottom: 1px solid var(--line); color: var(--text); vertical-align: top; }
+.table tbody tr:last-child td { border-bottom: none; }
+.revokedRow { opacity: 0.55; }
+.labelCell { font-weight: 700; white-space: nowrap; }
+.keyCode { font-family: var(--f-mono); font-size: 11.5px; color: var(--text-2); }
+.dimCell { font-size: 11.5px; color: var(--text-2); white-space: nowrap; }
+.byWhom { color: var(--text-3); }
+.actionCell { text-align: right; }
+
+.scopeWrap { display: flex; flex-wrap: wrap; gap: 5px; }
+.scopeChip {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.scopeChipWrite { background: var(--warn-bg); color: var(--warn); }
+.actsAsNote { margin-top: 4px; font-size: 10.5px; color: var(--text-3); }
+
+.statusActive { color: var(--success); font-weight: 700; font-size: 12px; }
+.statusRevoked { color: var(--text-3); font-weight: 700; font-size: 12px; }
+
+/* ---------------- create form ---------------- */
+.createForm { display: flex; flex-direction: column; gap: var(--s-4); }
+.field { display: flex; flex-direction: column; gap: 8px; }
+.fieldLabel { font-family: var(--f-display); font-size: 12px; font-weight: 700; color: var(--text); }
+.fieldInput {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+}
+.fieldInput:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.scopeTable { border: 1px solid var(--line); border-radius: var(--r-sm); overflow: hidden; }
+.scopeTableHead, .scopeTableRow {
+  display: grid;
+  grid-template-columns: 1fr 56px 56px;
+  align-items: center;
+  gap: 8px;
+}
+.scopeTableHead {
+  padding: 7px 12px;
+  background: var(--surface-2);
+  font-family: var(--f-display);
+  text-transform: uppercase;
+  font-size: 9.5px;
+  letter-spacing: 0.7px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.scopeTableHead span:not(.scopeDomainHead) { text-align: center; }
+.scopeTableRow {
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--text);
+}
+.scopeTableRow input[type='checkbox'] {
+  justify-self: center;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.scopeDomainName { font-weight: 600; }
+.scopeNoWrite { text-align: center; color: var(--text-3); }
+.scopeRowDisabled { opacity: 0.4; }
+.scopeAllRow { background: var(--accent-soft); font-weight: 700; }
+.scopeHint { margin: 6px 0 0; font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+
+.createError { font-size: 12px; font-weight: 600; color: var(--error); margin: 0; }
+.createFooter { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
+/* ---------------- new key reveal ---------------- */
+.reveal { display: flex; flex-direction: column; gap: var(--s-4); }
+.revealWarn {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.revealKeyRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.revealKey {
+  flex: 1;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-all;
+  user-select: all;
+}
+.revealScopes { margin: 0; font-size: 12px; color: var(--text-2); }
+
+/* ---------------- docs ---------------- */
+.docs { display: flex; flex-direction: column; gap: var(--s-3); }
+.docsIntro { margin: 0; font-size: 13px; color: var(--text-2); line-height: 1.55; }
+.docsIntro code { font-family: var(--f-mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.docsCode {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--f-mono);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.docsEndpoints { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.docsRow { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.docsDomain {
+  flex: none;
+  width: 66px;
+  font-family: var(--f-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 9.5px;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.docsPath { font-family: var(--f-mono); color: var(--text-2); word-break: break-all; }
+.docsPathWrite { color: var(--warn); }

@@ -77,6 +77,12 @@ export const env = {
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
+
+  // Kill switch for the public read-only API (/api/public/v1) — flip to
+  // 'false' in the env file to take it offline instantly (no code change,
+  // no redeploy) if a key leaks or the endpoint needs to come down in a
+  // hurry. Defaults to enabled since the feature is meant to be live.
+  enablePublicApi: String(process.env.ENABLE_PUBLIC_API ?? 'true').toLowerCase() !== 'false',
   outboxPollMs: Number(process.env.OUTBOX_POLL_MS) || 7000
 };
 

@@ -10,6 +10,7 @@ import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchExpiryList, actionExpiryRow, syncSalePersons } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
+import { distinctOptionsForColumn } from '../../utils/tableFilters.js';
 import styles from './LeaseExpiryPage.module.css';
 
 // The KPI row shows one card per bucket. Critical/Warning/Safe are combined
@@ -51,6 +52,7 @@ export function LeaseExpiryPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 250);
   const [band, setBand] = useState('');
+  const [salePerson, setSalePerson] = useState('');
   const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(null);
@@ -76,6 +78,18 @@ export function LeaseExpiryPage() {
     [visibleColIdx, headers]
   );
   const tableHeaders = tableColIdx.map((i) => headers[i]);
+
+  /* Located by header text, not a fixed index -- "Sale Person" is a
+     CRM-resolved column expiry.service.js adds to the displayed headers,
+     not a fixed position in the underlying sheet. */
+  const salePersonColIdx = useMemo(
+    () => headers.findIndex((h) => /^sale person$/i.test(String(h || '').trim())),
+    [headers]
+  );
+  const salePersonOptions = useMemo(
+    () => distinctOptionsForColumn(rows, salePersonColIdx),
+    [rows, salePersonColIdx]
+  );
 
   const bandCounts = useMemo(() => {
     const c = { overdue: 0, critical: 0, warning: 0, safe: 0 };
@@ -109,6 +123,9 @@ export function LeaseExpiryPage() {
 
   const filtered = useMemo(() => {
     let list = rows;
+    if (salePerson && salePersonColIdx >= 0) {
+      list = list.filter((r) => String((r.row || [])[salePersonColIdx] ?? '').trim() === salePerson);
+    }
     if (band === 'upcoming') list = list.filter((r) => r.band !== 'overdue');
     else if (band.startsWith('overdue-')) {
       const bucket = band.slice('overdue-'.length);
@@ -117,7 +134,7 @@ export function LeaseExpiryPage() {
     const term = debouncedSearch.trim().toLowerCase();
     if (term) list = list.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
     return list;
-  }, [rows, band, debouncedSearch]);
+  }, [rows, band, salePerson, salePersonColIdx, debouncedSearch]);
 
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filtered, 10);
 
@@ -125,6 +142,7 @@ export function LeaseExpiryPage() {
 
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
   const handleBandChange = (v) => { setBand(v); resetPage(); };
+  const handleSalePersonChange = (v) => { setSalePerson(v); resetPage(); };
 
   /* "Sale Person" is not this sheet's own column any more — it is resolved
      live from the Sales CRM, which the server caches for 30 minutes. This
@@ -227,7 +245,12 @@ export function LeaseExpiryPage() {
             <div className={styles.toolbar}>
               <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
               <FilterBar
-                filters={[{ key: 'band', label: 'Ageing', options: BAND_OPTIONS, value: band, onChange: handleBandChange }]}
+                filters={[
+                  { key: 'band', label: 'Ageing', options: BAND_OPTIONS, value: band, onChange: handleBandChange },
+                  ...(salePersonColIdx >= 0 && salePersonOptions.length
+                    ? [{ key: 'salePerson', label: 'Sale Person', options: salePersonOptions, value: salePerson, onChange: handleSalePersonChange }]
+                    : [])
+                ]}
               />
             </div>
 

@@ -8,6 +8,7 @@ export const ROUTES = {
   OFF_LEASE: '/off-lease',
   DEPLOYED_SUMMARY: '/deployed-summary',
   ROLES_ACCESS: '/roles-access',
+  API_ACCESS: '/api-access',
   REPORTS: '/reports',
   STAGES: '/stages',
   stage: (n) => `/stages/stage-${n}`

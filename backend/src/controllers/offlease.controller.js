@@ -4,6 +4,7 @@ import * as remarksService from '../services/offleaseRemarks.service.js';
 import * as stage8Service from '../services/stage8.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
+import { notFound } from '../utils/AppError.js';
 
 /* ---- Core 8-stage pipeline ---- */
 
@@ -29,7 +30,7 @@ export async function getData(req, res) {
     }
   }
 
-  const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys });
+  const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys }, req.user);
   if (stage === STAGE2_INTERNAL) await stage8Service.enrichWithStage8Movements(data);
 
   /* TAT per row — how long this container has been waiting AT THIS STAGE
@@ -59,7 +60,7 @@ export async function getStageCounts(req, res) {
   const counts = {};
   await Promise.all(stages.map(async (s) => {
     try {
-      const d = await offLeaseService.getOffLeaseData(s, { deliveredKeys });
+      const d = await offLeaseService.getOffLeaseData(s, { deliveredKeys }, req.user);
       counts[s] = d.data.length;
     } catch (e) {
       counts[s] = null;   // null = unknown, so the tab shows no badge at all
@@ -67,7 +68,7 @@ export async function getStageCounts(req, res) {
   }));
 
   try {
-    counts.approval = (await offLeaseService.getOffLeaseApprovalData()).data.length;
+    counts.approval = (await offLeaseService.getOffLeaseApprovalData(req.user)).data.length;
   } catch (e) { counts.approval = null; }
 
   res.json({ counts });
@@ -75,7 +76,7 @@ export async function getStageCounts(req, res) {
 
 export async function getStageDetail(req, res) {
   const stage = parseInt(req.params.stage, 10);
-  res.json(await offLeaseService.getOffLeaseStageDetail(req.params.containerNo, stage));
+  res.json(await offLeaseService.getOffLeaseStageDetail(req.params.containerNo, stage, req.user));
 }
 
 export async function saveStage(req, res) {
@@ -93,7 +94,7 @@ export async function nextLeaseId(req, res) {
 /* ---- Pending Approval queue ---- */
 
 export async function getApprovalData(req, res) {
-  res.json(await offLeaseService.getOffLeaseApprovalData());
+  res.json(await offLeaseService.getOffLeaseApprovalData(req.user));
 }
 
 export async function saveApprovalAction(req, res) {
@@ -105,8 +106,18 @@ export async function saveApprovalAction(req, res) {
 
 /* ---- Dashboard container lookup ---- */
 
-/** Proxy to the Accounts & Collection app — keeps its credentials server-side. */
+/** Proxy to the Accounts & Collection app — keeps its credentials server-side.
+ *  `clientName` in the query string is caller-supplied and untrusted for
+ *  access control (a scoped caller could put any name there) — visibility
+ *  is decided from the container's OWN client name(s) on the Off-Lease/
+ *  Deployed sheets, never from this parameter. See "Important Backend
+ *  Requirement" in the 2026-08-20 user-wise client access request: a Sales
+ *  login must not get another client's invoice/billing data even by editing
+ *  request parameters. */
 export async function getOutstanding(req, res) {
+  const visible = await offLeaseService.isOffLeaseContainerVisibleToUser(req.params.containerNo, req.user);
+  if (!visible) throw notFound(`Container not found: ${req.params.containerNo}`);
+
   const { getOutstandingForContainer } = await import('../services/accountsApi.service.js');
   const data = await getOutstandingForContainer(req.params.containerNo, req.query.clientName || '');
 
@@ -127,7 +138,7 @@ export async function getOutstanding(req, res) {
 export async function getContainerDetail(req, res) {
   // ?leaseId= picks one record when a container has been off-leased more than
   // once; without it the service returns the candidate list to choose from.
-  const detail = await offLeaseService.getOffLeaseContainerDetail(req.params.containerNo, req.query.leaseId);
+  const detail = await offLeaseService.getOffLeaseContainerDetail(req.params.containerNo, req.query.leaseId, req.user);
 
   /* Stage 9 movements are joined HERE rather than inside offlease.service so
      the two services keep pointing one way: stage9 reads offlease (for the
@@ -208,7 +219,7 @@ export async function getContainerDetail(req, res) {
 }
 
 export async function getDashboardData(req, res) {
-  const data = await offLeaseService.getOffLeaseDashboardData();
+  const data = await offLeaseService.getOffLeaseDashboardData(req.user);
 
   /* Apply the same FMS release the stage queues use. The dashboard classifies
      purely from the sheet's status columns, so a container the queues had
@@ -268,6 +279,12 @@ export async function getDashboardData(req, res) {
 /* ---- Dashboard live remarks ---- */
 
 export async function getRemarkThread(req, res) {
+  // Remarks are fetched by container number directly, not through a
+  // pre-filtered list — a scoped caller could otherwise read another
+  // client's remark thread just by guessing/typing a container number.
+  const visible = await offLeaseService.isOffLeaseContainerVisibleToUser(req.params.containerNo, req.user);
+  if (!visible) throw notFound(`Container not found: ${req.params.containerNo}`);
+
   res.json({ remarks: await remarksService.getRemarkThread(req.params.containerNo, req.query.leaseId) });
 }
 

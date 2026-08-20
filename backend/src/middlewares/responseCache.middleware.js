@@ -53,7 +53,13 @@ const GLOBAL_LOCK_KEY = 'httplock:global';
 // remaining domain migrates to Mongo, add its prefix here; once all domains
 // have migrated this whole middleware (and its global lockout) should be
 // removed from app.js entirely rather than grown further.
-const SKIP_PREFIXES = ['/api/auth', '/api/uploads', '/api/health', '/api/dashboard', '/api/tasks', '/api/roles'];
+// /api/public is unauthenticated by design (X-Api-Key, not a session) and
+// would never populate req.user anyway, so it already falls through this
+// cache untouched — listed here only to document that explicitly rather
+// than leave a new reader to work it out from the req.user gate below.
+// /api/api-keys is the low-traffic admin screen managing those keys; no
+// Sheets quota reason to cache it.
+const SKIP_PREFIXES = ['/api/auth', '/api/uploads', '/api/health', '/api/dashboard', '/api/tasks', '/api/roles', '/api/public', '/api/api-keys'];
 
 function topResourcePath(originalPath) {
   // "/api/verify/12/action" -> "/api/verify" — the shared prefix every GET

@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, authApi, apiErrorMessage } from '../../shared/auth/index.js';
 import { Button } from '../../components/ui/Button.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
+import { BRAND } from '../offLease/brand.js';
 import styles from './LoginPage.module.css';
 
 export function LoginPage() {
@@ -74,10 +75,6 @@ export function LoginPage() {
     </div>
   );
 
-  const brandMark = (
-    <span className={styles.mark}><Icon name="container" /></span>
-  );
-
   const backToLogin = (
     <div className={styles.backRow}>
       <Icon name="chev-left" />
@@ -98,34 +95,23 @@ export function LoginPage() {
       <aside className={styles.side} aria-hidden="true">
         <div className={styles.sideInner}>
           <div className={styles.lockup}>
-            {brandMark}
+            {/* Crystal mark, then the product name — brand first, app second.
+                Inverted to white here; the same artwork is used unaltered on
+                the light form panel below, where black is already correct. */}
+            <img className={styles.lockupLogo} src={BRAND.logoDataUri} alt="Crystal" />
+            <span className={styles.lockupDivider} aria-hidden="true" />
             <span className={styles.lockupText}>
-              <span className={styles.lockupName}>Lease Management</span>
-              <span className={styles.lockupOrg}>Crystal Group</span>
+              <span className={styles.lockupName}>Lease Management System</span>
             </span>
           </div>
         </div>
 
-        <div className={styles.sideInner}>
-          <h2 className={styles.headline}>Every container, <em>every stage</em>.</h2>
-          <p className={styles.sub}>
-            Lease, renewal and off-lease movement tracked end to end — from intimation
-            through inspection, billing and FMS closure.
-          </p>
-          <div className={styles.points}>
-            <div className={styles.point}>
-              <span className={styles.pointIcon}><Icon name="container" /></span>
-              Lease, renewal and off-lease workflow
-            </div>
-            <div className={styles.point}>
-              <span className={styles.pointIcon}><Icon name="clock" /></span>
-              Stage-wise SLA and TAT tracking
-            </div>
-            <div className={styles.point}>
-              <span className={styles.pointIcon}><Icon name="check-circle" /></span>
-              Approvals, billing and outstanding
-            </div>
-          </div>
+        {/* The Crystal wordmark alone, centred in the panel. Artwork is reused
+            from the PDF exports (pages/offLease/brand.js) rather than copied,
+            so the two can never drift apart. The source PNG is BLACK on
+            transparent and is inverted to white in CSS — see .brandLogo. */}
+        <div className={styles.sideCenter}>
+          <img className={styles.brandLogo} src={BRAND.logoDataUri} alt="Crystal" />
         </div>
 
         <div className={styles.sideFoot}>Crystal Group · Internal use only</div>
@@ -133,11 +119,14 @@ export function LoginPage() {
 
       <main className={styles.pane}>
         <div className={styles.form}>
+          {/* Only visible once the brand panel is hidden on narrow screens, so
+              the page still identifies itself. Same artwork, NOT inverted —
+              the source PNG is black, which is what this light panel wants. */}
           <div className={styles.paneBrand}>
-            {brandMark}
+            <img className={styles.paneBrandLogo} src={BRAND.logoDataUri} alt="Crystal" />
+            <span className={styles.lockupDivider} aria-hidden="true" />
             <span className={styles.lockupText}>
-              <span className={styles.lockupName} style={{ color: 'var(--text)' }}>Lease Management</span>
-              <span className={styles.lockupOrg} style={{ color: 'var(--text-3)' }}>Crystal Group</span>
+              <span className={styles.lockupName} style={{ color: 'var(--text)' }}>Lease Management System</span>
             </span>
           </div>
 

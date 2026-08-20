@@ -44,6 +44,15 @@ export const ALL_ACCESS_EMAILS = ['aa@crystalgroup.in'];
 
 export const ROLES_ADMIN_EMAILS = ['dmo@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'aa@crystalgroup.in'];
 
+/* Who can create/revoke public API keys (services/apiKeys.service.js,
+   routes/apiKeys.routes.js) — deliberately its own list, not reused from
+   ROLES_ADMIN_EMAILS or ALL_ACCESS_EMAILS, since a public API key is a
+   standing credential to read data with no LMS login at all, a materially
+   bigger blast radius than anything else this file gates. Defaulted to the
+   same trusted circle as Roles & Access; edit this array directly to
+   narrow or widen it, same as every other list here. */
+export const API_SUPER_ADMIN_EMAILS = ['dmo@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'aa@crystalgroup.in'];
+
 export const PERMISSION_KEYS = [
   { key: 'verify', label: 'Verify Lease' },
   { key: 'approve', label: 'Approve Lease' },
@@ -66,7 +75,7 @@ export const PERMISSION_KEYS = [
    * sheet column, and now simply SAYS "Stage 2" because that is what Stage 2
    * has meant since the reorder. */
   { key: 'offleaseapproval', label: 'Off-Lease Stage 1A: Approval' },
-  { key: 'offlease1', label: 'Off-Lease Stage 1: Intimation (Yastika)' },
+  { key: 'offlease1', label: 'Off-Lease Stage 1: Intimation (Christopher)' },
   // Retired 2026-08-10 — no live tab corresponds to this. Deliberately NOT
   // labelled "Stage 2", which now means Transportation (offlease6, below).
   { key: 'offlease2', label: 'Off-Lease (Retired) Lifting / Arrival' },

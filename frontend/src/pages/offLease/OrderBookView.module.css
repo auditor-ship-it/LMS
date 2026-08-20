@@ -90,7 +90,10 @@
   font-size: 11px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  cursor: default;
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
 }
 .done { background: var(--accent); color: #fff; }
 .current { background: var(--warn-bg, #fdf0d0); color: var(--warn, #8a6100); }
@@ -106,6 +109,7 @@
   border: none;
   font-family: inherit;
 }
+.chipLink:hover { filter: brightness(0.9); }
 .statusLink { cursor: pointer; }
 .statusLink:hover { filter: brightness(0.95); }
 

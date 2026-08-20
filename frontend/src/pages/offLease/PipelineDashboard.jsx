@@ -143,6 +143,10 @@ export function PipelineDashboard({ onOpenTab }) {
             error={error}
             onRetry={reload}
             onOpenTab={onOpenTab}
+            /* Refetches the dashboard after a stage form saves, so the
+               chip that just went from current to done -- and the next one
+               that becomes current -- update without a manual Refresh. */
+            onStageSaved={reload}
             searching={!!search}
             /* No reload — the remark cell keeps itself up to date locally.
                Refetching all 35 records to reflect one comment is what made

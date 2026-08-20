@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import { LoadingState, ErrorState, EmptyState, Icon, Button, RichTextEditor } from '../../components/ui/index.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { postRemark, editRemark, removeRemark, fetchRemarkThread } from '../../services/offLease.service.js';
-import { STAGES } from '../../constants/stages.js';
+import { STAGES, isReadOnlyStage } from '../../constants/stages.js';
+import { usePermission } from '../../hooks/usePermission.js';
+import { StageDetailModal } from '../stages/StageDetailModal.jsx';
 import styles from './OrderBookView.module.css';
 
 /**
@@ -18,8 +20,12 @@ import styles from './OrderBookView.module.css';
 
 /** The chips, left to right: Stage 1, the approval gate, then the rest of the
  *  workflow. The gate is drawn as "1A" rather than a stage number because it
- *  is a decision between stages, not a stage — giving it a number of its own
- *  would clash with whichever stage already carries it. */
+ *  is a decision between stages, not a stage.
+ *
+ *  Each chip opens that stage's own tab (onOpenTab) when clicked, same as
+ *  the status pill beside them -- a completed or future chip is just as
+ *  clickable as the current one, so any stage's record is one click away
+ *  regardless of where the container actually is right now. */
 const GATE_CHIP = '1A';
 
 function buildChips(item) {
@@ -33,6 +39,8 @@ function buildChips(item) {
       key: `s${stage.number}`,
       label: String(stage.display),
       title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${s.timestamp || ''}`.trimEnd() : ' — pending'}`,
+      tab: `stage${stage.number}`,
+      stageNumber: stage.number,
       tone: s?.done ? 'done' : item.currentStageNum === stage.number ? 'current' : 'future'
     };
   };
@@ -41,6 +49,7 @@ function buildChips(item) {
     key: 'gate',
     label: GATE_CHIP,
     title: `Intimation Approval — ${approval || 'pending'}`,
+    tab: 'approval',
     tone: approval === 'approved' ? 'done'
       : approval === 'rejected' ? 'rejected'
         : item.stageClass === 'approval' ? 'current' : 'future'
@@ -280,7 +289,27 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord }) {
+export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved }) {
+  const { canAct } = usePermission();
+  /* Which record+stage's own form is open, or null. Distinct from
+     onOpenRecord (the read-only all-stage history modal) -- this is the
+     single stage's EDITABLE (or, for an already-completed stage, view-only)
+     form, the same StageDetailModal the Stage N tab's own pending list
+     opens, just reached directly from this record's chip instead. */
+  const [stageForm, setStageForm] = useState(null); // { container, stageNumber, readOnly, identityOnly } | null
+
+  /* A stage TYPE can be read-only altogether (e.g. Transportation -- a
+     master list with no form at all), same rule StagePageBase applies.
+     Layered under that: THIS record's chip tone decides whether ITS row is
+     editable right now -- 'current' is the one stage actually open for
+     action; 'done' may be reviewed but not overwritten; 'future' cannot be
+     opened at all until the workflow reaches it. */
+  const openStageChip = (containerNo, chip) => {
+    if (chip.tone === 'future') return; // locked -- not clickable
+    const readOnlyType = isReadOnlyStage(chip.stageNumber);
+    const canEditNow = !readOnlyType && chip.tone === 'current' && canAct(`offlease${chip.stageNumber}`);
+    setStageForm({ container: containerNo, stageNumber: chip.stageNumber, readOnly: !canEditNow, identityOnly: readOnlyType });
+  };
   const rows = useMemo(() => items.map((it) => ({
     it, chips: buildChips(it), status: statusOf(it)
   })), [items]);
@@ -292,7 +321,8 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
   }
 
   return (
-    <div className={styles.book}>
+    <>
+      <div className={styles.book}>
       {rows.map(({ it, chips, status }) => (
         <div
           className={styles.row}
@@ -333,11 +363,38 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
             </div>
 
             <div className={styles.strip}>
-              {chips.map((c) => (
-                <span key={c.key} className={`${styles.chip} ${styles[c.tone]}`} title={c.title}>
-                  {c.label}
-                </span>
-              ))}
+              {chips.map((c) => {
+                /* A real stage chip (c.stageNumber set) opens that STAGE'S
+                   OWN form for THIS record -- editable only while it is the
+                   current stage, view-only once done, locked while future.
+                   The gate chip has no form of its own (approval is a
+                   two-button decision, not a set of fields), so it keeps
+                   jumping to the Approval tab, same as the status pill --
+                   only while it is actually the thing waiting on someone. */
+                const clickable = c.stageNumber != null ? c.tone !== 'future' : c.tone === 'current';
+                if (!clickable) {
+                  return (
+                    <span key={c.key} className={`${styles.chip} ${styles[c.tone]}`} title={c.title}>
+                      {c.label}
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    key={c.key}
+                    type="button"
+                    className={`${styles.chip} ${styles[c.tone]} ${styles.chipLink}`}
+                    title={c.title}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (c.stageNumber != null) openStageChip(it.container, c);
+                      else onOpenTab?.(c.tab);
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
               {status.tab ? (
                 <button
                   type="button"
@@ -366,5 +423,17 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
         </div>
       ))}
     </div>
+
+      {stageForm && (
+        <StageDetailModal
+          stageNumber={stageForm.stageNumber}
+          containerNo={stageForm.container}
+          readOnly={stageForm.readOnly}
+          identityOnly={stageForm.identityOnly}
+          onClose={() => setStageForm(null)}
+          onSaved={() => { setStageForm(null); onStageSaved?.(); }}
+        />
+      )}
+    </>
   );
 }

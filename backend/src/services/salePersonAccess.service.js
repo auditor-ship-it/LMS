@@ -30,14 +30,20 @@ import { isRolesAdmin } from './roles.service.js';
 import { safeStr } from '../utils/format.js';
 
 /** Login email -> the exact "Sale Person" value that login is restricted to.
- *  Add a login here to bring it under this filter. These four names all exist
+ *  Add a login here to bring it under this filter. These names all exist
  *  verbatim in the Sales CRM's `assignedTo` field as well as in the sheet, so
- *  the switch to CRM-resolved owners did not change who any of them sees. */
+ *  the switch to CRM-resolved owners did not change who any of them sees.
+ *  Gargi and Laveena added 2026-08-20 for the same restriction, now also
+ *  applied to the Off-Lease module (see offlease.service.js's
+ *  _offLeaseAccessGate) — same six-login screenshot, same USER-sheet
+ *  credentials, this map just adds the two names that were missing. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',
   'key.accounts@crystalgroup.in': 'Sagar',
-  'sales1@crystalgroup.in': 'Sapna'
+  'sales1@crystalgroup.in': 'Sapna',
+  'sales@crystalgroup.in': 'Gargi',
+  'contactsales@crystalgroup.in': 'Laveena'
 };
 
 const norm = (v) => safeStr(v).trim().toLowerCase();
@@ -64,7 +70,7 @@ export function matchesSalePersonScope(salePersonCell, scope) {
   return norm(salePersonCell) === norm(scope);
 }
 
-/** Stable, small cache-key suffix for a scope (one of 5 values today) — used
+/** Stable, small cache-key suffix for a scope (one of 6 values today) — used
  *  so a 60s counts cache cannot serve one person's scoped numbers to
  *  another, or to an unscoped/admin caller. */
 export function scopeCacheKey(scope) {

@@ -14,6 +14,8 @@ import expiryRoutes from './routes/expiry.routes.js';
 import offLeaseRoutes from './routes/offlease.routes.js';
 import tasksRoutes from './routes/tasks.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
+import apiKeysRoutes from './routes/apiKeys.routes.js';
+import publicRoutes from './routes/public.routes.js';
 
 /**
  * Lease Management's own, standalone backend — a narrower copy of the
@@ -71,6 +73,10 @@ export function createApp() {
   app.use('/api/offlease', offLeaseRoutes);
   app.use('/api/tasks', tasksRoutes);
   app.use('/api/dashboard', dashboardRoutes);
+  app.use('/api/api-keys', apiKeysRoutes);
+  // Public, read-only, key-gated — no LMS session/login involved. See
+  // publicApiAuth.middleware.js + routes/public.routes.js for the auth model.
+  app.use('/api/public/v1', publicRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

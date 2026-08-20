@@ -47,6 +47,10 @@ export const NAV_TREE = {
     // (navConfig.js's `adminOnly: true` is decorative there too); real access
     // control is the server-side 403 (roles.service.js's assertRolesAdmin),
     // which the page itself turns into an "Access Restricted" state.
-    { key: 'rolesAccess', label: 'Roles & Access', path: ROUTES.ROLES_ACCESS, icon: 'lock', section: 'Admin' }
+    { key: 'rolesAccess', label: 'Roles & Access', path: ROUTES.ROLES_ACCESS, icon: 'lock', section: 'Admin' },
+    // Same convention as Roles & Access directly above — no sidebarKey,
+    // gated server-side by API_SUPER_ADMIN_EMAILS (apiKeys.controller.js's
+    // assertApiSuperAdmin), page itself renders "Access Restricted" on 403.
+    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin' }
   ]
 };
