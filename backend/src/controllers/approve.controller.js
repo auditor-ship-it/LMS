@@ -5,6 +5,10 @@ export async function getData(req, res) {
   res.json(await approveService.getApproveData(doWrite));
 }
 
+export async function getHistory(req, res) {
+  res.json(await approveService.getApprovalHistory());
+}
+
 export async function runAuto(req, res) {
   const message = await approveService.runAutoApproval();
   res.json({ message });

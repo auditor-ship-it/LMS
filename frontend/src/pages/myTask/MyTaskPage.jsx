@@ -26,7 +26,7 @@ const GROUPS = {
 };
 
 const CARD_DEFS = [
-  { key: 'pendingVerify', label: 'Pending Verify', owner: 'Yastika', path: ROUTES.VERIFY_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
+  { key: 'pendingVerify', label: 'Pending Verify', owner: 'Christopher', path: ROUTES.VERIFY_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
   { key: 'pendingApprovals', label: 'Pending Approvals', owner: 'Pushpa Maam', path: ROUTES.APPROVE_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
   { key: 'offleaseApproval', label: 'Off-Lease Pending Approval', owner: 'Pushpa Maam', path: ROUTES.OFF_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
   { key: 'expiring7', label: 'Expiring in 7 Days', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'warn', icon: 'alert' },
@@ -37,7 +37,7 @@ const CARD_DEFS = [
    * 5 Billing, 6 FMS Closure) instead of the pre-reorder internal numbering
    * these had drifted to. Keys (olStage1..8) are untouched — they still
    * index getMyTasks()'s response 1:1 by internal stage number. */
-  { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Yastika', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage2', label: 'Off-Lease (Retired) Lifting / Arrival', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage4', label: 'Off-Lease (Retired) Quotation / Order', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
@@ -68,7 +68,7 @@ export function MyTaskPage() {
   /* data.visibleKeys (backend/src/services/tasks.service.js's getMyTasks) is
      null for most users — show every card, unchanged. For a Sale-Person-scoped
      login (Gauri/Kedar/Sagar/Sapna today) it's the small set of cards that are
-     actually theirs, so "Pending Verify (Yastika)" and every Off-Lease stage
+     actually theirs, so "Pending Verify (Christopher)" and every Off-Lease stage
      card — someone else's desk, not their lease work — don't show up here. */
   const tiles = useMemo(() => {
     const defs = data?.visibleKeys ? CARD_DEFS.filter((d) => data.visibleKeys.includes(d.key)) : CARD_DEFS;

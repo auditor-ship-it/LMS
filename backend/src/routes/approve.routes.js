@@ -9,6 +9,9 @@ router.use(requireAuth);
 
 // Read-only, no permission gate in the original (getApproveData had none)
 router.get('/', asyncHandler(approveController.getData));
+// Decided (approved/rejected) rows with audit-trail fields -- read-only,
+// same no-permission-gate convention as the list above.
+router.get('/history', asyncHandler(approveController.getHistory));
 
 // runAutoApproval / revertAutoApproved had NO checkActionPermission in the
 // original either (editor/trigger-only) — preserved as-is: session required,

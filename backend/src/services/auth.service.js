@@ -7,8 +7,9 @@
  * Google Workspace account to match the employee's registered email as a
  * second factor (Session.getActiveUser()). That has no Node equivalent
  * without adding real Google Sign-In, which was explicitly deferred — this
- * port authenticates on Employee ID/Email + password only. Lockout, OTP
- * reset, and 6h sliding session semantics are otherwise preserved exactly.
+ * port authenticates on Employee ID/Email + password only. OTP reset and 6h
+ * sliding session semantics are otherwise preserved exactly. The original's
+ * failed-attempt lockout (5 tries -> 15 min lock) was removed on request.
  */
 import crypto from 'crypto';
 import { getSheetData, updateCell, appendRow } from './googleSheets.service.js';
@@ -27,8 +28,6 @@ const AUTH_COL_PASSWORD = 2;
 const AUTH_COL_EMAIL = 3;
 const AUTH_SESSION_SECS = 21600; // 6h
 const AUTH_OTP_SECS = 600; // 10 min
-const AUTH_MAX_FAILED = 5;
-const AUTH_LOCK_SECS = 900; // 15 min lockout
 const AUTH_OTP_MAX_TRIES = 5;
 
 /**
@@ -121,22 +120,11 @@ export async function empLogin(empId, password) {
     return { ok: false, error: 'Enter Employee ID and password' };
   }
 
-  const lockKey = `auth:lock:${empId}`;
-  if (cacheGet(lockKey)) {
-    logger.warn('[AUTH] Login failed');
-    logger.warn('[AUTH] Reason: Account temporarily locked (too many failed attempts)');
-    return { ok: false, error: 'Too many attempts. Try again in a few minutes.' };
-  }
-
   logger.info('[AUTH] Fetching user record (USER sheet, via Mongo mirror)');
   const emp = (await authFindMongo(AUTH_COL_EMPID, empId)) || (await authFindMongo(AUTH_COL_EMAIL, empId));
   if (!emp) {
     logger.warn('[AUTH] Login failed');
     logger.warn('[AUTH] Reason: User not found');
-    const failKey = `auth:fail:${empId}`;
-    const n = (parseInt(cacheGet(failKey), 10) || 0) + 1;
-    cachePut(failKey, String(n), AUTH_LOCK_SECS);
-    if (n >= AUTH_MAX_FAILED) cachePut(lockKey, '1', AUTH_LOCK_SECS);
     return { ok: false, error: 'Invalid Employee ID or password' };
   }
   logger.info('[AUTH] User found');
@@ -145,15 +133,10 @@ export async function empLogin(empId, password) {
   if (!ok) {
     logger.warn('[AUTH] Login failed');
     logger.warn('[AUTH] Reason: Invalid password');
-    const failKey = `auth:fail:${empId}`;
-    const n = (parseInt(cacheGet(failKey), 10) || 0) + 1;
-    cachePut(failKey, String(n), AUTH_LOCK_SECS);
-    if (n >= AUTH_MAX_FAILED) cachePut(lockKey, '1', AUTH_LOCK_SECS);
     return { ok: false, error: 'Invalid Employee ID or password' };
   }
   logger.info('[AUTH] Password validation successful');
 
-  cacheRemove(`auth:fail:${empId}`);
   await _ensureSessionIndex();
   const token = authToken();
   const nowIso = new Date().toISOString();
@@ -313,8 +296,6 @@ export async function empResetPassword(empId, otp, newPassword) {
   });
 
   cacheRemove(key);
-  cacheRemove(`auth:lock:${empId}`);
-  cacheRemove(`auth:fail:${empId}`);
   return { ok: true };
 }
 

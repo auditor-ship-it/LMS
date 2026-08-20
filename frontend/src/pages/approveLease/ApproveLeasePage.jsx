@@ -173,7 +173,11 @@ function ApproveDetail({ item, headers, visibleColIdx, total, canAct, submitting
       <div className={styles.detailCard}>
         <div className={styles.detailHeader}>
           <h4 className={styles.detailTitle}>{item.row[0]}</h4>
-          <span className={styles.badgeWarning}>Pending Approval</span>
+          {/* Every row on this screen is, by construction, a First Entry: any
+              Container No + Client Name pair with a prior manual approval on
+              record was auto-approved and never reaches a human — see
+              approve.service.js's getApproveData. */}
+          <span className={styles.badgeWarning}>First Entry · Pending Manual Approval</span>
         </div>
 
         <div className={styles.detailGrid}>

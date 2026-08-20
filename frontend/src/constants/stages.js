@@ -11,7 +11,7 @@
  * ones after it.
  */
 export const ALL_STAGES = [
-  { number: 1, label: 'Off-Lease Intimation', owner: 'Yastika' },
+  { number: 1, label: 'Off-Lease Intimation', owner: 'Christopher' },
   { number: 2, label: 'Lifting / Arrival', owner: 'Kshirod Khatua', retired: true },
   { number: 3, label: 'Inspection Checklist', owner: 'Sitaram' },
   { number: 4, label: 'Quotation / Order', owner: 'Sitaram', retired: true },

@@ -84,6 +84,8 @@ import { runAutoApproval } from './approve.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { getCollection } from './mongo.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
+import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
+import { getSalePersonResolver } from './salesCrmLeads.service.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
@@ -1152,7 +1154,84 @@ export async function getOffLeaseEntryStamp(containerNo) {
   return '';
 }
 
-export async function getOffLeaseData(stage, opts = {}) {
+/**
+ * Off-Lease's own application of the Sale-Person ownership axis (see
+ * salePersonAccess.service.js's header comment for the full picture) —
+ * same CRM-resolved owner as Lease Expiry/Renew & Document use, applied to
+ * Off-Lease Tracking's Client Name column (row[5] everywhere in this file)
+ * instead of Deployed's own "Sale Person" column, which this sheet has no
+ * equivalent of.
+ *
+ * Returns null for an unrestricted caller (admin, or a login with no mapped
+ * Sale Person identity) — every read below skips filtering entirely in that
+ * case: correct for everyone but the scoped sales logins, and it avoids an
+ * unnecessary Sales CRM read on every other call.
+ *
+ * A company the CRM does not recognise is EXCLUDED for a scoped caller (fail
+ * closed) rather than shown — unlike Deployed, this sheet has no sheet-level
+ * "Sale Person" value to fall back on, so there is no other signal to trust,
+ * and a record with no clear owner is exactly the kind of leak this exists
+ * to prevent. See the 2026-08-20 "user-wise client access" request — a
+ * Sales login must never see another client's off-lease data through any
+ * Off-Lease endpoint, including by guessing a container number.
+ */
+async function _offLeaseAccessGate(user) {
+  const scope = salePersonScopeFor(user);
+  if (!scope) return null;
+  const resolveSalePerson = await getSalePersonResolver();
+  return (clientName) => {
+    const owner = resolveSalePerson(clientName);
+    return !!owner && matchesSalePersonScope(owner, scope);
+  };
+}
+
+/**
+ * Every Client Name Off-Lease Tracking carries for a given container —
+ * usually one, occasionally more (the same box off-leased by two different
+ * clients at different times, e.g. TRIU6681671 — see getOffLeaseContainerDetail).
+ * Falls back to the Deployed sheet when the container has no Off-Lease
+ * Tracking row at all (not yet added to the workflow). Used wherever a
+ * single container needs an access-gate check without pulling in the full
+ * cost of getOffLeaseContainerDetail (stages, FMS, SLA, outstanding, ...) —
+ * see getOutstanding's proxy to the Accounts API and offleaseRemarks
+ * .service.js's getRemarkThread.
+ */
+export async function getOffLeaseClientNamesForContainer(containerNo) {
+  const want = normKey(containerNo);
+  if (!want) return [];
+  const names = new Set();
+  try {
+    const { rows } = await getSheetDataFromMongo(OL_SHEET);
+    for (const row of rows) {
+      if (normKey(row[0]) !== want) continue;
+      const cn = safeStr(row[5]).trim();
+      if (cn) names.add(cn);
+    }
+  } catch (e) { console.error('[OL-ACCESS] tracking scan:', e?.message || e); }
+  if (names.size) return [...names];
+  try {
+    const { rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    for (const row of rows) {
+      if (normKey(row[0]) !== want) continue;
+      const cn = safeStr(row[1]).trim();
+      if (cn) names.add(cn);
+    }
+  } catch (e) { console.error('[OL-ACCESS] deployed scan:', e?.message || e); }
+  return [...names];
+}
+
+/** True when `user` is unrestricted, OR the container has at least one
+ *  Client Name that resolves to their Sale Person scope. A container with NO
+ *  known client name at all (blank sheet cell, nothing in Deployed either)
+ *  fails closed for a scoped caller — same reasoning as _offLeaseAccessGate. */
+export async function isOffLeaseContainerVisibleToUser(containerNo, user) {
+  const gate = await _offLeaseAccessGate(user);
+  if (!gate) return true;
+  const names = await getOffLeaseClientNamesForContainer(containerNo);
+  return names.some((n) => gate(n));
+}
+
+export async function getOffLeaseData(stage, opts = {}, user) {
   // Display-only list read, no embedded write in this function — safe to
   // serve from the Mongo mirror (Phase 1b), and therefore no
   // _ensureOffLeaseSheet(): see the note in getOffLeaseDashboardData.
@@ -1160,6 +1239,7 @@ export async function getOffLeaseData(stage, opts = {}) {
   const info = OL_STAGE_INFO[stage];
   if (!rows.length || !info) return { headers: [], data: [], stage };
 
+  const gate = await _offLeaseAccessGate(user);
   const { deliveredKeys } = opts;
   const displayIndices = [0, 1, 2, 3, 5, 6, 7, 8, 9];
   const displayHeaders = ['Container No', 'Lease ID', 'Size', 'Type', 'Client Name', 'Location', 'Deployed Date', 'Valid Upto', 'Rate'];
@@ -1175,14 +1255,17 @@ export async function getOffLeaseData(stage, opts = {}) {
      pending at Transportation, and the tab badges summed to 43 against 37
      active records. */
   const gatedByApproval = prevNum === 1;
-  const intApprovalCol = gatedByApproval
-    ? _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status'])
-    : -1;
+  /* Resolved unconditionally (not just when gatedByApproval) — the STAGE-10
+     delivery bypass below also needs it, since that bypass walks around the
+     gate this column normally enforces. */
+  const intApprovalCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
 
   const finalData = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row[0] || String(row[0]).trim() === '') continue;
+
+    if (gate && !gate(safeStr(row[5]))) continue;
 
     const statusVal = row[info.statusCol];
     if (statusVal && String(statusVal).trim() !== '') continue;
@@ -1213,7 +1296,18 @@ export async function getOffLeaseData(stage, opts = {}) {
       const prevStatus = row[prevInfo.statusCol];
       if (!releasedByDelivery && (!prevStatus || String(prevStatus).trim() === '')) continue;
 
-      if (gatedByApproval && intApprovalCol >= 0) {
+      /* The intimation approval gate sits right after Stage 1 — normally
+         only checked here when this stage directly follows Stage 1
+         (gatedByApproval). The STAGE-10 delivery bypass above skips
+         straight from "Stage 1 done" into Stage 3, walking around that gate
+         entirely: a container whose physical delivery the external FMS
+         recorded before its intimation was ever approved in this app must
+         still wait in Pending Approval, not jump the Gate In queue. Found
+         2026-08-20 via CXRU1042578 — delivered, Stage 1 done, approval
+         status still blank — showing in the Stage 3 tab (17) but correctly
+         absent from the dashboard scorecard's count (16), which classifies
+         from status columns alone and has no such bypass to skip the gate. */
+      if ((gatedByApproval || releasedByDelivery) && intApprovalCol >= 0) {
         const intApproval = row[intApprovalCol];
         if (!intApproval || String(intApproval).trim().toLowerCase() !== 'approved') continue;
       }
@@ -1295,7 +1389,7 @@ export async function attachStageTat(result, stage) {
   return result;
 }
 
-export async function getOffLeaseStageDetail(containerNo, stage) {
+export async function getOffLeaseStageDetail(containerNo, stage, user) {
   try {
     /* Served from the Mongo mirror, like the stage lists. This is a read-only
        pre-fill: nothing here computes a row number for a later write, so the
@@ -1311,6 +1405,12 @@ export async function getOffLeaseStageDetail(containerNo, stage) {
     if (!info) throw new AppError(`No such stage: ${safeStr(stage)}`);
 
     const row = rows[rn - 2] || [];
+
+    // Same "not found" message a missing row gets — a scoped caller must not
+    // be able to tell "doesn't exist" from "exists but isn't yours" apart.
+    const gate = await _offLeaseAccessGate(user);
+    if (gate && !gate(safeStr(row[5]))) throw new AppError(`Not found: ${safeStr(containerNo)}`);
+
     const result = {};
 
     const baseCols = { 0: 'Container No', 1: 'Lease ID', 2: 'Size', 3: 'Type', 4: 'Client Code', 5: 'Client Name', 6: 'Location', 7: 'Deployed Date', 8: 'Valid Upto', 9: 'Rate' };
@@ -1713,7 +1813,7 @@ function _completedThisMonth(stage8) {
  * the frontend doesn't need 31 individual getOffLeaseContainerDetail calls.
  * Display-only, safe to read from the Mongo mirror.
  */
-export async function getOffLeaseDashboardData() {
+export async function getOffLeaseDashboardData(user) {
   /* No _ensureOffLeaseSheet() here. It exists to create the tab and widen the
      header row before a WRITE; this function only reads, and reads from the
      Mongo mirror. Calling it made a Mongo-backed page depend on a live
@@ -1721,12 +1821,14 @@ export async function getOffLeaseDashboardData() {
      backend restart paid it again. With the read quota exhausted that turned
      into the circuit breaker refusing the whole dashboard. */
   const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const gate = await _offLeaseAccessGate(user);
 
   const items = [];
   const kpis = { active: 0, pendingApproval: 0, byStage: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0 }, completedThisMonth: 0 };
 
   for (const row of rows) {
     if (!row[0] || String(row[0]).trim() === '') continue;
+    if (gate && !gate(safeStr(row[5]))) continue;
     const c = _classifyOffLeaseStages(headers, row);
     items.push({
       container: safeStr(row[0]),
@@ -1770,7 +1872,7 @@ export async function getOffLeaseDashboardData() {
  *                    several records returns the candidate list instead of
  *                    silently showing the first.
  */
-export async function getOffLeaseContainerDetail(containerNo, leaseId) {
+export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   const want = normKey(containerNo);
   if (!want) return { found: false, message: 'Enter a container number.' };
 
@@ -1785,6 +1887,7 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId) {
      to a read, and on an exhausted quota it failed the whole container detail.
      Same fix already applied to the dashboard and the stage lists. */
   const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const gate = await _offLeaseAccessGate(user);
 
   /* A container can appear more than once — the same box off-leased by two
      different clients at different times (e.g. TRIU6681671). Collect every
@@ -1795,18 +1898,25 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId) {
     if (normKey(rows[r][0]) === want) matches.push({ row: rows[r], rowNum: r + 2 });
   }
 
+  /* Scope filter BEFORE the wantLease/multiple logic below, so a scoped
+     caller's "pick one of N" prompt (or single result) only ever reflects
+     records that are actually theirs — a container off-leased under two
+     different clients must not even hint that a second, someone else's
+     record exists. */
+  const visibleMatches = gate ? matches.filter((m) => gate(safeStr(m.row[5]) || _clientNameFallback(leaseInfo))) : matches;
+
   const wantLease = safeStr(leaseId).trim().toLowerCase();
-  let picked = matches[0] || null;
+  let picked = visibleMatches[0] || null;
   if (wantLease) {
-    picked = matches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
+    picked = visibleMatches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
     if (!picked) return { found: false, message: `No record for ${safeStr(containerNo)} under lease ${safeStr(leaseId)}.` };
-  } else if (matches.length > 1) {
+  } else if (visibleMatches.length > 1) {
     // Let the caller choose which record they mean.
     return {
       found: true,
-      container: safeStr(matches[0].row[0]),
+      container: safeStr(visibleMatches[0].row[0]),
       multiple: true,
-      matches: matches.map((m) => ({
+      matches: visibleMatches.map((m) => ({
         leaseId: safeStr(m.row[1]),
         clientName: safeStr(m.row[5]) || _clientNameFallback(leaseInfo),
         clientCode: safeStr(m.row[4]),
@@ -1827,10 +1937,14 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId) {
       const { rows: dRows } = await getSheetData(SHEETS.DEPLOYED);
       for (const d of dRows) {
         if (normKey(d[0]) !== want) continue;
+        const clientName = safeStr(d[1]);
+        // Not this caller's client -- keep scanning (a duplicate Deployed
+        // row is unlikely but possible), otherwise falls through to not-found.
+        if (gate && !gate(clientName)) continue;
         res.found = true;
         res.inOffLease = false;
         res.container = safeStr(d[0]);
-        res.clientName = safeStr(d[1]);
+        res.clientName = clientName;
         res.size = safeStr(d[2]);
         res.type = safeStr(d[3]);
         res.location = safeStr(d[4]);
@@ -2021,11 +2135,13 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId) {
 /* =============================================
    PENDING APPROVAL QUEUE (between Stage 1 and Stage 2)
 ============================================= */
-export async function getOffLeaseApprovalData() {
+export async function getOffLeaseApprovalData(user) {
   await _ensureOffLeaseSheet();
   // Display-only list read — safe to serve from the Mongo mirror (Phase 1b).
   const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
   if (!rows.length) return { headers: [], data: [], count: 0 };
+
+  const gate = await _offLeaseAccessGate(user);
 
   const stage1StatusCol = _findOlColumn(headers, 'stage 1 status');
   const approvalStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
@@ -2047,6 +2163,8 @@ export async function getOffLeaseApprovalData() {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row[0] || String(row[0]).trim() === '') continue;
+
+    if (gate && !gate(safeStr(row[5]))) continue;
 
     const s1Status = row[stage1StatusCol];
     if (!s1Status || String(s1Status).trim().toLowerCase() !== 'completed') continue;

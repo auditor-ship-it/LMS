@@ -91,13 +91,13 @@ export async function getMyTasks(user, force) {
      *
      * A Sale-Person-scoped login (salePersonScopeFor — Gauri/Kedar/Sagar/
      * Sapna today) owns leases, not a workflow desk: "Pending Verify
-     * (Yastika)" or an Off-Lease stage card is someone else's job and was
+     * (Christopher)" or an Off-Lease stage card is someone else's job and was
      * confusing noise on their own My Task page, so they only get the three
      * cards that are actually theirs — the same three counts
      * salePersonAccess.service.js already scopes above.
      *
      * Deliberately NOT extended to the pre-existing desk-role entries in
-     * MY_TASK_BY_EMAIL_BACKEND (Pushpa/Yastika/Shivani/Kshirod) — that map
+     * MY_TASK_BY_EMAIL_BACKEND (Pushpa/Christopher/Shivani/Kshirod) — that map
      * was already used elsewhere (getEmployeeTasks) but never by this page,
      * so restricting it here now would be a first-time behaviour change for
      * four people who did not ask for it. Scoped narrowly to the identical

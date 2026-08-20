@@ -218,7 +218,12 @@ export async function getApproveData(doWrite) {
     if (String(allRows[i][29] || '').trim().toLowerCase() !== 'approved') continue;
     if (String(allRows[i][30] || '').trim().toLowerCase() === 'auto-approved') continue;
     /* Multi-container cells: each container is history in its own right. */
-    const client = String(allRows[i][2] || '').trim().toLowerCase();
+    /* normClientName (not a bare trim+lowercase) so "ABC Ltd", "ABC  Ltd"
+       and "abc.ltd." all resolve to the same key -- matches the
+       normalisation _cycleClosedAt already applies above, and closes a real
+       gap: extra internal spaces or punctuation used to be able to split
+       one client into two separate history keys. */
+    const client = normClientName(allRows[i][2]);
     if (!client) continue;
     const approvedAt = parseStamp(allRows[i][28]);
     for (const p of splitContainers(String(allRows[i][0] || ''))) {
@@ -237,7 +242,7 @@ export async function getApproveData(doWrite) {
     const cn = String(allRows[i][0] || '').trim();
     if (!cn) continue;
     if (String(allRows[i][29] || '').trim().toLowerCase() === 'approved') continue;
-    const client = String(allRows[i][2] || '').trim().toLowerCase();
+    const client = normClientName(allRows[i][2]);
 
     /* Multi-container cell safe: EVERY part must have approval history under
        this same client. One unknown container in a multi-container row makes
@@ -279,13 +284,100 @@ export async function getApproveData(doWrite) {
   for (let i = 0; i < n; i++) {
     if (!allRows[i][0] || String(allRows[i][0]).trim() === '') continue;
     if (String(allRows[i][29] || '').trim().toLowerCase() === 'approved') continue;
-    finalData.push({ row: buildDisplayRow(allRows[i], pick, hdr), _rowNum: i + 2 });
+    /* Every row reaching this list is, by construction, a first-ever
+       Container+Client pair -- anything with prior manual-approval history
+       was auto-approved above and excluded. These fields make that fact
+       explicit for the UI instead of leaving it implicit in the filter, per
+       the approval-workflow audit-trail spec. Purely additive: existing
+       consumers (tasks.service.js's `.data.length`, the frontend's
+       `item.row`) read past new keys without needing to change. */
+    finalData.push({
+      row: buildDisplayRow(allRows[i], pick, hdr),
+      _rowNum: i + 2,
+      entryType: 'FIRST_ENTRY',
+      approvalType: 'MANUAL',
+      approvalStatus: 'PENDING',
+      approvedBy: '',
+      approvalReason: ''
+    });
   }
   return { headers: displayHeaders, data: finalData, catColIdx: -1, autoApproved: autoCount };
 }
 
 /* AUTO-APPROVAL — leave fresh new leases alone, auto-approve the rest.
    Run from the Editor, or attach to an hourly trigger (see jobs/index.js TODO). */
+/* ===================== APPROVAL HISTORY / AUDIT TRAIL ===================== */
+
+/**
+ * Audit-trail fields for one ALREADY-DECIDED Operation Sheet row.
+ *
+ * The distinction is read straight off the same two columns getApproveData
+ * already trusts: AE (user) starting with "auto-approved" means the system
+ * decided it, anything else means a person did. A row can only ever reach a
+ * MANUAL decision as a first entry -- the pending list (above) excludes any
+ * pair with prior manual-approval history before a human ever sees it, and
+ * the hourly cron auto-approves it before that -- so a genuine manual AE
+ * value is proof enough that this was a first entry without re-deriving
+ * approvedPairs/hasHistory a second time here.
+ */
+function decidedEntryFields(row) {
+  const status = String(row[29] || '').trim().toLowerCase();
+  const user = String(row[30] || '').trim();
+  const isAuto = user.toLowerCase().indexOf('auto-approved') === 0;
+
+  if (isAuto) {
+    return {
+      entryType: 'REPEAT_ENTRY',
+      approvalType: 'AUTO',
+      approvalStatus: 'APPROVED',
+      approvedBy: 'SYSTEM',
+      approvalReason: 'Repeat Container + Client combination found in previous Operation Sheet entry.'
+    };
+  }
+  return {
+    entryType: 'FIRST_ENTRY',
+    approvalType: 'MANUAL',
+    approvalStatus: status === 'rejected' ? 'REJECTED' : 'APPROVED',
+    approvedBy: user,
+    approvalReason: ''
+  };
+}
+
+/**
+ * Decided Operation Sheet rows (Approved or Rejected), each annotated with
+ * the audit-trail fields above. Read-only, Mongo-backed like getApproveData's
+ * own default path -- this is a display screen, not a write path, so there is
+ * no reason to hit live Sheets or take the sheet lock.
+ */
+export async function getApprovalHistory() {
+  const { rows: rawRows } = await getSheetDataFromMongo(SHEETS.OPERATION);
+  if (!rawRows.length) return { data: [] };
+
+  const allRows = rawRows.map((r) => padWidth(r, 31));
+  const data = [];
+  for (let i = 0; i < allRows.length; i++) {
+    const containerNo = String(allRows[i][0] || '').trim();
+    if (!containerNo) continue;
+    const status = String(allRows[i][29] || '').trim().toLowerCase();
+    if (status !== 'approved' && status !== 'rejected') continue; // still pending -> the other screen
+
+    data.push({
+      _rowNum: i + 2,
+      containerNo,
+      clientCode: String(allRows[i][1] || '').trim(),
+      clientName: String(allRows[i][2] || '').trim(),
+      orderNo: String(allRows[i][3] || '').trim(),
+      approvedAt: safeStr(allRows[i][28]).trim(),
+      ...decidedEntryFields(allRows[i])
+    });
+  }
+
+  // Newest decision first. parseStamp returns null for anything it can't
+  // read, and those sort to the end rather than throwing.
+  data.sort((a, b) => (parseStamp(b.approvedAt)?.getTime() || 0) - (parseStamp(a.approvedAt)?.getTime() || 0));
+  return { data };
+}
+
 export async function runAutoApproval() {
   const r = await getApproveData(true); // true = perform the actual write
   const msg = `Auto-approved: ${r.autoApproved || 0} row(s). | Pending (new leases) left: ${r.data ? r.data.length : 0}`;

@@ -54,19 +54,40 @@
 }
 .sideInner { position: relative; z-index: 1; }
 
-.lockup { display: flex; align-items: center; gap: 11px; }
-.mark {
-  width: 40px;
-  height: 40px;
+.lockup { display: flex; align-items: center; gap: 12px; }
+
+/* Crystal mark in the header lockup. The source artwork (shared with the PDF
+   exports — see pages/offLease/brand.js) is BLACK on transparent, invisible on
+   navy. brightness(0) crushes it to solid black whatever its original tones,
+   then invert(1) flips it to white while preserving the alpha channel. A
+   filter rather than a second recoloured asset, so this can never drift out of
+   sync with the artwork the PDFs use. */
+.lockupLogo {
+  display: block;
+  width: 112px;
+  height: auto;
   flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r-md);
-  background: var(--amber);
-  color: var(--on-amber);
-  box-shadow: 0 6px 18px rgba(251, 194, 19, 0.28);
+  filter: brightness(0) invert(1);
 }
-.mark svg { width: 22px; height: 22px; }
+
+/* Same artwork on the light form panel — left BLACK, which is the source
+   colour and already correct there, so no filter at all. */
+.paneBrandLogo {
+  display: block;
+  width: 96px;
+  height: auto;
+  flex: none;
+}
+
+/* Hairline between the company mark and the product name, so the two read as
+   "Crystal, and within it Lease Management" rather than one run-on lockup. */
+.lockupDivider {
+  width: 1px;
+  height: 26px;
+  flex: none;
+  background: currentColor;
+  opacity: 0.22;
+}
 .lockupText { display: flex; flex-direction: column; line-height: 1.25; }
 .lockupName {
   font-family: var(--f-display);
@@ -74,49 +95,36 @@
   font-weight: 800;
   letter-spacing: -0.01em;
 }
-.lockupOrg {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.58);
+
+/* The middle band of the panel. .side is a space-between column, so this
+   centres the wordmark between the lockup above and the footer below without
+   either of them having to move. */
+.sideCenter {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  flex: 1;
 }
 
-.headline {
-  font-family: var(--f-display);
-  font-size: clamp(26px, 2.7vw, 38px);
-  font-weight: 800;
-  line-height: 1.16;
-  letter-spacing: -0.022em;
-  margin: 0 0 var(--s-3);
-  max-width: 15ch;
-}
-.headline em {
-  font-style: normal;
-  color: var(--amber);
-}
-.sub {
-  font-size: 13.5px;
-  line-height: 1.6;
-  color: rgba(255, 255, 255, 0.7);
-  max-width: 42ch;
-  margin: 0 0 var(--s-6);
-}
+/* The Crystal wordmark. Source artwork (shared with the PDF exports, see
+   pages/offLease/brand.js) is BLACK on transparent, which would be invisible
+   on this navy panel — brightness(0) crushes it to pure black regardless of
+   its original tones, then invert(1) flips it to pure white, preserving the
+   alpha channel. Cheaper and sharper than shipping a second recoloured copy,
+   and it cannot drift out of sync with the artwork the PDFs use.
 
-.points { display: flex; flex-direction: column; gap: 14px; }
-.point { display: flex; align-items: center; gap: 12px; font-size: 13px; font-weight: 600; }
-.pointIcon {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: var(--r-sm);
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: var(--amber);
+   Sized by width alone so the 499x130 aspect ratio is kept by the browser. */
+.brandLogo {
+  display: block;
+  width: clamp(190px, 24vw, 300px);
+  height: auto;
+  filter: brightness(0) invert(1);
+  opacity: 0.95;
 }
-.pointIcon svg { width: 15px; height: 15px; }
 
 .sideFoot {
   position: relative;
@@ -132,15 +140,25 @@
   justify-content: center;
   padding: var(--s-6) var(--s-5);
 }
+/* Elevated panel, not bare text on the app background — same surface/border/
+   radius/shadow/rise-in treatment as every Modal (.panel) and dialog
+   elsewhere in the app, so signing in reads as "the app's own chrome"
+   instead of a one-off page. */
 .form {
   width: 100%;
   max-width: 380px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-4);
+  padding: var(--s-6);
+  animation: formRise var(--dur-base) var(--ease-spring);
 }
+@keyframes formRise { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
 /* Only shown when the brand panel is hidden on narrow screens, so the page
    still identifies itself. */
 .paneBrand { display: none; align-items: center; gap: 10px; margin-bottom: var(--s-5); }
-.paneBrand .mark { width: 34px; height: 34px; }
-.paneBrand .mark svg { width: 19px; height: 19px; }
 
 .title {
   font-family: var(--f-display);
@@ -282,4 +300,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .input, .pwToggle { transition: none; }
+  .form { animation: none; }
 }

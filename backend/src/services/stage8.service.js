@@ -50,10 +50,12 @@ const OFFLEASE = 'offlease';
    another five minutes. Bump the suffix whenever the mapped fields change. */
 const CACHE_KEY = 'offlease:stage8-movements:v7';
 const S9_CACHE_KEY = 'offlease:stage9-movements:v8';
-/* 30 minutes, not 5. These are external sheets that change a few times a day,
-   and every cache miss is a read on a quota that is currently failing outright
-   — a short TTL bought freshness nobody needed at the cost of the data
-   appearing at all.
+/* This is the CEILING on staleness, not the only path to freshness:
+   refreshFmsCaches() (below) is run every 1 minute by jobs/index.js, so in
+   practice a change in the FMS workbook is visible within a minute without
+   anyone opening Stage 2. This TTL only matters if that job is disabled or
+   falls behind — a stale-but-present value beats a failed read on a quota
+   that is currently exhausted.
 
    In SECONDS: cachePut takes a TTL in seconds and multiplies by 1000 itself.
    This was written `30 * 60 * 1000`, which asked for 1.8 million seconds
@@ -240,8 +242,8 @@ function setLastGood(key, data) {
   writeDisk(key, data);
 }
 
-async function readOffleaseRows() {
-  const hit = cacheGet(CACHE_KEY);
+async function readOffleaseRows(force = false) {
+  const hit = !force && cacheGet(CACHE_KEY);
   if (hit) return hit;
 
   const [{ headers, rows }, doLinks] = await Promise.all([
@@ -288,8 +290,8 @@ const S10_CACHE_KEY = 'offlease:stage10-delivery:v2';
  *  they are compared on alphanumerics, upper-cased. */
 const normDo = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-async function readStage10Rows() {
-  const hit = cacheGet(S10_CACHE_KEY);
+async function readStage10Rows(force = false) {
+  const hit = !force && cacheGet(S10_CACHE_KEY);
   if (hit) return hit;
 
   const { headers, rows } = await getSheetData(S10_TAB, S8_SSID, 'A1:BZ');
@@ -326,8 +328,8 @@ function matchByDo(rows, candidates) {
 }
 
 /** Every Offlease row in STAGE-9 — the transport-execution detail. */
-async function readStage9OffleaseRows() {
-  const hit = cacheGet(S9_CACHE_KEY);
+async function readStage9OffleaseRows(force = false) {
+  const hit = !force && cacheGet(S9_CACHE_KEY);
   if (hit) return hit;
 
   const { headers, rows } = await getSheetData(S9_TAB, S8_SSID, 'A1:BZ');
@@ -493,6 +495,42 @@ export async function getDeliveredKeys() {
  * Best-effort: STAGE-8 is an external sheet on an exhausted quota, and Stage 2
  * must still list its containers if that read fails.
  */
+/**
+ * Proactively re-reads STAGE-8, STAGE-9 and STAGE-10 and refreshes their
+ * caches, regardless of whether the current TTL has expired.
+ *
+ * Without this, a row added to the FMS workbook only appears here once
+ * someone happens to open Stage 2 (or a container lookup) AFTER the 30-minute
+ * TTL has lapsed — until then it is invisible even though the source data is
+ * already correct. Confirmed 2026-08-19: a STAGE-10 delivery entered at
+ * 18:18 still showed "No record" in the Stage 2 card an hour later, because
+ * nothing had triggered a re-read since the last cache fill.
+ *
+ * Run on a schedule (jobs/index.js, every 5 minutes) rather than on-demand,
+ * so freshness does not depend on user traffic. The three reads are
+ * independent — one failing (e.g. a transient quota hit) must not stop the
+ * other two from refreshing, so they are awaited separately rather than with
+ * Promise.all, and each already falls back to its own last-good/disk copy on
+ * failure (see readOffleaseRows/readStage9OffleaseRows/readStage10Rows).
+ */
+export async function refreshFmsCaches() {
+  const results = await Promise.allSettled([
+    readOffleaseRows(true),
+    readStage9OffleaseRows(true),
+    readStage10Rows(true)
+  ]);
+  const [s8, s9, s10] = results;
+  const summary = {
+    stage8: s8.status === 'fulfilled' ? s8.value.length : null,
+    stage9: s9.status === 'fulfilled' ? s9.value.length : null,
+    stage10: s10.status === 'fulfilled' ? s10.value.length : null
+  };
+  for (const [tab, r] of [['STAGE-8', s8], ['STAGE-9', s9], ['STAGE-10', s10]]) {
+    if (r.status === 'rejected') console.error(`[FMS-SYNC] ${tab} refresh failed:`, r.reason?.message || r.reason);
+  }
+  return summary;
+}
+
 export async function enrichWithStage8Movements(result) {
   /* Attached as OBJECTS on each row, not appended as grid columns. Ten extra
      columns made the table unreadable and most of them are blank for any row
