@@ -4,6 +4,13 @@
  * getVerifyData, saveVerifyAction, saveVerifyFollowUp, saveVerifyDocument,
  * plus internal helpers _deployedClientName / _logRenewal (renewal history log).
  *
+ * SHEETS-FIRST (reverted 2026-08-21). Every write in this file briefly used
+ * the Mongo-first writeThrough pattern; reverted at the user's explicit
+ * request so manual spreadsheet edits are visible to every reader
+ * immediately rather than after the next reconcile cycle. Live Sheets is
+ * the read/write source of truth; Mongo is a best-effort backup mirror kept
+ * in step via patchMongoMirrorRow.
+ *
  * IDENTITY NOTE: every "userEmail" parameter below is the CALLER's own identity
  * (in the original, the same value doubled as both the checkActionPermission
  * `tok` and the "who did this" value written to the sheet — Apps Script client
@@ -33,10 +40,8 @@ import { safeStr, formatDateVal, buildDisplayRow } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
-import { getCollection } from './mongo.service.js';
+import { patchMongoMirrorRow } from './mongoSheetData.service.js';
 import { normalizeKey } from '../config/mongoSheetMapping.js';
-import { writeThrough } from './writeThrough.service.js';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dmyTime(d) {
@@ -87,7 +92,7 @@ export async function updateLeasePeriod(containerNo, newDateString, userEmail) {
     const newDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
     const newDateStr = safeStr(newDate);
 
-    await batchUpdateValues([
+    const updates = [
       { range: `'${SHEETS.DEPLOYED}'!H${targetRow}`, values: [[newDateStr]] },
       { range: `'${SHEETS.DEPLOYED}'!O${targetRow}`, values: [[newDateStr]] },
       { range: `'${SHEETS.DEPLOYED}'!X${targetRow}`, values: [[newDateStr]] },
@@ -95,7 +100,12 @@ export async function updateLeasePeriod(containerNo, newDateString, userEmail) {
       { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['Documents Pending']] },
       { range: `'${SHEETS.DEPLOYED}'!Y${targetRow}`, values: [['']] },
       { range: `'${SHEETS.DEPLOYED}'!Z${targetRow}`, values: [['']] }
-    ]);
+    ];
+    await batchUpdateValues(updates);
+    // Keep the Mongo mirror in step immediately — see patchMongoMirrorRow's
+    // header comment for why GET /api/expiry would otherwise show stale data
+    // for up to 5 minutes after this write.
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
 
     return 'OK';
   });
@@ -189,6 +199,7 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
     }
 
     await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
 
     /* Renewal Log — one row per renewal, whichever screen it came from. */
     await _logRenewal({
@@ -296,10 +307,7 @@ export function _padNewLeaseHeader(colStartCount, upToCount) {
 }
 
 export async function getVerifyData() {
-  // Display-only list read — safe to serve from the Mongo mirror now that
-  // saveVerifyAction/saveVerifyFollowUp locate their row by container number
-  // instead of trusting a row number cached from this read (Phase 1a).
-  const { headers: rawHeaders, rows: rawRows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE);
+  const { headers: rawHeaders, rows: rawRows } = await getSheetData(SHEETS.NEW_LEASE);
   if (!rawRows.length) return { headers: [], data: [] };
 
   /* Ensure the sheet has (at least, logically) 36 header columns, same
@@ -333,14 +341,16 @@ export async function getVerifyData() {
   if (ordIdx === -1) ordIdx = 3; // fallback: column D
 
   /* Build lookup from "New lease reff": col B=Client Code, col N=Agreement
-     Date, col O=Agreement PDF, keyed by Order No (col D). Display-only
-     enrichment — read from the Mongo mirror (synced every 5 min by
-     sheetsReconcile.job.js), NOT the live sheet: this used to hit
-     sheets.googleapis.com on every single Verify Lease page load, which was
-     a confirmed contributor to the shared project's quota errors (2026-08-07). */
+     Date, col O=Agreement PDF, keyed by Order No (col D).
+     NOTE: a live read here on every Verify Lease page load was previously
+     identified as a contributor to shared-project Sheets quota errors
+     (2026-08-07) and moved to the Mongo mirror for that reason. Reverted to
+     live 2026-08-21 at the user's explicit request (manual sheet edits must
+     be visible instantly app-wide) — if quota pressure resurfaces on this
+     path specifically, this is the first place to look. */
   const agrMap = {};
   try {
-    const refData = await getSheetDataFromMongo(SHEETS.NEW_LEASE_REFF);
+    const refData = await getSheetData(SHEETS.NEW_LEASE_REFF);
     if (refData && refData.rows.length) {
       for (const raw of refData.rows) {
         const r = padWidth(raw, 15);
@@ -396,74 +406,58 @@ export async function getVerifyData() {
   return { headers: displayHeaders, data: finalData };
 }
 
-/**
- * Mongo-first: the Mongo mirror (New Lease is naturalKeyColumn-keyed by
- * Container No, not fullRefresh — see mongoSheetMapping.js — so a write-through
- * update lands on the SAME doc every reconcile cycle, never orphaned by a
- * delete+recreate) is updated and committed before this returns; the matching
- * Sheets write is enqueued in the same transaction and pushed asynchronously
- * by jobs/outboxWorker.js (see sheetPushers/verify.pusher.js for the actual
- * Sheets mutation, moved there verbatim from what used to run inline here).
- */
 export async function saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail) {
-  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-  const link = invoiceType === 'Link to Container' ? (linkContainer || '') : '';
+  return withSheetLock(SHEETS.NEW_LEASE, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    const link = invoiceType === 'Link to Container' ? (linkContainer || '') : '';
 
-  const result = await writeThrough({
-    collection: SHEETS.NEW_LEASE,
-    filter: { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) },
-    update: {
-      $set: {
-        'row.25': dmyTime(new Date(timestamp)), // Z
-        'row.26': status || '', // AA
-        'row.27': userEmail || '', // AB
-        'row.33': billingType || '', // AH
-        'row.34': invoiceType || '', // AI
-        'row.35': link // AJ
-      }
-    },
-    mode: 'update',
-    actor: userEmail,
-    sheetPush: {
-      targetSheet: SHEETS.NEW_LEASE, operation: 'update', handler: 'verify.saveVerifyAction',
-      payload: { containerNo, timestamp, status: status || '', userEmail: userEmail || '', billingType: billingType || '', invoiceType: invoiceType || '', linkContainer: link }
+    const { rows } = await getSheetData(SHEETS.NEW_LEASE);
+    let targetRow = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
     }
+    if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const updates = [
+      { range: `'${SHEETS.NEW_LEASE}'!Z${targetRow}`, values: [[dmyTime(new Date(timestamp))]] },
+      { range: `'${SHEETS.NEW_LEASE}'!AA${targetRow}`, values: [[status || '']] },
+      { range: `'${SHEETS.NEW_LEASE}'!AB${targetRow}`, values: [[userEmail || '']] },
+      { range: `'${SHEETS.NEW_LEASE}'!AH${targetRow}`, values: [[billingType || '']] },
+      { range: `'${SHEETS.NEW_LEASE}'!AI${targetRow}`, values: [[invoiceType || '']] },
+      { range: `'${SHEETS.NEW_LEASE}'!AJ${targetRow}`, values: [[link]] }
+    ];
+    await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    return 'OK';
   });
-  if (!result.matched) throw new AppError(`Not found: ${containerNo}`);
-  return 'OK';
 }
 
 export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEmail, issue) {
-  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-  if (!remarks || String(remarks).trim() === '') throw new AppError('Remarks required');
+  return withSheetLock(SHEETS.NEW_LEASE, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    if (!remarks || String(remarks).trim() === '') throw new AppError('Remarks required');
 
-  const key = normalizeKey(SHEETS.NEW_LEASE, containerNo);
-  // Log columns append rather than replace — compute the full next value
-  // up front (from the Mongo doc, which is the same value the previous
-  // writeThrough call left it at) so both the Mongo $set and the async
-  // Sheets push write the identical absolute string. A retry of the Sheets
-  // push then just re-sets the same value instead of appending twice.
-  const existing = await getCollection(SHEETS.NEW_LEASE).findOne({ key });
-  if (!existing) throw new AppError(`Not found: ${containerNo}`);
-
-  const dateStr = safeStr(new Date(timestamp));
-  const newEntry = `${dateStr} | ${issue || ''} | ${remarks || ''} | ${userEmail || ''}`;
-  const cur = safeStr(existing.row?.[30]); // AE, 0-based index 30
-  const next = cur && cur.trim() !== '' ? `${cur}\n${newEntry}` : newEntry;
-
-  const result = await writeThrough({
-    collection: SHEETS.NEW_LEASE,
-    filter: { key },
-    update: { $set: { 'row.30': next } },
-    mode: 'update',
-    actor: userEmail,
-    sheetPush: {
-      targetSheet: SHEETS.NEW_LEASE, operation: 'update', handler: 'verify.saveVerifyFollowUp',
-      payload: { containerNo, next }
+    const { rows } = await getSheetData(SHEETS.NEW_LEASE);
+    let targetRow = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
     }
+    if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    // dmyTime, not safeStr — safeStr's `val instanceof Date` branch formats a
+    // DATE ONLY (formatDMY), silently dropping the time of day this log entry
+    // happened at, unlike every sibling save in this file (saveVerifyAction,
+    // etc.), which all use dmyTime for exactly this reason.
+    const dateStr = dmyTime(new Date(timestamp));
+    const newEntry = `${dateStr} | ${issue || ''} | ${remarks || ''} | ${userEmail || ''}`;
+    const cur = safeStr(rows[targetRow - 2][30]); // AE, 0-based index 30
+    const next = cur && cur.trim() !== '' ? `${cur}\n${newEntry}` : newEntry;
+
+    const updates = [{ range: `'${SHEETS.NEW_LEASE}'!AE${targetRow}`, values: [[next]] }];
+    await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    return 'OK';
   });
-  if (!result.matched) throw new AppError(`Not found: ${containerNo}`);
-  return 'OK';
 }
 
 /* ===================== RETURN DASHBOARD (send-back log across ALL rows) ===================== */
@@ -500,12 +494,13 @@ export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEma
     if (!updates.length) throw new AppError('No editable fields in update');
 
     await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.NEW_LEASE, rn, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
 
     // Audit trail entry in the same follow-up log the Verify detail page's
     // Follow-up Log reads — written in the legacy 3-part (no-issue) shape so
     // it shows in that history without also counting as a "send back" on the
     // Return Dashboard (which only counts 4-part entries with an issue).
-    const dateStr = safeStr(new Date());
+    const dateStr = dmyTime(new Date());
     const newEntry = `${dateStr} | Agreement data updated (${changedLabels.join(', ')}) | ${userEmail || ''}`;
     const srcRow = rows[rn - 2] || [];
     const cur = safeStr(srcRow[30]);

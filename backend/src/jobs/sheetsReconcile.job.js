@@ -1,9 +1,8 @@
 /**
- * Periodic Sheets -> Mongo reconciliation — the "bridge" the user asked for:
- * catches direct manual edits made in the live spreadsheet (outside the
- * app), and resurrects any outbox entry that exhausted its retries instead
- * of silently dropping it. Runs on a cron schedule (jobs/index.js), gated
- * behind ENABLE_SHEETS_SYNC.
+ * Periodic Sheets -> Mongo reconciliation — catches direct manual edits made
+ * in the live spreadsheet (outside the app) and keeps the Mongo backup
+ * mirror in step. Runs on a cron schedule (jobs/index.js), gated behind
+ * ENABLE_SHEETS_SYNC.
  *
  * Scope note: this pass only reconciles the sheets listed in
  * config/mongoSheetMapping.js (the ones the dashboard/tasks/roles domains
@@ -13,10 +12,13 @@
  * only for the sheets it covers, using incremental upserts instead of a
  * full wipe, per the "avoid dropping collections every time" requirement.
  *
- * Never deletes a Mongo doc just because its sheet row disappeared — a
- * still-in-flight outbox delete looks the same from here, so deciding "the
- * row is really gone" is left to the outbox delete handler completing, not
- * to this job noticing an absence.
+ * SHEETS-FIRST (reverted 2026-08-21) — every write in the app now lands on
+ * Sheets directly; Mongo is a read-only backup mirror this job refreshes
+ * one direction only (Sheets -> Mongo). The outbox worker and its
+ * in-flight-write bookkeeping (resurrectDeadEntries/resurrectStuckProcessing/
+ * inFlightDocIds) existed only to protect Mongo-first writes still in
+ * transit to Sheets — with no such writes left to protect, they were removed
+ * along with writeThrough.service.js and jobs/outboxWorker.js.
  */
 import { getSheetData } from '../services/googleSheets.service.js';
 import { getCollection, withTransaction } from '../services/mongo.service.js';
@@ -24,56 +26,6 @@ import { MONGO_SHEET_MAPPING, normalizeKey } from '../config/mongoSheetMapping.j
 import { logger } from '../utils/logger.js';
 
 const META_ID = '__meta__';
-const OUTBOX_COLLECTION = '_sync_outbox';
-
-async function resurrectDeadEntries() {
-  const now = new Date();
-  const res = await getCollection(OUTBOX_COLLECTION).updateMany(
-    { status: 'dead' },
-    { $set: { status: 'pending', attempts: 0, nextAttemptAt: now, lastError: null, updatedAt: now } }
-  );
-  if (res.modifiedCount) {
-    logger.warn(`[SYNC] Resurrected ${res.modifiedCount} dead outbox entr${res.modifiedCount === 1 ? 'y' : 'ies'}`);
-  }
-}
-
-// outboxWorker.js's claimBatch marks an entry 'processing' BEFORE running its
-// handler — if the process restarts between those two steps (this backend
-// restarts often during active development, e.g. every code edit under
-// `node --watch`), that entry is orphaned: claimBatch only ever re-claims
-// 'pending'/'failed', never 'processing', so it would sit there forever,
-// permanently un-pushed to Sheets, with nothing in the logs to say so.
-// Confirmed 2026-08-08: 68 entries stuck this way, some over a week old.
-// Reset to 'pending' at its ORIGINAL createdAt (already in the past, so
-// immediately due) rather than "now", so claimBatch's nextAttemptAt-ascending
-// sort replays multiple stuck writes to the same cell in their original
-// order — the last one replayed is the same final value Mongo already holds.
-const STUCK_PROCESSING_MS = 3 * 60 * 1000; // generous vs. a single Sheets push's normal ~1s
-async function resurrectStuckProcessing() {
-  const cutoff = new Date(Date.now() - STUCK_PROCESSING_MS);
-  const col = getCollection(OUTBOX_COLLECTION);
-  const stuck = await col.find({ status: 'processing', updatedAt: { $lt: cutoff } }).toArray();
-  if (!stuck.length) return;
-  const now = new Date();
-  for (const entry of stuck) {
-    await col.updateOne(
-      { _id: entry._id, status: 'processing' },
-      { $set: { status: 'pending', nextAttemptAt: entry.createdAt, updatedAt: now } }
-    );
-  }
-  logger.warn(`[SYNC] Resurrected ${stuck.length} stuck 'processing' outbox entr${stuck.length === 1 ? 'y' : 'ies'} (backend likely restarted mid-push)`);
-}
-
-/** documentId strings (as string, to match ObjectId#toString) with a
- *  not-yet-finished outbox push targeting this sheet — reconciliation must
- *  never overwrite these, or it would clobber a Mongo-first write that
- *  hasn't reached Sheets yet with the (still old) value it just read. */
-async function inFlightDocIds(sheetName) {
-  const entries = await getCollection(OUTBOX_COLLECTION)
-    .find({ targetSheet: sheetName, status: { $in: ['pending', 'processing', 'failed'] } }, { projection: { documentId: 1 } })
-    .toArray();
-  return new Set(entries.map((e) => String(e.documentId)));
-}
 
 /** No reliable natural key exists for this sheet (verified — see
  *  mongoSheetMapping.js) and it has no write-through path in this pass, so
@@ -93,38 +45,46 @@ async function inFlightDocIds(sheetName) {
 async function reconcileSheetFullRefresh(sheetName, headers, rows) {
   const col = getCollection(sheetName);
   const now = new Date();
+
+  if (!rows.length) {
+    // A genuinely empty sheet is essentially impossible for anything mapped
+    // as fullRefresh here (Deployed sheet, New Lease, Operation sheet all
+    // carry live, ongoing business data) — a 0-row read is far more likely a
+    // transient Sheets API hiccup (quota, timeout, a malformed response that
+    // didn't throw) than reality. Wiping the mirror on that basis deletes
+    // every row the whole app reads from while the real spreadsheet is
+    // completely untouched — confirmed 2026-08-21, this exact path zeroed
+    // out all three collections during a period of heavy quota pressure.
+    // Skip the refresh entirely rather than risk it; the next successful
+    // cycle (5 min later) re-syncs normally.
+    logger.error(`[SYNC] Refusing to full-refresh ${sheetName}: fetched 0 rows — treating as a failed read, not a genuinely empty sheet. Mirror left untouched.`);
+    return { sheetName, imported: 0, updated: 0, skippedBlankKey: 0, totalRows: 0, skippedEmptyGuard: true };
+  }
+
   await withTransaction(async (session) => {
     await col.deleteMany({ _id: { $ne: META_ID } }, { session });
-    if (rows.length) {
-      await col.insertMany(rows.map((row, i) => ({ key: `row_${i}`, row, deletedAt: null, createdAt: now, updatedAt: now })), { session });
-    }
+    await col.insertMany(rows.map((row, i) => ({ key: `row_${i}`, row, deletedAt: null, createdAt: now, updatedAt: now })), { session });
   });
   logger.info(`[SYNC] Inserted: ${rows.length}`);
   logger.info(`[SYNC] Updated: 0`);
   logger.info(`[SYNC] Skipped: 0`);
-  return { sheetName, imported: rows.length, updated: 0, skippedInFlight: 0, skippedBlankKey: 0, totalRows: rows.length };
+  return { sheetName, imported: rows.length, updated: 0, skippedBlankKey: 0, totalRows: rows.length };
 }
 
 async function reconcileSheetByKey(sheetName, mapping, rows) {
   const col = getCollection(sheetName);
   const now = new Date();
 
-  const [existingDocs, inFlight] = await Promise.all([
-    col.find({ _id: { $ne: META_ID } }, { projection: { key: 1 } }).toArray(),
-    inFlightDocIds(sheetName)
-  ]);
-  const existingKeyToId = new Map(existingDocs.map((d) => [d.key, String(d._id)]));
+  const existingDocs = await col.find({ _id: { $ne: META_ID } }, { projection: { key: 1 } }).toArray();
+  const existingKeys = new Set(existingDocs.map((d) => d.key));
 
-  let imported = 0, updated = 0, skippedInFlight = 0, skippedBlankKey = 0;
+  let imported = 0, updated = 0, skippedBlankKey = 0;
   const ops = [];
 
   for (const row of rows) {
     const rawKey = row[mapping.naturalKeyColumn];
     if (rawKey == null || String(rawKey).trim() === '') { skippedBlankKey++; continue; }
     const key = normalizeKey(sheetName, rawKey);
-
-    const existingId = existingKeyToId.get(key);
-    if (existingId && inFlight.has(existingId)) { skippedInFlight++; continue; }
 
     ops.push({
       updateOne: {
@@ -133,18 +93,17 @@ async function reconcileSheetByKey(sheetName, mapping, rows) {
         upsert: true
       }
     });
-    if (existingId) updated++; else imported++;
+    if (existingKeys.has(key)) updated++; else imported++;
   }
 
   if (ops.length) await col.bulkWrite(ops, { ordered: false });
-  const skipped = skippedInFlight + skippedBlankKey;
   logger.info(`[SYNC] Inserted: ${imported}`);
   logger.info(`[SYNC] Updated: ${updated}`);
-  logger.info(`[SYNC] Skipped: ${skipped}`);
-  return { sheetName, imported, updated, skippedInFlight, skippedBlankKey, totalRows: rows.length };
+  logger.info(`[SYNC] Skipped: ${skippedBlankKey}`);
+  return { sheetName, imported, updated, skippedBlankKey, totalRows: rows.length };
 }
 
-async function reconcileSheet(sheetName) {
+export async function reconcileSheet(sheetName) {
   const mapping = MONGO_SHEET_MAPPING[sheetName];
   if (!mapping || (mapping.naturalKeyColumn == null && !mapping.fullRefresh)) return { sheetName, skipped: true };
 
@@ -167,28 +126,49 @@ async function reconcileSheet(sheetName) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Guards against two overlapping cycles racing the SAME collection. Under
+// quota pressure a single sheet's read can retry for 20-30+ seconds (5
+// attempts, exponential backoff), so a full cycle across every mapped sheet
+// can run long enough to still be in progress when the next 5-minute cron
+// tick fires. node-cron does not serialize registrations — a second
+// runSheetsReconciliation() would start concurrently, and two overlapping
+// full-refresh transactions on the same fullRefresh collection (each its
+// own delete-then-insert) can commit out of order: whichever finishes LAST
+// wins, even if its own read was the slower/staler one. Confirmed
+// 2026-08-21: Deployed sheet was found wiped to 0 documents mid-session
+// with no error logged and no single reconcile run showing an empty read —
+// consistent with exactly this race, not a bug in any one cycle's own logic.
+let cycleInProgress = false;
+
 export async function runSheetsReconciliation() {
-  const cycleStart = Date.now();
-  logger.info('[SYNC] Starting sync cycle');
-  await resurrectDeadEntries();
-  await resurrectStuckProcessing();
-  const sheetNames = Object.keys(MONGO_SHEET_MAPPING);
-  const results = [];
-  for (let i = 0; i < sheetNames.length; i++) {
-    const sheetName = sheetNames[i];
-    try {
-      const r = await reconcileSheet(sheetName);
-      results.push(r);
-    } catch (err) {
-      logger.error(`[SYNC ERROR] Failed to fetch sheet ${sheetName}`);
-      logger.error(`[SYNC ERROR] Reason: ${err?.message || err}`);
-    }
-    // A small gap between sheets — 9 back-to-back full-sheet reads can burn
-    // through the "requests per minute" cap on their own, even with nothing
-    // else contending for it (confirmed 2026-08-08: this exact cycle hit the
-    // wall on sheet 8 of 9). Skip the wait after the last sheet.
-    if (i < sheetNames.length - 1) await sleep(1500);
+  if (cycleInProgress) {
+    logger.warn('[SYNC] Skipping sync cycle — a previous cycle is still running (likely quota-retry backlog).');
+    return [];
   }
-  logger.info(`[SYNC] Sync cycle completed in ${((Date.now() - cycleStart) / 1000).toFixed(1)}s`);
-  return results;
+  cycleInProgress = true;
+  const cycleStart = Date.now();
+  try {
+    logger.info('[SYNC] Starting sync cycle');
+    const sheetNames = Object.keys(MONGO_SHEET_MAPPING);
+    const results = [];
+    for (let i = 0; i < sheetNames.length; i++) {
+      const sheetName = sheetNames[i];
+      try {
+        const r = await reconcileSheet(sheetName);
+        results.push(r);
+      } catch (err) {
+        logger.error(`[SYNC ERROR] Failed to fetch sheet ${sheetName}`);
+        logger.error(`[SYNC ERROR] Reason: ${err?.message || err}`);
+      }
+      // A small gap between sheets — 9 back-to-back full-sheet reads can burn
+      // through the "requests per minute" cap on their own, even with nothing
+      // else contending for it (confirmed 2026-08-08: this exact cycle hit the
+      // wall on sheet 8 of 9). Skip the wait after the last sheet.
+      if (i < sheetNames.length - 1) await sleep(1500);
+    }
+    logger.info(`[SYNC] Sync cycle completed in ${((Date.now() - cycleStart) / 1000).toFixed(1)}s`);
+    return results;
+  } finally {
+    cycleInProgress = false;
+  }
 }

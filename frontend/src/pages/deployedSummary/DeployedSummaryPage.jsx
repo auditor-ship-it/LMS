@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { PageHeader, Card, Button, Select, StatCard, DataGrid, ActionMenu, LoadingState, ErrorState, EmptyState, renderCellValue } from '../../components/ui/index.js';
+import { PageHeader, Card, Button, Select, StatCard, DataGrid, ActionMenu, ErrorState, EmptyState, renderCellValue } from '../../components/ui/index.js';
+import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchDeployedSummary, fetchDeployedDetail } from '../../services/deployedSummary.service.js';
@@ -204,7 +205,7 @@ export function DeployedSummaryPage() {
 
       <Card>
         {loading ? (
-          <LoadingState label="Loading deployed summary…" />
+          <SkeletonTable columns={6} rows={10} />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
         ) : !data || !data.months || data.months.length === 0 ? (
@@ -397,16 +398,15 @@ function DeployedDetailPanel({ selection, onClose }) {
       )}
     >
       <p className={styles.hint}>{filterLabel} · {containers.length} container{containers.length === 1 ? '' : 's'}</p>
-      {loading ? (
-        <LoadingState label="Loading details…" />
-      ) : error ? (
+      {!loading && error ? (
         <ErrorState message={error} onRetry={reload} />
-      ) : containers.length === 0 ? (
+      ) : !loading && containers.length === 0 ? (
         <EmptyState message="No matching containers for this selection" />
       ) : (
         <DataGrid
           headers={DETAIL_HEADERS}
           rows={rows}
+          loading={loading}
           rowKey={(r) => r._rowNum}
           renderRow={(values) => values.map((v, i) => <td key={i}>{renderCellValue(v)}</td>)}
         />

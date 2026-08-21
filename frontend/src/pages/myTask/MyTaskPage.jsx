@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PageHeader, Card, SearchBar, FilterBar, Pagination, StatCard, LoadingState, ErrorState, EmptyState } from '../../components/ui/index.js';
+import { PageHeader, Card, SearchBar, FilterBar, Pagination, StatCard, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -104,14 +104,15 @@ export function MyTaskPage() {
       </div>
 
       <Card>
-        {loading ? (
-          <LoadingState label="Loading task counts…" />
-        ) : error ? (
+        {error ? (
           <ErrorState message={error} onRetry={reload} />
-        ) : !filtered.length ? (
+        ) : !loading && !filtered.length ? (
           <EmptyState message="No tasks match your search" />
         ) : (
           <>
+            {/* Real cards render immediately, each showing a shimmer in place
+                of its count until the real numbers land — no full-page
+                spinner blocking the whole grid while one fetch is in flight. */}
             <div className={styles.grid}>
               {pageRows.map((tile) => (
                 <StatCard
@@ -120,14 +121,17 @@ export function MyTaskPage() {
                   tint={tile.tint}
                   label={tile.owner ? `${tile.label} (${tile.owner})` : tile.label}
                   value={formatValue(tile, tile.value)}
-                  footnote={tile.value > 0 ? 'Click to open →' : 'All clear'}
+                  loading={loading}
+                  footnote={loading ? undefined : (tile.value > 0 ? 'Click to open →' : 'All clear')}
                   onClick={tile.path ? () => navigate(tile.path) : undefined}
                 />
               ))}
             </div>
-            <div className={styles.paginationWrap}>
-              <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
-            </div>
+            {!loading && (
+              <div className={styles.paginationWrap}>
+                <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
+              </div>
+            )}
           </>
         )}
       </Card>

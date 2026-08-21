@@ -1,4 +1,5 @@
 import { Icon } from './Icon.jsx';
+import { SkeletonValue } from './Skeleton.jsx';
 import styles from './StatCard.module.css';
 
 /**
@@ -17,7 +18,7 @@ import styles from './StatCard.module.css';
  * fires without also triggering the card's main onClick.
  */
 export function StatCard({
-  icon, label, value, trend, trendDirection = 'flat', footnote, footnoteSegments, tint, active, onClick
+  icon, label, value, loading, trend, trendDirection = 'flat', footnote, footnoteSegments, tint, active, onClick
 }) {
   const cls = [
     styles.card,
@@ -36,15 +37,15 @@ export function StatCard({
           {icon && <Icon name={icon} size="sm" />}
           {label}
         </span>
-        <span className={styles.kval}>{value}</span>
+        <span className={styles.kval}>{loading ? <SkeletonValue /> : value}</span>
       </HitTag>
-      {(trend || footnote) && !hasSegments && (
+      {!loading && (trend || footnote) && !hasSegments && (
         <span className={styles.kfoot}>
           {trend && <span className={`${styles.trend} ${styles[trendDirection]}`}>{trend}</span>}
           {footnote}
         </span>
       )}
-      {hasSegments && (
+      {!loading && hasSegments && (
         <span className={styles.kfootSegments}>
           {footnoteSegments.map((s) => (
             <button

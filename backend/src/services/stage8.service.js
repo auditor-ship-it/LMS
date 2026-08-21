@@ -51,11 +51,13 @@ const OFFLEASE = 'offlease';
 const CACHE_KEY = 'offlease:stage8-movements:v7';
 const S9_CACHE_KEY = 'offlease:stage9-movements:v8';
 /* This is the CEILING on staleness, not the only path to freshness:
-   refreshFmsCaches() (below) is run every 1 minute by jobs/index.js, so in
-   practice a change in the FMS workbook is visible within a minute without
-   anyone opening Stage 2. This TTL only matters if that job is disabled or
-   falls behind — a stale-but-present value beats a failed read on a quota
-   that is currently exhausted.
+   refreshFmsCaches() (below) is run every 5 minutes by jobs/index.js (reverted
+   from 1 minute 2026-08-20 — that cadence was blowing through the Sheets API's
+   per-minute read quota, see jobs/index.js's header comment), so in practice a
+   change in the FMS workbook is visible within 5 minutes without anyone
+   opening Stage 2. This TTL only matters if that job is disabled or falls
+   behind — a stale-but-present value beats a failed read on a quota that is
+   currently exhausted.
 
    In SECONDS: cachePut takes a TTL in seconds and multiplies by 1000 itself.
    This was written `30 * 60 * 1000`, which asked for 1.8 million seconds

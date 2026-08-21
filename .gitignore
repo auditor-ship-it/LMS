@@ -19,6 +19,12 @@ dist-ssr
 .env.*
 !.env.example
 
+# Raw Google service account key JSON downloads (e.g. project-id-hash.json) —
+# fields get copied into .env; the file itself must never be committed.
+*-*.iam.gserviceaccount.com.json
+nikunj-*.json
+*-service-account*.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

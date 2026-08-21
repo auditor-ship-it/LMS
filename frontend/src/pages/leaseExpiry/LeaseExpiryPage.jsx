@@ -6,6 +6,8 @@ import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
+import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchExpiryList, actionExpiryRow, syncSalePersons } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
@@ -45,7 +47,12 @@ const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle|po)$/i;
  * container number (row[0]) as the identifier, matching the main app.
  */
 export function LeaseExpiryPage() {
-  const { data, loading, error, reload } = useAsync(() => fetchExpiryList(), []);
+  const { data, loading, error, reload, setData } = useAsync(() => fetchExpiryList(), []);
+  // Renew & Document reads the same Deployed-sheet columns this page's
+  // Renew/Off-Lease actions write — without this, switching to that page
+  // after an action here would still show whatever it last had cached
+  // (KeepAlivePages keeps every visited page mounted and only fetches once).
+  useAutoRefresh('deployed-sheet', reload);
   const { canAct } = usePermission();
   const canActExpiry = canAct('expiry');
 
@@ -173,9 +180,26 @@ export function LeaseExpiryPage() {
     setActionError('');
     try {
       const result = await actionExpiryRow(containerNo, new Date().toISOString(), status);
-      if (result === 'ALREADY_PROCESSED') setActionError(`${containerNo} was already actioned by someone else.`);
+      if (result === 'ALREADY_PROCESSED') {
+        setActionError(`${containerNo} was already actioned by someone else.`);
+      } else {
+        // Patch the row locally with what we already know just happened —
+        // the write already succeeded against the live sheet (Sheets-first
+        // app-wide as of 2026-08-21), so this optimistic patch is already
+        // fully correct. Deliberately NOT followed by an immediate reload()
+        // on this page: DataGrid's loading state swaps the whole table body
+        // for a skeleton, which would hide this already-correct row behind
+        // a 1-4s skeleton flash (a real Sheets round trip, no longer the
+        // sub-second Mongo read this used to be) for no benefit. Other
+        // pages still catch up via invalidate() below, in the background,
+        // at their own pace.
+        setData((prev) => (prev?.data ? {
+          ...prev,
+          data: prev.data.map((r) => (r.row?.[0] === containerNo ? { ...r, actionStatus: status } : r))
+        } : prev));
+      }
       setSelectedIdx(null);
-      reload();
+      invalidate('deployed-sheet');
     } catch (e) {
       setActionError(apiErrorMessage(e));
     } finally {
@@ -199,6 +223,7 @@ export function LeaseExpiryPage() {
       if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
       setSelectedIdx(null);
       reload();
+      invalidate('deployed-sheet');
     } catch (e) {
       setActionError(apiErrorMessage(e));
     } finally {
@@ -256,7 +281,7 @@ export function LeaseExpiryPage() {
 
             <DataGrid
               className={styles.wrapTable}
-              headers={[...tableHeaders, 'Ageing', 'Days Left']}
+              headers={[...tableHeaders, 'Ageing', 'Days Left', 'Renewal Status']}
               rows={pageRows}
               rowKey={(r) => r._idx}
               loading={loading}
@@ -274,6 +299,9 @@ export function LeaseExpiryPage() {
                 </td>,
                 <td key="days" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   {formatDays(item.daysLeft)}
+                </td>,
+                <td key="renewalStatus" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
+                  {item.actionStatus ? <StatusBadge status={item.actionStatus} /> : '—'}
                 </td>
               ]}
             />
@@ -300,6 +328,12 @@ export function LeaseExpiryPage() {
 
 function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKey, onBack, onRenew, onOffLease }) {
   const containerNo = item.row?.[0];
+  // Once Renew has been clicked, this container stays here (it can be
+  // renewed again in future) but is already in progress on Renew & Document
+  // — re-clicking Renew would just bounce off the backend's ALREADY_PROCESSED
+  // guard, so swap the button for a status note instead of leaving a
+  // confusing dead-end action visible.
+  const inProgress = !!item.actionStatus;
   return (
     <div>
       <Button variant="secondary" size="sm" onClick={onBack} className={styles.backBtn}>← Back to List ({total})</Button>
@@ -309,7 +343,10 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
           <div>
             <h4 className={styles.detailTitle}>{containerNo}</h4>
           </div>
-          <StatusBadge status={BAND_LABEL[item.band] || '—'} />
+          <div className={styles.actionsCell}>
+            {inProgress && <StatusBadge status={item.actionStatus} />}
+            <StatusBadge status={BAND_LABEL[item.band] || '—'} />
+          </div>
         </div>
 
         <div className={styles.detailGrid}>
@@ -328,7 +365,11 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
         <div className={styles.detailFooter}>
           {canAct ? (
             <div className={styles.actionsCell}>
-              <Button size="lg" variant="primary" loading={busyKey === `${containerNo}-Renewed`} onClick={onRenew}>Renew</Button>
+              {inProgress ? (
+                <span className={styles.viewOnlyIcon}>Sent for renewal — continue from Renew &amp; Document</span>
+              ) : (
+                <Button size="lg" variant="primary" loading={busyKey === `${containerNo}-Renewed`} onClick={onRenew}>Renew</Button>
+              )}
               <Button size="lg" variant="secondary" loading={busyKey === `${containerNo}-Off-Lease`} onClick={onOffLease}>Off-Lease</Button>
             </div>
           ) : (

@@ -8,7 +8,7 @@
  * belong in this backend; Deployed Summary itself only ever reads
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
-import { getSheetDataFromMongo as getSheetData } from './mongoSheetData.service.js';
+import { getSheetData } from './googleSheets.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr, parseDate } from '../utils/format.js';
 import { normKey } from '../utils/normalize.js';

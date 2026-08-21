@@ -51,8 +51,13 @@ export function CompleteDocumentModal({ open, item, submitting, error, onClose, 
           </label>
         </div>
 
+        {/* Neither this nor the PO fields below are individually mandatory —
+            a renewal can go through on a PO basis with no signed agreement,
+            or on an agreement basis with no PO. Provide whichever this
+            container is actually being renewed on; the backend only needs
+            at least one of the two before Documents Pending can clear. */}
         <label className={styles.field}>
-          <span className={styles.label}>Signed Copy *</span>
+          <span className={styles.label}>Signed Copy (Agreement basis)</span>
           <FileUpload
             label={form.signedCopy ? `Selected: ${form.signedCopy.fileName}` : 'Choose signed copy'}
             accept={ACCEPT}
@@ -62,11 +67,11 @@ export function CompleteDocumentModal({ open, item, submitting, error, onClose, 
 
         <div className={styles.grid2}>
           <label className={styles.field}>
-            <span className={styles.label}>PO No</span>
+            <span className={styles.label}>PO No (PO basis)</span>
             <input type="text" value={form.poNo} onChange={set('poNo')} />
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>PO File</span>
+            <span className={styles.label}>PO File (PO basis)</span>
             <FileUpload
               label={form.poFile ? `Selected: ${form.poFile.fileName}` : 'Choose PO file'}
               accept={ACCEPT}

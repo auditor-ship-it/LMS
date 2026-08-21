@@ -10,6 +10,8 @@
  * — the API response includes it, and it stays out of the download too.
  */
 
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
+
 export const APPROVAL_LABEL = { approved: 'Approved', rejected: 'Rejected' };
 
 /** Raw sheet cell -> plain text. The screen renders bare URLs as a 📎 link
@@ -40,7 +42,7 @@ export function buildIdentityRows(result) {
 
   if (inOffLease && approvalStatus) {
     rows.push(['Approval Status', APPROVAL_LABEL[String(approvalStatus).toLowerCase()] || approvalStatus]);
-    if (approvalDate) rows.push(['Approved / Rejected On', approvalDate]);
+    if (approvalDate) rows.push(['Approved / Rejected On', formatActionTimestamp(approvalDate)]);
     if (approvalUser) rows.push(['Approved By', approvalUser]);
   }
 
@@ -63,7 +65,7 @@ export function buildProgressRows(result) {
     stage: 'Gate',
     name: 'Intimation Approval',
     status: APPROVAL_LABEL[approvalLower] || 'Pending',
-    on: decided ? cellText(approvalDate) : '',
+    on: decided ? formatActionTimestamp(approvalDate) : '',
     by: decided ? cellText(approvalUser) : '',
     sla: result.approvalSla || null
   };
@@ -73,7 +75,7 @@ export function buildProgressRows(result) {
       stage: s.displayStage ? `Stage ${s.displayStage}` : 'Retired',
       name: cellText(s.label),
       status: s.done ? 'Completed' : 'Pending',
-      on: s.done ? cellText(s.timestamp) : '',
+      on: s.done ? formatActionTimestamp(s.timestamp) : '',
       by: s.done ? cellText(s.user) : '',
       sla: s.sla || null
     };
@@ -145,7 +147,7 @@ export function buildHistoryRows(result) {
     stage: 'Stage 9',
     name: `Movement — ${cellText(m.movementType) || 'Unspecified'}`,
     status: 'Logged',
-    on: cellText(m.movementDate) || cellText(m.timestamp),
+    on: formatActionTimestamp(m.movementDate) || formatActionTimestamp(m.timestamp),
     by: cellText(m.enteredBy),
     detail: [cellText(m.location), cellText(m.remarks)].filter(Boolean).join(' · ')
   }));
@@ -212,7 +214,7 @@ export function buildFilledStages(result) {
       internalStage: s.stage,
       retired: !s.displayStage,
       label: cellText(s.label),
-      timestamp: cellText(s.timestamp),
+      timestamp: formatActionTimestamp(s.timestamp),
       user: cellText(s.user),
       fields: (s.fields || []).map((f) => [cellText(f.label), cellText(f.value)]),
       // [{title, pointLabel, rows}] for whichever checklists this stage has.

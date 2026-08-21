@@ -34,9 +34,8 @@ function collectionOf(commandName, command) {
 /** Best-effort record count from the raw server reply — accurate for
  *  insert/update/delete (server reports `n` directly); for find/aggregate
  *  this is just the first batch (Mongo's default page size, ~101 docs) —
- *  see mongoSheetData.service.js/writeThrough.service.js for the accurate
- *  full-count logs on the two funnels essentially all app traffic goes
- *  through today. */
+ *  see mongoSheetData.service.js's own full-count log for the accurate
+ *  total on that read path. */
 function describeReply(commandName, reply) {
   if (!reply) return null;
   if (reply.cursor) return (reply.cursor.firstBatch || reply.cursor.nextBatch || []).length;

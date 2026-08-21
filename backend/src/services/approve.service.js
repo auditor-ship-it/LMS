@@ -22,7 +22,6 @@
  * for the AC/timestamp columns here.
  */
 import { getSheetData, updateRange, batchUpdateValues } from './googleSheets.service.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr, buildDisplayRow } from '../utils/format.js';
 import { normKey, splitContainers } from '../utils/normalize.js';
@@ -45,15 +44,12 @@ function padWidth(arr, width) {
 /* ===================== APPROVE LEASE SCREEN ===================== */
 
 /**
- * doWrite=false (default, page-load): read-only, no sheet write -> fast, and
- * safe to serve from the Mongo mirror. The actual auto-approve WRITE only
- * happens when doWrite=true (runAutoApproval / an explicit manual re-run) —
- * that path computes row numbers positionally from this same read and writes
- * them straight back to the live sheet (acWrites below), so it MUST read live
- * Sheets too: a Mongo mirror's row order isn't guaranteed to match the live
- * sheet, and reusing its positions for a write would silently hit the wrong
- * row (see splendid-rolling-candy.md Phase 1a/1b). The list is still correct
- * either way because would-be-approved rows are filtered out in memory either way.
+ * doWrite=false (default, page-load): read-only, no sheet write. The actual
+ * auto-approve WRITE only happens when doWrite=true (runAutoApproval / an
+ * explicit manual re-run) — that path computes row numbers positionally
+ * from this same read and writes them straight back to the live sheet
+ * (acWrites below). Both paths read live Sheets (SHEETS-FIRST, reverted
+ * 2026-08-21).
  */
 /**
  * Client names for cross-sheet comparison — lower-cased with punctuation and
@@ -107,7 +103,7 @@ export async function _offLeaseCycleIndex() {
   };
 
   try {
-    const { headers, rows } = await getSheetDataFromMongo(SHEETS.OFF_LEASE_TRACKING);
+    const { headers, rows } = await getSheetData(SHEETS.OFF_LEASE_TRACKING);
     const cCode = _findOlColumnMulti(headers, ['client code']);
     const cName = _findOlColumnMulti(headers, ['client name']);
     const cDate = _findOlColumnMulti(headers, ['ol intimation date', 'intimation date']);
@@ -124,7 +120,7 @@ export async function _offLeaseCycleIndex() {
   }
 
   try {
-    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
     /* 'Customer Name' here, not 'Client Name' — this sheet names the column
        differently from the other two, and matching on /client/ alone picks up
        'Client Code' instead and compares a code against a name. */
@@ -170,9 +166,7 @@ export function _cycleClosedAt(cycleIndex, container, clientCode, clientName) {
 }
 
 export async function getApproveData(doWrite) {
-  const { headers: rawHeaders, rows: rawRows } = doWrite
-    ? await getSheetData(SHEETS.OPERATION)
-    : await getSheetDataFromMongo(SHEETS.OPERATION);
+  const { headers: rawHeaders, rows: rawRows } = await getSheetData(SHEETS.OPERATION);
   if (!rawRows.length) return { headers: [], data: [], catColIdx: -1 };
 
   const hdr = padWidth(rawHeaders, 31);
@@ -345,12 +339,10 @@ function decidedEntryFields(row) {
 
 /**
  * Decided Operation Sheet rows (Approved or Rejected), each annotated with
- * the audit-trail fields above. Read-only, Mongo-backed like getApproveData's
- * own default path -- this is a display screen, not a write path, so there is
- * no reason to hit live Sheets or take the sheet lock.
+ * the audit-trail fields above. Read-only, no sheet lock needed.
  */
 export async function getApprovalHistory() {
-  const { rows: rawRows } = await getSheetDataFromMongo(SHEETS.OPERATION);
+  const { rows: rawRows } = await getSheetData(SHEETS.OPERATION);
   if (!rawRows.length) return { data: [] };
 
   const allRows = rawRows.map((r) => padWidth(r, 31));
@@ -519,7 +511,7 @@ export async function _expiryOrderNoMap() {
 export async function _olStageCounts() {
   const c = { s1: 0, s2: 0, s3: 0, s4: 0, s5: 0, s6: 0, s7: 0, s8: 0, approval: 0 };
   try {
-    const { headers, rows } = await getSheetDataFromMongo(SHEETS.OFF_LEASE_TRACKING);
+    const { headers, rows } = await getSheetData(SHEETS.OFF_LEASE_TRACKING);
     if (!rows.length) return c;
     const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
     const s1Col = OL_STAGE_INFO[1].statusCol;

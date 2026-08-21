@@ -1,0 +1,38 @@
+.skel {
+  display: inline-block;
+  background: linear-gradient(100deg, var(--skel-a) 30%, var(--skel-b) 50%, var(--skel-a) 70%);
+  background-size: 220% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -20% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel { animation: none; background: var(--skel-a); }
+}
+
+.tableWrap { display: flex; flex-direction: column; }
+.tableRow {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.tableRow:last-child { border-bottom: none; }
+.tableRow > span { flex: 1; min-width: 0; }
+
+.statValue { margin-top: 2px; }
+
+.cardsWrap { display: flex; flex-direction: column; gap: 10px; }
+.cardRow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.cardChips { display: flex; gap: 6px; }

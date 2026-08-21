@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { PageHeader, Card, Button, LoadingState, EmptyState, ErrorState, ConfirmDialog } from '../../components/ui/index.js';
+import { PageHeader, Card, Button, EmptyState, ErrorState, ConfirmDialog } from '../../components/ui/index.js';
+import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import * as rolesService from '../../services/roles.service.js';
 import { AddAccountForm } from './AddAccountForm.jsx';
@@ -122,7 +123,7 @@ export function RolesAccessPage() {
         </div>
       )}
 
-      {loading && <Card><LoadingState label="Loading roles & access…" /></Card>}
+      {loading && <Card><SkeletonTable columns={4} rows={6} /></Card>}
       {!loading && error && <Card><ErrorState message={error} onRetry={load} /></Card>}
 
       {!loading && !error && data && (

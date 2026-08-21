@@ -8,6 +8,7 @@ import { DataGrid } from '../../components/ui/DataGrid.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { ALL_STAGES, stageDisplayNumber, stageCaption, isReadOnlyStage } from '../../constants/stages.js';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -130,7 +131,7 @@ export function StagePageBase({ stageNumber, embedded }) {
                 ? (
                   <span
                     className={item.tat.delayed ? styles.tatLate : styles.tatOk}
-                    title={`Waiting since ${item.tat.startedAt}`}
+                    title={`Waiting since ${formatActionTimestamp(item.tat.startedAt)}`}
                   >
                     {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
                   </span>

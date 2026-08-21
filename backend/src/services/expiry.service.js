@@ -10,12 +10,20 @@
  *
  * DEPENDENCY NOTE: getExpiryDataByFilter calls _expiryOrderNoMap() (LMS.js
  * line 1025, just above this file's assigned range) and completeDocStage
- * calls _deployedClientName()/_logRenewal() (LMS.js lines 681/701, well
- * before this file's assigned range). Those three helpers are ported here
- * too (faithfully, from the original bodies) purely as dependencies so the
- * in-range functions behave identically — they were not otherwise assigned
- * to this porting pass. If another agent also ports the ranges that
- * originally own them, reconcile/dedupe against this copy.
+ * calls _deployedClientName() (LMS.js line 681, well before this file's
+ * assigned range). Those helpers are ported here too (faithfully, from the
+ * original bodies) purely as dependencies so the in-range functions behave
+ * identically — they were not otherwise assigned to this porting pass. If
+ * another agent also ports the ranges that originally own them,
+ * reconcile/dedupe against this copy.
+ *
+ * SHEETS-FIRST (reverted 2026-08-21). saveExpiryAction / completeDocStage
+ * were briefly converted to the Mongo-first writeThrough pattern the same
+ * day, then reverted at the user's explicit request: manual edits made
+ * directly in the spreadsheet need to be visible to every reader
+ * immediately, not after the next 5-minute reconcile cycle, so Sheets is
+ * the read/write source of truth app-wide again and Mongo is kept as a
+ * best-effort backup mirror via patchMongoMirrorRow.
  *
  * _normKey / _splitContainers: billing.service.js (the Collections domain)
  * normally owns these, but this standalone backend doesn't have that file —
@@ -32,9 +40,9 @@ import {
   insertSheetIfMissing,
   colLetter
 } from './googleSheets.service.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow } from './mongoSheetData.service.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
-import { safeStr, buildDisplayRow, parseDate, formatDateVal } from '../utils/format.js';
+import { safeStr, buildDisplayRow, parseDate, formatDateVal, dmyTime } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { checkActionPermission } from './permissions.service.js';
 import { AppError, notFound } from '../utils/AppError.js';
@@ -85,11 +93,7 @@ export async function _expiryOrderNoMap() {
   const map = {};
   for (const sheetName of EXPIRY_ORDER_SOURCES) {
     try {
-      // Display-only lookup, keyed by container (not row position) — safe to
-      // read from the Mongo mirror the other backend's sync job keeps fresh,
-      // instead of hitting the live Sheets API on every Lease Expiry /
-      // Renew & Document page load.
-      const { headers, rows } = await getSheetDataFromMongo(sheetName);
+      const { headers, rows } = await getSheetData(sheetName);
       if (!rows.length) continue;
       let ordCol = 3; // fallback: col D
       for (let h = 0; h < headers.length; h++) {
@@ -112,13 +116,7 @@ export async function _expiryOrderNoMap() {
 }
 
 export async function getExpiryDataByFilter(filterType, user) {
-  // Same reasoning as _expiryOrderNoMap above: this is the read backing the
-  // Lease Expiry / Renew & Document list views, matched by container number
-  // rather than row position, so the Mongo mirror is safe here. The actual
-  // write actions below (saveExpiryAction, completeDocStage, ...) still read
-  // live from Sheets immediately before writing — that positional freshness
-  // requirement is exactly why those stay on getSheetData.
-  const { values } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+  const { values } = await getSheetData(SHEETS.DEPLOYED);
   if (values.length < 2) return { headers: [], data: [], validColIdx: -1 };
 
   const allHeaders = padRow(values[0], 26);
@@ -185,7 +183,12 @@ export async function getExpiryDataByFilter(filterType, user) {
     if (String(wVal || '').trim().toLowerCase().replace(/[\s-]/g, '') === 'offlease') continue;
 
     let include = false;
-    if (filterType === 'pending') include = (!vVal || String(vVal).trim() === '');
+    // 'pending' is Lease Expiry's own list, not a to-do queue that empties as
+    // rows get actioned — a container mid-renewal can still need renewing
+    // again later, so it stays visible here permanently (Off-Lease above is
+    // the only real exit). Renewed/Documents Pending rows carry actionStatus
+    // below so the frontend can show that in progress instead of hiding it.
+    if (filterType === 'pending') include = true;
     else if (filterType === 'renewed') include = (wVal && String(wVal).trim().toLowerCase() === 'renewed');
     else if (filterType === 'documents') include = (wVal && String(wVal).trim().toLowerCase() === 'documents pending');
     // off-lease stages removed
@@ -222,12 +225,10 @@ export async function getExpiryDataByFilter(filterType, user) {
       displayRow.push(safeStr(vVal));
       displayRow.push(safeStr(wVal));
     }
-    const item = { row: displayRow, daysLeft: days, band };
+    const item = { row: displayRow, daysLeft: days, band, actionDate: safeStr(vVal), actionStatus: safeStr(wVal) };
     if (filterType === 'documents') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);
-      item.actionDate = safeStr(vVal);
-      item.actionStatus = safeStr(wVal);
     }
     finalData.push(item);
   }
@@ -262,6 +263,9 @@ export async function uploadAndSaveDeployedDocument(base64Data, mimeType, fileNa
       if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
       const col0 = String(docType || '').trim().toLowerCase() === 'po' ? 24 : 25; // Y=24, Z=25 (0-based)
       await updateCell(SHEETS.DEPLOYED, targetRow, col0, url || '');
+      await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, [
+        { range: `'${SHEETS.DEPLOYED}'!${colLetter(col0)}${targetRow}`, values: [[url || '']] }
+      ]);
       return { success: true, url, savedTo: col0 === 24 ? 'Y' : 'Z' };
     });
     return result;
@@ -293,62 +297,59 @@ export async function completeDocumentStage(containerNo, callerEmail) {
       }
     }
     if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
-    if (!matched[24] || String(matched[24]).trim() === '') return 'MISSING_PO';
-    if (!matched[25] || String(matched[25]).trim() === '') return 'MISSING_AGR';
+    // Either a PO reference or a signed Agreement copy is enough to move
+    // forward — not all containers renew on an Agreement basis, some are
+    // PO-only, so requiring BOTH blocked a real, legitimate renewal path.
+    // Fixed 2026-08-20.
+    if ((!matched[24] || String(matched[24]).trim() === '') && (!matched[25] || String(matched[25]).trim() === '')) {
+      return 'MISSING_PO_OR_AGR';
+    }
 
-    await batchUpdateValues([
+    const updates = [
       { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [['']] },
       { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] }
-    ]);
+    ];
+    await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
     return 'OK';
   });
 }
 
 /* =============================================
    saveExpiryAction — LMS.js 1467-1489
-============================================= */
+
+   SHEETS-FIRST (reverted 2026-08-21 — see roles.service.js's identical note
+   for why: manual edits made directly in the spreadsheet must be visible
+   the moment anyone reads it, not up to 5 minutes later. Live Sheets is the
+   source of truth for both reads and writes across the app now; the Mongo
+   mirror is kept in step as a backup copy via patchMongoMirrorRow, updated
+   from the SAME {range,values} array already sent to Sheets so it can't
+   drift, but nothing in the app depends on Mongo containing the truth. */
 export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
   await checkActionPermission('expiry', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!rowId || String(rowId).trim() === '') throw new AppError('Container number is required');
-    // getSheetData always treats values[0] of whatever range it's given as
-    // the header row and strips it — passing 'A2:W' here (already past the
-    // real header at row 1) meant row 2's actual data got silently dropped
-    // too, shifting every row's computed position back by one. Confirmed
-    // 2026-08-08: a container truly at row 274 always resolved to row 273.
-    // Use the default full-range read (same as every sibling function in
-    // this file, e.g. completeDocStage) so the one real header row is
-    // stripped exactly once.
+
     const { rows } = await getSheetData(SHEETS.DEPLOYED);
     if (!rows.length) throw new AppError('No data rows');
 
     let targetRow = -1;
     for (let i = 0; i < rows.length; i++) {
-      if (rows[i][0] == rowId) { // eslint-disable-line eqeqeq
-        if (rows[i][21] && String(rows[i][21]).trim() !== '') return 'ALREADY_PROCESSED';
-        targetRow = i + 2;
-        break;
-      }
+      if (String(rows[i][0]) == rowId) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
     }
     if (targetRow === -1) throw notFound(`Not found: ${rowId}`);
+    if (rows[targetRow - 2][21] && String(rows[targetRow - 2][21]).trim() !== '') return 'ALREADY_PROCESSED';
 
-    // Re-verify the row still holds this exact container right before
-    // writing — targetRow is a POSITION captured from the read above, and
-    // if anything else (a concurrent edit, a different process, a legacy
-    // Apps Script trigger) inserts/deletes a row in this sheet in the brief
-    // window between that read and this write, the position can now point
-    // at a different container entirely. Confirmed 2026-08-08: exactly this
-    // shape of bug, one row off, from a source outside this codebase.
-    const recheck = await getRange(SHEETS.DEPLOYED, `A${targetRow}:A${targetRow}`);
-    const stillThere = safeStr(recheck?.[0]?.[0]);
-    if (stillThere !== String(rowId)) {
-      throw new AppError(`The sheet changed while processing — row ${targetRow} no longer holds ${rowId} (now: ${stillThere || 'empty'}). Please retry.`);
-    }
-
-    await batchUpdateValues([
-      { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[new Date(timestamp).toISOString()]] },
+    const dmy = dmyTime(new Date(timestamp));
+    const updates = [
+      { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[dmy]] },
       { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [[status || '']] }
-    ]);
+    ];
+    await batchUpdateValues(updates);
+    // Best-effort backup mirror — a failure here must never fail a write
+    // that already succeeded on the sheet; the next reconcile cycle
+    // catches up regardless.
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
     return 'OK';
   });
 }
@@ -372,98 +373,15 @@ function _deployedClientName(headers, row) {
   return '';
 }
 
-/** Column index of Container No in RENEWAL_LOG_HEADERS — the row's identity. */
-const RL_CONTAINER = 1;
-
-/**
- * UPSERT one Renewal Log row, keyed on Container No.
- *
- * Previously every save appended: updating Valid Till wrote one row, then
- * uploading a PO or agreement file wrote another, leaving several rows for the
- * same container and no single place showing its current state.
- *
- * Fields are MERGED rather than replaced wholesale. An agreement upload sends
- * only the agreement URL, so overwriting the row with that payload would blank
- * the PO number and Valid Till captured earlier. A blank incoming value means
- * "not part of this update", not "clear it" — the two exceptions are Timestamp
- * and Updated By, which always reflect the latest edit.
- */
-async function _upsertRenewalRow(info) {
-  const incoming = {
-    1: info.container || '',
-    2: info.clientName || '',
-    3: info.poNo || '',
-    4: info.poFileUrl || '',
-    5: info.agreementUrl || '',
-    6: info.validTill || '',
-    8: info.oldPoNo || '',
-    9: info.oldPoFileUrl || '',
-    10: info.oldAgreementUrl || ''
-  };
-  const stamp = new Date().toISOString();
-  const wantKey = _normKey(info.container);
-
-  const { rows } = await getSheetData(RENEWAL_LOG_SHEET);
-  /* Last match wins: if earlier appends already left duplicates, the newest is
-     the one carrying current data, and it is the one kept up to date. */
-  let rn = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (wantKey && _normKey(rows[i][RL_CONTAINER]) === wantKey) rn = i + 2;
-  }
-
-  const existing = rn === -1 ? [] : (rows[rn - 2] || []);
-
-  /* A NEW RENEWAL CYCLE gets its own row; document uploads update the current
-     one. The discriminator is Valid Till: renewing pushes it to a new date,
-     whereas uploading a PO or agreement leaves it alone (or sends it blank).
-     Call site cannot tell us this — both screens save renewal and document
-     fields through the same path — but the data can. */
-  const incomingValid = safeStr(info.validTill).trim();
-  const currentValid = safeStr(existing[6]).trim();
-  const isNewCycle = rn === -1 || (incomingValid !== '' && incomingValid !== currentValid);
-
-  if (isNewCycle) {
-    const fresh = RENEWAL_LOG_HEADERS.map((_, i) => (i === 0 ? stamp : i === 7 ? (info.userEmail || '') : (incoming[i] || '')));
-    await appendRow(RENEWAL_LOG_SHEET, fresh);
-    return;
-  }
-
-  const merged = RENEWAL_LOG_HEADERS.map((_, i) => {
-    if (i === 0) return stamp;                       // always the latest edit
-    if (i === 7) return info.userEmail || safeStr(existing[7]);
-    const next = incoming[i];
-    return next !== '' && next !== undefined ? next : safeStr(existing[i]);
-  });
-  await updateRange(
-    RENEWAL_LOG_SHEET,
-    `A${rn}:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}${rn}`,
-    [merged]
-  );
-}
-
 /**
  * The Renewal Log as report rows — one per renewal, newest first.
- *
- * Served from the Mongo mirror where available, falling back to a live read:
- * this is a read-only report and must not add Sheets load to a project that
- * routinely exhausts its read quota.
  */
 export async function getRenewalLogReport() {
   let rows = [];
   try {
-    ({ rows } = await getSheetDataFromMongo(RENEWAL_LOG_SHEET));
-  } catch (e) { /* not mirrored — fall through to the live read */ }
-
-  /* An EMPTY mirror is not proof the sheet is empty: this tab is not
-     registered with the reconcile job, so Mongo returns zero rows rather than
-     throwing. Falling back only on a thrown error left the report silently
-     blank. */
-  if (!rows.length) {
-    try {
-      ({ rows } = await getSheetData(RENEWAL_LOG_SHEET));
-    } catch (e2) {
-      return { headers: RENEWAL_LOG_HEADERS, data: [], error: e2?.message || 'Could not read Renewal Log' };
-    }
+    ({ rows } = await getSheetData(RENEWAL_LOG_SHEET));
+  } catch (e) {
+    return { headers: RENEWAL_LOG_HEADERS, data: [], error: e?.message || 'Could not read Renewal Log' };
   }
 
   const data = rows
@@ -493,8 +411,7 @@ export async function getRenewalLogReport() {
  * rather than the approval timestamp, which records when paperwork cleared and
  * can fall in a different month from the deployment it describes.
  *
- * Column positions are fixed on this sheet; read from the Mongo mirror, which
- * is where every other New Lease read comes from.
+ * Column positions are fixed on this sheet.
  */
 export async function getNewLeaseReport() {
   const NL = {
@@ -504,7 +421,7 @@ export async function getNewLeaseReport() {
 
   let rows = [];
   try {
-    ({ rows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE));
+    ({ rows } = await getSheetData(SHEETS.NEW_LEASE));
   } catch (e) {
     return { data: [], error: e?.message || 'Could not read New Lease' };
   }
@@ -534,20 +451,6 @@ export async function getNewLeaseReport() {
 function fmtCellDate(v) {
   const d = parseDate(v);
   return d ? formatDateVal(d) : safeStr(v).trim();
-}
-
-async function _logRenewal(info) {
-  try {
-    await insertSheetIfMissing(RENEWAL_LOG_SHEET, RENEWAL_LOG_HEADERS);
-    /* ★ Extend an already-existing (older-schema) log sheet with the new
-       "Old ..." columns rather than assuming a fresh sheet every time. */
-    const { headers: curHeaders } = await getSheetData(RENEWAL_LOG_SHEET, undefined, 'A1:1');
-    if (curHeaders.length < RENEWAL_LOG_HEADERS.length) {
-      const missing = RENEWAL_LOG_HEADERS.slice(curHeaders.length);
-      await updateRange(RENEWAL_LOG_SHEET, `${colLetter(curHeaders.length)}1:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}1`, [missing]);
-    }
-    await _upsertRenewalRow(info);
-  } catch (e) { console.error('[RENEWAL-LOG]', e.message); } // Never throws — a logging failure must not block the real renewal.
 }
 
 export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity) {
@@ -632,9 +535,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(cycleCol)}${targetRow}`, values: [[billingCycle]] });
     if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poValidityCol)}${targetRow}`, values: [[new Date(poValidity).toISOString()]] });
 
-    /* Update Valid Upto — in all three: H, O, X (O is the billing cycle
-       column's neighbor semantics in the original comment, but the original
-       code only ever writes H and X — preserved exactly as written). */
+    /* Update Valid Upto — in H and X (preserved exactly as the original wrote it). */
     updates.push({ range: `'${SHEETS.DEPLOYED}'!H${targetRow}`, values: [[newValidIso]] });
     updates.push({ range: `'${SHEETS.DEPLOYED}'!X${targetRow}`, values: [[newValidIso]] });
 
@@ -643,6 +544,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     updates.push({ range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] });
 
     await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
 
     /* ★ Renewal Log — one row per renewal, whichever screen it came from,
        with the OLD (pre-overwrite) agreement/PO alongside the new. */
@@ -656,4 +558,56 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
 
     return 'Documents completed — moved to Pending';
   });
+}
+
+/* ★★★ RENEWAL LOG — every renewal (Update Lease Period + Complete Document
+   Stage) appends ONE row here. Creates the "Renewal Log" sheet + headers on
+   first use. Never throws — a logging failure must not block the real renewal. */
+const RL_CONTAINER = 1;
+
+async function _upsertRenewalRow(info) {
+  const incoming = {
+    1: info.container || '', 2: info.clientName || '', 3: info.poNo || '',
+    4: info.poFileUrl || '', 5: info.agreementUrl || '', 6: info.validTill || '',
+    8: info.oldPoNo || '', 9: info.oldPoFileUrl || '', 10: info.oldAgreementUrl || ''
+  };
+  const stamp = new Date().toISOString();
+  const wantKey = _normKey(info.container);
+
+  const { rows } = await getSheetData(RENEWAL_LOG_SHEET);
+  let rn = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (wantKey && _normKey(rows[i][RL_CONTAINER]) === wantKey) rn = i + 2;
+  }
+  const existing = rn === -1 ? [] : (rows[rn - 2] || []);
+
+  const incomingValid = safeStr(info.validTill).trim();
+  const currentValid = safeStr(existing[6]).trim();
+  const isNewCycle = rn === -1 || (incomingValid !== '' && incomingValid !== currentValid);
+
+  if (isNewCycle) {
+    const fresh = RENEWAL_LOG_HEADERS.map((_, i) => (i === 0 ? stamp : i === 7 ? (info.userEmail || '') : (incoming[i] || '')));
+    await appendRow(RENEWAL_LOG_SHEET, fresh);
+    return;
+  }
+
+  const merged = RENEWAL_LOG_HEADERS.map((_, i) => {
+    if (i === 0) return stamp;
+    if (i === 7) return info.userEmail || safeStr(existing[7]);
+    const next = incoming[i];
+    return next !== '' && next !== undefined ? next : safeStr(existing[i]);
+  });
+  await updateRange(RENEWAL_LOG_SHEET, `A${rn}:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}${rn}`, [merged]);
+}
+
+async function _logRenewal(info) {
+  try {
+    await insertSheetIfMissing(RENEWAL_LOG_SHEET, RENEWAL_LOG_HEADERS);
+    const { headers: curHeaders } = await getSheetData(RENEWAL_LOG_SHEET, undefined, 'A1:1');
+    if (curHeaders.length < RENEWAL_LOG_HEADERS.length) {
+      const missing = RENEWAL_LOG_HEADERS.slice(curHeaders.length);
+      await updateRange(RENEWAL_LOG_SHEET, `${colLetter(curHeaders.length)}1:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}1`, [missing]);
+    }
+    await _upsertRenewalRow(info);
+  } catch (e) { console.error('[RENEWAL-LOG]', e.message); }
 }

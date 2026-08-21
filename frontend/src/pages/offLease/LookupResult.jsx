@@ -1,4 +1,5 @@
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import {
   buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices,
   HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD, slaText
@@ -97,7 +98,7 @@ export function LookupResult({ result, showFms }) {
                       <span className={styles.filledTitle}>{s.label}</span>
                       <span className={styles.filledStatus}>Completed</span>
                       <span className={styles.filledMeta}>
-                        {s.timestamp}{s.user ? ` · ${s.user}` : ''}
+                        {formatActionTimestamp(s.timestamp)}{s.user ? ` · ${s.user}` : ''}
                       </span>
                     </div>
                     {s.fields.length > 0 && (
@@ -374,7 +375,7 @@ function StageCard({ stage, isCurrent }) {
       <span className={styles.stageCardTitle}>{stage.label}</span>
       <span className={styles.stageCardStatus}>{stage.done ? 'Completed' : 'Pending'}</span>
       {stage.done && (
-        <span className={styles.stageCardMeta}>{stage.timestamp}{stage.user ? ` · ${stage.user}` : ''}</span>
+        <span className={styles.stageCardMeta}>{formatActionTimestamp(stage.timestamp)}{stage.user ? ` · ${stage.user}` : ''}</span>
       )}
     </div>
   );
@@ -389,7 +390,7 @@ function GateCard({ status, date, user }) {
       <span className={styles.stageCardTitle}>Intimation Approval</span>
       <span className={styles.stageCardStatus}>{label}</span>
       {status && status !== 'pending' && (
-        <span className={styles.stageCardMeta}>{date}{user ? ` · ${user}` : ''}</span>
+        <span className={styles.stageCardMeta}>{formatActionTimestamp(date)}{user ? ` · ${user}` : ''}</span>
       )}
     </div>
   );
