@@ -26,10 +26,11 @@ export function KeepAlivePages() {
         const route = APP_ROUTES.find((r) => r.path === path);
         if (!route) return null;
         const Element = route.element;
+        const isActive = path === current?.path;
         return (
-          <div key={path} hidden={path !== current?.path}>
+          <div key={path} hidden={!isActive}>
             <Suspense fallback={<LoadingState label="Loading page…" />}>
-              <Element />
+              <Element isActive={isActive} />
             </Suspense>
           </div>
         );

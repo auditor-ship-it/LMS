@@ -57,6 +57,38 @@ export function safeStr(val) {
   return String(val);
 }
 
+/** dd/MM/yyyy HH:mm:ss (24h, local time) — the "system update/submission"
+ *  timestamp shape used when a write needs to record exactly when it
+ *  happened, e.g. into a Sheet cell as literal text. Several services
+ *  (approve/verify/offlease/stage9) already define this exact function
+ *  locally, independently, from their own original ports — left as-is there
+ *  rather than risk touching working code. This copy exists so a NEW call
+ *  site (e.g. auth.service.js's login-activity log) has one to import
+ *  instead of adding a seventh private copy, or worse, reaching for
+ *  `new Date().toISOString()` — which is exactly the raw-ISO-in-the-UI bug
+ *  this function exists to prevent (see the 2026-08-20 timestamp-formatting
+ *  request). */
+export function dmyTime(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  return `${formatDMY(d, '/')} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+/** Inverse of dmyTime() — parses "dd/MM/yyyy HH:mm:ss" (or date-only
+ *  "dd/MM/yyyy") back into a Date. Returns null if it doesn't match that
+ *  shape, so a caller reading a column that might still hold an older raw
+ *  ISO value (written before a call site switched to dmyTime) can fall back
+ *  to `new Date(s)` for those — see auth.service.js's empHeartbeat. */
+export function parseDmyTime(s) {
+  if (!s) return null;
+  const m = String(s).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!m) return null;
+  const [, dd, mo, yy, hh, mi, ss] = m;
+  let year = parseInt(yy, 10);
+  if (year < 100) year += 2000;
+  const d = new Date(year, parseInt(mo, 10) - 1, parseInt(dd, 10), hh ? parseInt(hh, 10) : 0, mi ? parseInt(mi, 10) : 0, ss ? parseInt(ss, 10) : 0);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 export function formatDateVal(val) {
   if (!val) return '';
   if (val instanceof Date && !isNaN(val.getTime())) {

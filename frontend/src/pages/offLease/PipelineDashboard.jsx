@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { StatCard, Card, Button, SearchBar, LoadingState, ErrorState, EmptyState } from '../../components/ui/index.js';
+import { StatCard, Card, Button, SearchBar, ErrorState, EmptyState } from '../../components/ui/index.js';
+import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
@@ -72,7 +73,7 @@ export function PipelineDashboard({ onOpenTab }) {
   return (
     <>
       <div className={styles.kpiRow}>
-        <StatCard icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} tint="navy" />
+        <StatCard icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} loading={loading} tint="navy" />
         {/* The approval gate sits BETWEEN Stage 1 and Stage 2, so its card
             follows Stage 1 rather than leading the row — the cards now read in
             the order the work actually happens. Same reasoning as the tab
@@ -84,6 +85,7 @@ export function PipelineDashboard({ onOpenTab }) {
               icon={STAGE_ICONS[s.number]}
               label={`Stage ${s.display} · ${s.label}`}
               value={kpis.byStage?.[s.number] ?? '—'}
+              loading={loading}
               tint={s.number === 8 ? 'success' : 'info'}
               footnote={s.owner}
               onClick={() => toggleFilter(s.number)}
@@ -93,13 +95,13 @@ export function PipelineDashboard({ onOpenTab }) {
           return [card, (
             <StatCard
               key="approval"
-              icon="clock" label="Stage 1A · Pending approval" value={kpis.pendingApproval ?? '—'} tint="warn"
+              icon="clock" label="Stage 1A · Pending approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="warn"
               footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
               onClick={() => toggleFilter('approval')}
             />
           )];
         })}
-        <StatCard icon="check" label="Completed this month" value={kpis.completedThisMonth ?? '—'} tint="success" />
+        <StatCard icon="check" label="Completed this month" value={kpis.completedThisMonth ?? '—'} loading={loading} tint="success" />
       </div>
 
       <Card
@@ -155,7 +157,7 @@ export function PipelineDashboard({ onOpenTab }) {
           />
         )}
 
-        {view === 'table' && loading && <LoadingState label="Loading pipeline…" />}
+        {view === 'table' && loading && <SkeletonTable columns={5} rows={8} />}
         {view === 'table' && !loading && error && <ErrorState message={error} onRetry={reload} />}
         {view === 'table' && !loading && !error && filtered.length === 0 && (
           <EmptyState message="No active off-lease containers" hint={search ? 'Try a different search' : undefined} />

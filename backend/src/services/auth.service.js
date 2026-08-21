@@ -13,10 +13,9 @@
  */
 import crypto from 'crypto';
 import { getSheetData, updateCell, appendRow } from './googleSheets.service.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { getCollection } from './mongo.service.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { safeStr } from '../utils/format.js';
+import { safeStr, dmyTime, parseDmyTime } from '../utils/format.js';
 import { cacheGet, cachePut, cacheRemove } from '../utils/memoryCache.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { sendMail } from './email.service.js';
@@ -74,23 +73,17 @@ function authMaskEmail(e) {
   return e[0] + '***' + e[at - 1] + e.slice(at);
 }
 
-/** Find an employee row by a column value against the LIVE sheet — only for
- *  call sites that immediately write back using the returned `rowNum`
- *  (empResetPassword). A Mongo-sourced row order isn't guaranteed to match
- *  the live sheet, so this one specific write-adjacent lookup must stay live
- *  (see splendid-rolling-candy.md / [[lms_row_number_write_safety]]). */
+/** Find an employee row by a column value, live against the sheet.
+ *  SHEETS-FIRST (reverted 2026-08-21) — this used to also have a
+ *  Mongo-mirror-backed variant (authFindMongo) for the non-write-adjacent
+ *  callers (login, OTP request), added 2026-08-01 after login hitting the
+ *  live Sheets quota on every attempt caused real problems. Reverted at the
+ *  user's explicit request along with every other Mongo-first path in the
+ *  app; this is the highest-frequency one (every login + heartbeat), so if
+ *  login-time quota errors resurface, this is the first place to look. */
 async function authFind(colIdx, value) {
   const { rows } = await getSheetData(SHEETS.USER, undefined, 'A1:D');
   return authScanRows(rows, colIdx, value, true);
-}
-
-/** Same lookup, read-only — safe to serve from the Mongo mirror (USER is
- *  already key-mapped and actively synced). Used by login and OTP request,
- *  where nothing downstream writes back by row number. Fixes login hitting
- *  the live Sheets quota on every attempt (confirmed 2026-08-01). */
-async function authFindMongo(colIdx, value) {
-  const { rows } = await getSheetDataFromMongo(SHEETS.USER);
-  return authScanRows(rows, colIdx, value, false);
 }
 
 function authScanRows(rows, colIdx, value, withRowNum) {
@@ -120,8 +113,8 @@ export async function empLogin(empId, password) {
     return { ok: false, error: 'Enter Employee ID and password' };
   }
 
-  logger.info('[AUTH] Fetching user record (USER sheet, via Mongo mirror)');
-  const emp = (await authFindMongo(AUTH_COL_EMPID, empId)) || (await authFindMongo(AUTH_COL_EMAIL, empId));
+  logger.info('[AUTH] Fetching user record (USER sheet)');
+  const emp = (await authFind(AUTH_COL_EMPID, empId)) || (await authFind(AUTH_COL_EMAIL, empId));
   if (!emp) {
     logger.warn('[AUTH] Login failed');
     logger.warn('[AUTH] Reason: User not found');
@@ -180,7 +173,12 @@ async function authSessionSheetEnsured() {
 async function authStartSession(token, emp) {
   try {
     await authSessionSheetEnsured();
-    const now = new Date().toISOString();
+    // dmyTime, not toISOString -- this sheet is what getEmpLoginActivity()
+    // (GET /api/auth/login-activity) reads straight back and returns as
+    // loginAt/lastSeen; a raw ISO string here is exactly the raw-timestamp
+    // bug the 2026-08-20 request asked to close, even though no page
+    // currently renders that endpoint's response.
+    const now = dmyTime(new Date());
     const { rowNum } = await appendRow(SHEETS.AUTH_SESSION_LOG, [emp.empId, emp.name, emp.email, now, now, 0]);
     if (rowNum) await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { srow: rowNum } }).catch(() => {});
   } catch (e) { /* never break login */ }
@@ -197,11 +195,14 @@ export async function empHeartbeat(token) {
     const { getRange } = await import('./googleSheets.service.js');
     const loginAtCell = await getRange(SHEETS.AUTH_SESSION_LOG, `D${row}:D${row}`);
     const loginAtStr = loginAtCell?.[0]?.[0];
-    const loginAt = loginAtStr ? new Date(loginAtStr) : null;
+    // parseDmyTime for the current dd/MM/yyyy HH:mm:ss format this column is
+    // written in; new Date(...) as a fallback for a row still holding the
+    // older raw-ISO value from before that format switched (2026-08-20).
+    const loginAt = loginAtStr ? (parseDmyTime(loginAtStr) || new Date(loginAtStr)) : null;
     const now = new Date();
     const mins = loginAt && !isNaN(loginAt.getTime()) ? Math.max(0, Math.round((now - loginAt) / 60000)) : 0;
 
-    await updateCell(SHEETS.AUTH_SESSION_LOG, row, 4, now.toISOString());
+    await updateCell(SHEETS.AUTH_SESSION_LOG, row, 4, dmyTime(now));
     await updateCell(SHEETS.AUTH_SESSION_LOG, row, 5, mins);
     await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { expiresAt: _sessionExpiry() } }).catch(() => {}); // keep session alive
     return true;
@@ -212,7 +213,7 @@ async function authLogEvent(action, emp) {
   try {
     const { insertSheetIfMissing } = await import('./googleSheets.service.js');
     await insertSheetIfMissing(SHEETS.AUTH_LOG, ['Timestamp', 'Action', 'Employee ID', 'Name', 'Email']);
-    await appendRow(SHEETS.AUTH_LOG, [new Date().toISOString(), action, emp?.empId || '', emp?.name || '', emp?.email || '']);
+    await appendRow(SHEETS.AUTH_LOG, [dmyTime(new Date()), action, emp?.empId || '', emp?.name || '', emp?.email || '']);
     // Row-cap trim (bounded retention) intentionally omitted from the hot path —
     // run as a periodic housekeeping job instead of on every login, to avoid a
     // full-sheet read on every request. See jobs/ for the equivalent of the
@@ -238,7 +239,7 @@ export async function getEmpLoginActivity() {
     if (!by[k]) by[k] = { email, name, empId, sessions: 0, minutes: 0, lastSeen: '', _ls: 0 };
     by[k].sessions++;
     by[k].minutes += mins;
-    const lt = lastSeen ? new Date(lastSeen).getTime() : 0;
+    const lt = lastSeen ? (parseDmyTime(lastSeen) || new Date(lastSeen)).getTime() : 0;
     if (lt > by[k]._ls) { by[k]._ls = lt; by[k].lastSeen = lastSeen; }
     recent.push({ empId, name, email, loginAt, lastSeen, minutes: mins });
   }
@@ -253,7 +254,7 @@ export async function empRequestOtp(idOrEmail) {
   idOrEmail = String(idOrEmail == null ? '' : idOrEmail).trim();
   if (!idOrEmail) return { ok: false, error: 'Enter your Employee ID or email' };
 
-  const emp = (await authFindMongo(AUTH_COL_EMPID, idOrEmail)) || (await authFindMongo(AUTH_COL_EMAIL, idOrEmail));
+  const emp = (await authFind(AUTH_COL_EMPID, idOrEmail)) || (await authFind(AUTH_COL_EMAIL, idOrEmail));
   if (!emp || !emp.email) return { ok: true, email: '', sent: false, note: 'If the account exists, an OTP was sent.' }; // anti-enumeration
 
   const otp = String(Math.floor(100000 + Math.random() * 900000));
@@ -301,8 +302,8 @@ export async function empResetPassword(empId, otp, newPassword) {
 
 /** Admin utility — port of addUserToLogin(), exposed via an admin-gated endpoint instead of "run once from the editor". */
 export async function addUserToLogin(name, empId, password, email) {
-  if (await authFindMongo(AUTH_COL_EMPID, empId)) return `Already exists (Employee ID ${empId})`;
-  if (await authFindMongo(AUTH_COL_EMAIL, email)) return `Already exists (Email ${email})`;
+  if (await authFind(AUTH_COL_EMPID, empId)) return `Already exists (Employee ID ${empId})`;
+  if (await authFind(AUTH_COL_EMAIL, email)) return `Already exists (Email ${email})`;
   await appendRow(SHEETS.USER, [name, empId, password, email]);
   return `Added: ${name} | ID ${empId} | ${email}`;
 }

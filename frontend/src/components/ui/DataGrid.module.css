@@ -43,6 +43,9 @@
 .table tbody tr { transition: background var(--dur-fast) var(--ease-out); }
 .table tbody tr:last-child td { border-bottom: none; }
 .table tbody tr:hover td { background: var(--surface-2); }
+
+.skeletonCell { padding: 0; border-bottom: none; }
+.skeletonCell:hover { background: none !important; }
 /* The action button must never wrap or shrink — width:1% makes the column
    take only what the button needs and gives the rest to the data. */
 .actionsCol { white-space: nowrap; width: 1%; text-align: center; }

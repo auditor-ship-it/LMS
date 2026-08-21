@@ -46,20 +46,38 @@ import { isGoogleQuotaError } from './errorHandler.js';
 const SUCCESS_TTL_SECONDS = Number(process.env.SHEETS_CACHE_TTL_SECONDS) || 90;
 const LOCKOUT_SECONDS = Number(process.env.SHEETS_QUOTA_LOCKOUT_SECONDS) || 300;
 const GLOBAL_LOCK_KEY = 'httplock:global';
-// /api/dashboard, /api/tasks, /api/roles are Mongo-backed now (see
-// mongoSheetData.service.js / writeThrough.service.js) — there's no Sheets
-// quota risk left on those request paths to protect, and this cache would
-// actively hide a just-written change behind a stale 90s-old GET. As each
-// remaining domain migrates to Mongo, add its prefix here; once all domains
-// have migrated this whole middleware (and its global lockout) should be
-// removed from app.js entirely rather than grown further.
+
+/**
+ * resource prefix -> Date.now() of the most recent bust. Guards against a
+ * cache-repopulation race: a GET that started BEFORE a write (queued up
+ * behind Sheets/Mongo latency, or one of KeepAlivePages' other mounted
+ * pages reacting to the same dataBus invalidate) can still be in flight
+ * when that write's bust runs, then finish AFTER it and write its own
+ * (now-stale, pre-write) body back into the cache via cachePut below —
+ * silently re-poisoning the exact entry the bust just cleared. Confirmed
+ * 2026-08-21: a reload fired immediately after a successful Renew action
+ * kept coming back without that action reflected, even though the write
+ * itself was already committed and directly-verified correct — an older,
+ * slower in-flight GET was repopulating the cache after the bust. A
+ * request's own response is unaffected by this (the client still gets
+ * whatever THAT request actually read); this only stops that read from
+ * being cached and handed to OTHER requests as if it were current.
+ */
+const lastBustAt = new Map();
+// SHEETS-FIRST (reverted 2026-08-21) — /api/dashboard, /api/tasks,
+// /api/roles were previously exempted here because they were Mongo-backed
+// and carried no Sheets quota risk; they're back on live Sheets reads now
+// (dashboard.service.js/tasks.service.js/roles.service.js), so they need
+// this cache's quota protection exactly like every other domain and are no
+// longer exempt. Do not re-add a domain here without confirming it's
+// actually Mongo-only for reads AND writes.
 // /api/public is unauthenticated by design (X-Api-Key, not a session) and
 // would never populate req.user anyway, so it already falls through this
 // cache untouched — listed here only to document that explicitly rather
 // than leave a new reader to work it out from the req.user gate below.
 // /api/api-keys is the low-traffic admin screen managing those keys; no
 // Sheets quota reason to cache it.
-const SKIP_PREFIXES = ['/api/auth', '/api/uploads', '/api/health', '/api/dashboard', '/api/tasks', '/api/roles', '/api/public', '/api/api-keys'];
+const SKIP_PREFIXES = ['/api/auth', '/api/uploads', '/api/health', '/api/public', '/api/api-keys'];
 
 function topResourcePath(originalPath) {
   // "/api/verify/12/action" -> "/api/verify" — the shared prefix every GET
@@ -106,8 +124,10 @@ export function responseCache(req, res, next) {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         /* Trailing ':' so the prefix matches the resource segment exactly and
            cannot spill into a longer resource name that starts the same way. */
+        const bustedAt = Date.now();
         for (const r of resourcesToBust(topResourcePath(req.path))) {
           cacheRemoveByPrefix(`httpcache:${r}:`);
+          lastBustAt.set(r, bustedAt);
         }
       } else if (res.statusCode === 429 || isGoogleQuotaError({ message: body?.error })) {
         cachePut(GLOBAL_LOCK_KEY, { expiresAt: Date.now() + LOCKOUT_SECONDS * 1000 }, LOCKOUT_SECONDS);
@@ -123,17 +143,27 @@ export function responseCache(req, res, next) {
      response body is still cached per user — permission-gated endpoints return
      different data per employee, so entries can never be SHARED between
      users, only invalidated together. */
-  const cacheKey = `httpcache:${topResourcePath(req.path)}:${req.user.empId}:${req.originalUrl}`;
+  const resource = topResourcePath(req.path);
+  const cacheKey = `httpcache:${resource}:${req.user.empId}:${req.originalUrl}`;
   const forceRefresh = req.query.refresh === '1';
   if (!forceRefresh) {
     const hit = cacheGet(cacheKey);
     if (hit) return res.status(hit.status).json(hit.body);
   }
 
+  // Captured BEFORE this request's own work runs, so it reflects when the
+  // GET actually started — see the lastBustAt comment above.
+  const requestStartedAt = Date.now();
   const originalJson = res.json.bind(res);
   res.json = (body) => {
     if (res.statusCode === 200) {
-      cachePut(cacheKey, { status: 200, body }, SUCCESS_TTL_SECONDS);
+      const bustedAt = lastBustAt.get(resource) || 0;
+      if (requestStartedAt >= bustedAt) {
+        cachePut(cacheKey, { status: 200, body }, SUCCESS_TTL_SECONDS);
+      }
+      // else: a write to this resource landed WHILE this GET was already in
+      // flight — its result may be stale, so it's returned to this caller
+      // as-is but never cached for anyone else.
     } else if (res.statusCode === 429 || isGoogleQuotaError({ message: body?.error })) {
       cachePut(GLOBAL_LOCK_KEY, { expiresAt: Date.now() + LOCKOUT_SECONDS * 1000 }, LOCKOUT_SECONDS);
     }

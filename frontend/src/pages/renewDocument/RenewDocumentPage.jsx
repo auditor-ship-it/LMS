@@ -4,6 +4,8 @@ import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
+import { invalidate } from '../../shared/dataBus.js';
 import { useAuth, apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchRenewList, fetchDocumentList, submitRenewal, submitDocumentCompletion } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
@@ -44,6 +46,12 @@ export function RenewDocumentPage() {
   const fetcher = useMemo(() => (tab === 'renewed' ? fetchRenewList : fetchDocumentList), [tab]);
   const { data, loading, error, reload } = useAsync(fetcher, [tab]);
   const { data: counts, reload: reloadCounts } = useAsync(fetchPipelineCounts, []);
+  // Lease Expiry's Renew/Off-Lease actions write the same Deployed-sheet
+  // columns this page reads — without this, arriving here after an action
+  // there would still show whatever was last fetched (KeepAlivePages keeps
+  // every visited page mounted and only fetches once per session).
+  const reloadBoth = () => { reload(); reloadCounts(); };
+  useAutoRefresh('deployed-sheet', reloadBoth);
   const { canAct } = usePermission();
   const { user } = useAuth();
   const canActRenew = canAct('renew');
@@ -115,6 +123,7 @@ export function RenewDocumentPage() {
       setSelectedContainer(null);
       reload();
       reloadCounts();
+      invalidate('deployed-sheet');
     } catch (e) {
       setRenewError(apiErrorMessage(e));
     } finally {
@@ -129,10 +138,13 @@ export function RenewDocumentPage() {
     setDocBusy(true);
     setDocError('');
     try {
-      let signedCopyUrl = '';
-      let poFileUrl = '';
-      if (payload.signedCopy) signedCopyUrl = await uploadStageFile(payload.signedCopy);
-      if (payload.poFile) poFileUrl = await uploadStageFile(payload.poFile);
+      // Uploaded concurrently, not one after the other — the PO file has no
+      // reason to wait on the signed copy finishing first, and this was
+      // roughly doubling the wait whenever a form carried both.
+      const [signedCopyUrl, poFileUrl] = await Promise.all([
+        payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+        payload.poFile ? uploadStageFile(payload.poFile) : ''
+      ]);
 
       const result = await submitDocumentCompletion({
         containerNo: docItem.containerNo,
@@ -149,7 +161,7 @@ export function RenewDocumentPage() {
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else if (result === 'MISSING_PO') setDocError('A PO number/file URL is required first.');
       else if (result === 'MISSING_AGR') setDocError('A signed agreement copy URL is required first.');
-      else { setDocItem(null); setSelectedContainer(null); reload(); reloadCounts(); }
+      else { setDocItem(null); setSelectedContainer(null); reload(); reloadCounts(); invalidate('deployed-sheet'); }
     } catch (e) {
       setDocError(apiErrorMessage(e));
     } finally {

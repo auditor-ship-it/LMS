@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { PageHeader, Card, Button, LoadingState, EmptyState, ErrorState, ConfirmDialog, Modal } from '../../components/ui/index.js';
+import { PageHeader, Card, Button, EmptyState, ErrorState, ConfirmDialog, Modal } from '../../components/ui/index.js';
+import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import * as apiKeysService from '../../services/apiKeys.service.js';
 import { CreateKeyForm } from './CreateKeyForm.jsx';
 import { NewKeyReveal } from './NewKeyReveal.jsx';
@@ -42,9 +44,7 @@ function scopeLabel(scope) {
 }
 
 function fmtDate(v) {
-  if (!v) return '—';
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  return formatActionTimestamp(v) || '—';
 }
 
 /**
@@ -145,7 +145,7 @@ export function ApiAccessPage() {
           </>
         )}
       >
-        {loading && <LoadingState label="Loading API keys…" />}
+        {loading && <SkeletonTable columns={7} rows={4} />}
         {!loading && error && <ErrorState message={error} onRetry={load} />}
         {!loading && !error && data && !data.keys.length && (
           <EmptyState message="No API keys yet" hint="Create one to give an external system scoped access to this app's data." />

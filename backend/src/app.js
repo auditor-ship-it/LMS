@@ -28,6 +28,21 @@ import publicRoutes from './routes/public.routes.js';
 export function createApp() {
   const app = express();
 
+  // Express's built-in ETag/conditional-GET is a SECOND, independent cache
+  // layer sitting on top of responseCache.middleware.js's own explicit,
+  // bust-on-write cache — and the two disagree. Express computes an ETag
+  // from response content alone, with no idea a write just happened; a
+  // browser that already holds an ETag from an earlier fetch of the same
+  // URL sends it back as If-None-Match, and Express answers 304 (reusing
+  // the browser's stale copy) EVEN WHEN our own middleware just served
+  // freshly-written data with res.status(200) — Express silently downgrades
+  // that to 304 underneath us. Confirmed 2026-08-21: a second Renew action
+  // fired seconds after a first got exactly this — real fresh data computed
+  // server-side, then discarded in favor of the browser's pre-write cached
+  // body. responseCache.middleware.js is the single intended source of
+  // freshness truth here; Express's passive layer only ever fights it.
+  app.set('etag', false);
+
   app.use(cors());
   app.use(express.json({ limit: '25mb' })); // generous limit: base64 file uploads pass through JSON bodies
 

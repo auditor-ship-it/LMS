@@ -1,10 +1,12 @@
 import { useMemo, useState } from 'react';
-import { LoadingState, ErrorState, EmptyState, Icon, Button, RichTextEditor } from '../../components/ui/index.js';
+import { ErrorState, EmptyState, Icon, Button, RichTextEditor } from '../../components/ui/index.js';
+import { SkeletonCards } from '../../components/ui/Skeleton.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { postRemark, editRemark, removeRemark, fetchRemarkThread } from '../../services/offLease.service.js';
 import { STAGES, isReadOnlyStage } from '../../constants/stages.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { StageDetailModal } from '../stages/StageDetailModal.jsx';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './OrderBookView.module.css';
 
 /**
@@ -38,7 +40,7 @@ function buildChips(item) {
     return {
       key: `s${stage.number}`,
       label: String(stage.display),
-      title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${s.timestamp || ''}`.trimEnd() : ' — pending'}`,
+      title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${formatActionTimestamp(s.timestamp)}`.trimEnd() : ' — pending'}`,
       tab: `stage${stage.number}`,
       stageNumber: stage.number,
       tone: s?.done ? 'done' : item.currentStageNum === stage.number ? 'current' : 'future'
@@ -217,7 +219,7 @@ function RemarkCell({ item, onSaved }) {
                   <span className={styles.railItemBody} dangerouslySetInnerHTML={{ __html: r.html }} />
                   <span className={styles.railItemFoot}>
                     <span className={styles.railPopMeta}>
-                      {[r.timestamp, r.enteredBy].filter(Boolean).join(' · ')}
+                      {[formatActionTimestamp(r.timestamp), r.enteredBy].filter(Boolean).join(' · ')}
                       {r.editedOn && ' · edited'}
                     </span>
                     {/* Always offered; the server rejects anyone who is not the
@@ -256,7 +258,7 @@ function RemarkCell({ item, onSaved }) {
                 allow-listed subset, never script/style/attributes. */}
             <div className={styles.remarkText} dangerouslySetInnerHTML={{ __html: view.html }} />
             {(view.on || view.by) && (
-              <div className={styles.remarkOn}>{[view.on, view.by].filter(Boolean).join(' · ')}</div>
+              <div className={styles.remarkOn}>{[formatActionTimestamp(view.on), view.by].filter(Boolean).join(' · ')}</div>
             )}
           </>
         )
@@ -314,7 +316,7 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
     it, chips: buildChips(it), status: statusOf(it)
   })), [items]);
 
-  if (loading) return <LoadingState label="Loading pipeline…" />;
+  if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
   if (!rows.length) {
     return <EmptyState message="No active off-lease containers" hint={searching ? 'Try a different search' : undefined} />;

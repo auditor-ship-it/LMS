@@ -81,7 +81,6 @@ import { AppError } from '../utils/AppError.js';
 import { checkActionPermission } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { runAutoApproval } from './approve.service.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { getCollection } from './mongo.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
@@ -1137,7 +1136,7 @@ export async function getOffLeaseEntryStamp(containerNo) {
   const want = normKey(containerNo);
   if (!want) return '';
   try {
-    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
     const updCol = _findOlColumnMulti(headers, ['update']);
     const stsCol = _findOlColumnMulti(headers, ['status']);
     if (updCol < 0) return '';
@@ -1201,7 +1200,7 @@ export async function getOffLeaseClientNamesForContainer(containerNo) {
   if (!want) return [];
   const names = new Set();
   try {
-    const { rows } = await getSheetDataFromMongo(OL_SHEET);
+    const { rows } = await getSheetData(OL_SHEET);
     for (const row of rows) {
       if (normKey(row[0]) !== want) continue;
       const cn = safeStr(row[5]).trim();
@@ -1210,7 +1209,7 @@ export async function getOffLeaseClientNamesForContainer(containerNo) {
   } catch (e) { console.error('[OL-ACCESS] tracking scan:', e?.message || e); }
   if (names.size) return [...names];
   try {
-    const { rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const { rows } = await getSheetData(SHEETS.DEPLOYED);
     for (const row of rows) {
       if (normKey(row[0]) !== want) continue;
       const cn = safeStr(row[1]).trim();
@@ -1235,7 +1234,7 @@ export async function getOffLeaseData(stage, opts = {}, user) {
   // Display-only list read, no embedded write in this function — safe to
   // serve from the Mongo mirror (Phase 1b), and therefore no
   // _ensureOffLeaseSheet(): see the note in getOffLeaseDashboardData.
-  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const { headers, rows } = await getSheetData(OL_SHEET);
   const info = OL_STAGE_INFO[stage];
   if (!rows.length || !info) return { headers: [], data: [], stage };
 
@@ -1351,7 +1350,7 @@ export async function attachStageTat(result, stage) {
      rendered a dash on every row. */
   const entryByContainer = new Map();
   {
-    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const { headers: dh, rows: dr } = await getSheetData(SHEETS.DEPLOYED);
     const updCol = _findOlColumnMulti(dh, ['update']);
     const stsCol = _findOlColumnMulti(dh, ['status']);
     if (updCol >= 0) {
@@ -1363,7 +1362,7 @@ export async function attachStageTat(result, stage) {
     }
   }
 
-  const { rows } = await getSheetDataFromMongo(OL_SHEET);
+  const { rows } = await getSheetData(OL_SHEET);
 
   for (const item of result.data) {
     const row = rows[item._rowNum - 2] || [];
@@ -1398,7 +1397,7 @@ export async function getOffLeaseStageDetail(containerNo, stage, user) {
        read quota was exhausted — silently returned an empty record, so every
        field rendered as a dash. saveOffLeaseStage still reads live Sheets,
        because its row numbers DO target writes. */
-    const { rows } = await getSheetDataFromMongo(OL_SHEET);
+    const { rows } = await getSheetData(OL_SHEET);
     const rn = _findOlRowByContainer(rows, containerNo);
     if (rn === -1) throw new AppError(`Not found: ${safeStr(containerNo)}`);
     const info = OL_STAGE_INFO[stage];
@@ -1681,7 +1680,7 @@ async function _findBillingForContainer(want, wantClient) {
   const empty = { records: [], count: 0, totalBilling: 0 };
   const client = safeStr(wantClient).trim().toLowerCase();
   try {
-    const { rows } = await getSheetDataFromMongo(SHEETS.BILLING_SALES);
+    const { rows } = await getSheetData(SHEETS.BILLING_SALES);
     const records = [];
     for (const r of rows) {
       if (normKey(r[BS_CONTAINER]) !== want) continue;
@@ -1730,7 +1729,7 @@ export async function getInvoiceAttachments(invoiceNos) {
   if (!want.size) return out;
 
   try {
-    const { rows } = await getSheetDataFromMongo(SHEETS.BILLING_SALES);
+    const { rows } = await getSheetData(SHEETS.BILLING_SALES);
     for (const r of rows) {
       const key = normInvoiceNo(r[BS_INVOICE_NO]);
       if (!key || !want.has(key) || out[key]) continue;
@@ -1820,7 +1819,7 @@ export async function getOffLeaseDashboardData(user) {
      spreadsheets.get — and because `sheetEnsured` is per-process, every
      backend restart paid it again. With the read quota exhausted that turned
      into the circuit breaker refusing the whole dashboard. */
-  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const { headers, rows } = await getSheetData(OL_SHEET);
   const gate = await _offLeaseAccessGate(user);
 
   const items = [];
@@ -1886,7 +1885,7 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
      the sheet before a WRITE — on this path it only added a Sheets round trip
      to a read, and on an exhausted quota it failed the whole container detail.
      Same fix already applied to the dashboard and the stage lists. */
-  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const { headers, rows } = await getSheetData(OL_SHEET);
   const gate = await _offLeaseAccessGate(user);
 
   /* A container can appear more than once — the same box off-leased by two
@@ -2138,7 +2137,7 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
 export async function getOffLeaseApprovalData(user) {
   await _ensureOffLeaseSheet();
   // Display-only list read — safe to serve from the Mongo mirror (Phase 1b).
-  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const { headers, rows } = await getSheetData(OL_SHEET);
   if (!rows.length) return { headers: [], data: [], count: 0 };
 
   const gate = await _offLeaseAccessGate(user);
@@ -2355,7 +2354,7 @@ export async function copyApprovedData() {
      membership check (never a row-number write target) — safe to serve from
      the Mongo mirror, halving this hourly job's live Sheets read footprint. */
   const seen = {};
-  const { rows: existingRows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+  const { rows: existingRows } = await getSheetData(SHEETS.DEPLOYED);
   for (const r of existingRows) {
     const ec = r[0];
     if (!ec || String(ec).trim() === '') continue;

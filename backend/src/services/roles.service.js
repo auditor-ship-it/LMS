@@ -13,28 +13,24 @@ import {
   insertSheetIfMissing,
   deleteSheetIfExists,
   appendRow,
+  updateCell,
   updateRange,
+  deleteRows,
   colLetter
 } from './googleSheets.service.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
-import { writeThrough } from './writeThrough.service.js';
+import { withSheetLock } from '../utils/sheetMutex.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { normalizeKey } from '../config/mongoSheetMapping.js';
 import { PERMISSION_KEYS, SIDEBAR_KEYS, ROLES_ADMIN_EMAILS } from '../config/permissions.config.js';
 import { safeStr } from '../utils/format.js';
 import { cacheGet, cachePut, cacheRemove } from '../utils/memoryCache.js';
 import { accessDenied } from '../utils/AppError.js';
 
 /**
- * MONGO MIGRATION NOTE: ensureRolesSeeded() below still reads/writes the
- * live Google Sheet directly (getSheetData/insertSheetIfMissing/
- * deleteSheetIfExists/appendRow) — it's a one-time bootstrap check that
- * only ever does anything the very first time these two tabs don't exist
- * yet (both are already seeded in production, confirmed by the one-time
- * sync). Everything downstream of seeding (loadTeamPermTable/
- * loadSidebarTable and the four write functions) now reads/writes Mongo
- * (getSheetDataFromMongo / writeThrough) — Sheets stays in sync via the
- * outbox worker + jobs/sheetsReconcile.job.js, not inline in these calls.
+ * SHEETS-FIRST (reverted 2026-08-21). Every read/write in this file goes
+ * directly to the live Google Sheet; Mongo is not consulted for reads or
+ * writes here at all — Roles & Access is low-traffic admin-only data, so
+ * the quota cost of always reading live is negligible, and manual edits to
+ * either sheet are visible immediately.
  */
 
 const TEAM_SHEET = SHEETS.TEAM_ACCOUNTS;
@@ -146,7 +142,7 @@ export async function loadTeamPermTable() {
   const hit = cacheGet(TEAM_CACHE_KEY);
   if (hit) return hit;
   await ensureRolesSeeded();
-  const { rows } = await getSheetDataFromMongo(TEAM_SHEET);
+  const { rows } = await getSheetData(TEAM_SHEET);
   const out = {};
   for (const row of rows) {
     const email = safeStr(row[0]).trim().toLowerCase();
@@ -171,7 +167,7 @@ export async function loadSidebarTable() {
   const hit = cacheGet(SIDEBAR_CACHE_KEY);
   if (hit) return hit;
   await ensureRolesSeeded();
-  const { rows } = await getSheetDataFromMongo(SIDEBAR_SHEET);
+  const { rows } = await getSheetData(SIDEBAR_SHEET);
   const out = {};
   for (const row of rows) {
     const email = safeStr(row[0]).trim().toLowerCase();
@@ -265,6 +261,14 @@ export async function getRolesAndAccessData(callerEmail) {
   return { emails, permKeys: visiblePermKeys, sidebarKeys: visibleSidebarKeys, emailPerms: team, emailSidebar: sidebar, team: teamList };
 }
 
+async function findRowIndexByEmail(sheetName, email) {
+  const { rows } = await getSheetData(sheetName);
+  for (let i = 0; i < rows.length; i++) {
+    if (safeStr(rows[i][0]).trim().toLowerCase() === email) return i + 2; // 1-based, +1 for header
+  }
+  return -1;
+}
+
 export async function saveEmailPermission(callerEmail, email, key, value) {
   assertRolesAdmin(callerEmail);
   email = safeStr(email).trim().toLowerCase();
@@ -272,18 +276,11 @@ export async function saveEmailPermission(callerEmail, email, key, value) {
   if (key !== 'allAccess' && !keys.includes(key)) throw new Error('Unknown permission key');
   const col0 = key === 'allAccess' ? 2 : 3 + keys.indexOf(key);
 
-  const result = await writeThrough({
-    collection: TEAM_SHEET,
-    filter: { key: normalizeKey(TEAM_SHEET, email) },
-    update: { $set: { [`row.${col0}`]: !!value } },
-    mode: 'update',
-    actor: callerEmail,
-    sheetPush: {
-      targetSheet: TEAM_SHEET, operation: 'update', handler: 'roles.saveEmailPermission',
-      payload: { email, key, value: !!value }
-    }
+  await withSheetLock(TEAM_SHEET, async () => {
+    const targetRow = await findRowIndexByEmail(TEAM_SHEET, email);
+    if (targetRow === -1) throw new Error(`Email not found: ${email}`);
+    await updateCell(TEAM_SHEET, targetRow, col0, !!value);
   });
-  if (!result.matched) throw new Error(`Email not found: ${email}`);
 
   clearRolesCache();
   return 'OK';
@@ -296,18 +293,11 @@ export async function saveEmailSidebar(callerEmail, email, key, value) {
   const idx = keys.indexOf(key);
   if (idx === -1) throw new Error('Unknown sidebar key');
 
-  const result = await writeThrough({
-    collection: SIDEBAR_SHEET,
-    filter: { key: normalizeKey(SIDEBAR_SHEET, email) },
-    update: { $set: { [`row.${1 + idx}`]: !!value } },
-    mode: 'update',
-    actor: callerEmail,
-    sheetPush: {
-      targetSheet: SIDEBAR_SHEET, operation: 'update', handler: 'roles.saveEmailSidebar',
-      payload: { email, key, value: !!value }
-    }
+  await withSheetLock(SIDEBAR_SHEET, async () => {
+    const targetRow = await findRowIndexByEmail(SIDEBAR_SHEET, email);
+    if (targetRow === -1) throw new Error(`Email not found: ${email}`);
+    await updateCell(SIDEBAR_SHEET, targetRow, 1 + idx, !!value);
   });
-  if (!result.matched) throw new Error(`Email not found: ${email}`);
 
   clearRolesCache();
   return 'OK';
@@ -322,22 +312,10 @@ export async function addTeamAccount(callerEmail, email, name) {
   if (table[email]) throw new Error(`Email already exists: ${email}`);
 
   const tRow = [email, name, false, ...PERMISSION_KEYS.map(() => false)];
-  await writeThrough({
-    collection: TEAM_SHEET,
-    update: { key: normalizeKey(TEAM_SHEET, email), row: tRow },
-    mode: 'insert',
-    actor: callerEmail,
-    sheetPush: { targetSheet: TEAM_SHEET, operation: 'insert', handler: 'roles.addTeamAccount', payload: { email, name } }
-  });
+  await withSheetLock(TEAM_SHEET, () => appendRow(TEAM_SHEET, tRow));
 
   const sRow = [email, ...SIDEBAR_KEYS.map(() => true)];
-  await writeThrough({
-    collection: SIDEBAR_SHEET,
-    update: { key: normalizeKey(SIDEBAR_SHEET, email), row: sRow },
-    mode: 'insert',
-    actor: callerEmail,
-    sheetPush: { targetSheet: SIDEBAR_SHEET, operation: 'insert', handler: 'roles.addTeamAccount', payload: { email, name } }
-  });
+  await withSheetLock(SIDEBAR_SHEET, () => appendRow(SIDEBAR_SHEET, sRow));
 
   clearRolesCache();
   return 'OK';
@@ -347,22 +325,17 @@ export async function removeTeamAccount(callerEmail, email) {
   assertRolesAdmin(callerEmail);
   email = safeStr(email).trim().toLowerCase();
 
-  const tResult = await writeThrough({
-    collection: TEAM_SHEET,
-    filter: { key: normalizeKey(TEAM_SHEET, email) },
-    mode: 'delete',
-    actor: callerEmail,
-    sheetPush: { targetSheet: TEAM_SHEET, operation: 'delete', handler: 'roles.removeTeamAccount', payload: { email } }
+  let tFound = false;
+  await withSheetLock(TEAM_SHEET, async () => {
+    const targetRow = await findRowIndexByEmail(TEAM_SHEET, email);
+    if (targetRow !== -1) { tFound = true; await deleteRows(TEAM_SHEET, [targetRow]); }
   });
-  await writeThrough({
-    collection: SIDEBAR_SHEET,
-    filter: { key: normalizeKey(SIDEBAR_SHEET, email) },
-    mode: 'delete',
-    actor: callerEmail,
-    sheetPush: { targetSheet: SIDEBAR_SHEET, operation: 'delete', handler: 'roles.removeTeamAccount', payload: { email } }
+  await withSheetLock(SIDEBAR_SHEET, async () => {
+    const targetRow = await findRowIndexByEmail(SIDEBAR_SHEET, email);
+    if (targetRow !== -1) await deleteRows(SIDEBAR_SHEET, [targetRow]);
   });
 
   clearRolesCache();
-  if (!tResult.matched) throw new Error(`Email not found: ${email}`);
+  if (!tFound) throw new Error(`Email not found: ${email}`);
   return 'OK';
 }

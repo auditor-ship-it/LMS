@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  PageHeader, Card, Button, DataGrid, StatCard, LoadingState, ErrorState, renderCellValue
+  PageHeader, Card, Button, DataGrid, StatCard, ErrorState, renderCellValue
 } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { getRenewalLog as fetchRenewalLog, getNewLeaseReport as fetchNewLease } from '../../api/expiry.api.js';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './ReportsPage.module.css';
 
 /**
@@ -150,9 +151,9 @@ export function ReportsPage() {
       <PageHeader title="Reports" subtitle="Month-wise summaries across the lease lifecycle" />
 
       <div className={styles.kpiRow}>
-        <StatCard icon="package" label="Total off-lease" value={offLeaseRows.length} tint="navy" />
-        <StatCard icon="edit" label="Total renewals" value={renewalRows.length} tint="info" />
-        <StatCard icon="check" label="New leases" value={newLeaseRows.length} tint="success" />
+        <StatCard icon="package" label="Total off-lease" value={offLeaseRows.length} loading={offlease.loading} tint="navy" />
+        <StatCard icon="edit" label="Total renewals" value={renewalRows.length} loading={renewals.loading} tint="info" />
+        <StatCard icon="check" label="New leases" value={newLeaseRows.length} loading={newLease.loading} tint="success" />
       </div>
 
       {/* One filter for the whole page. */}
@@ -187,12 +188,12 @@ export function ReportsPage() {
       </div>
 
       <Card title="Off-Lease Report">
-        {offlease.loading && <LoadingState label="Building report…" />}
         {!offlease.loading && offlease.error && <ErrorState message={offlease.error} onRetry={offlease.reload} />}
-        {!offlease.loading && !offlease.error && (
+        {(offlease.loading || !offlease.error) && (
           <DataGrid
             headers={['Container No', 'Client Name', 'Lease ID', 'Size', 'Type', 'Location', 'Raised By']}
             rows={offLeaseRows}
+            loading={offlease.loading}
             rowKey={(r) => `${r.leaseId || ''}-${r.container}`}
             emptyMessage="No off-lease activity for this period"
             renderRow={(_v, it) => [
@@ -209,16 +210,16 @@ export function ReportsPage() {
       </Card>
 
       <Card title="New Lease Report">
-        {newLease.loading && <LoadingState label="Loading new leases…" />}
         {!newLease.loading && newLease.error && <ErrorState message={newLease.error} onRetry={newLease.reload} />}
         {!newLease.loading && newLease.data?.error && <ErrorState message={newLease.data.error} onRetry={newLease.reload} />}
-        {!newLease.loading && !newLease.error && !newLease.data?.error && (
+        {(newLease.loading || (!newLease.error && !newLease.data?.error)) && (
           <DataGrid
             headers={[
               'Deployed Date', 'Container No', 'Client Name', 'Order No', 'Order Type',
               'Qty', 'Size', 'Type', 'Location', 'Sale Executive'
             ]}
             rows={newLeaseRows}
+            loading={newLease.loading}
             rowKey={(r, i) => `${r.orderNo}-${r.container}-${i}`}
             emptyMessage="No new leases for this period"
             renderRow={(_v, r) => [
@@ -238,10 +239,9 @@ export function ReportsPage() {
       </Card>
 
       <Card title="Agreement Renewal Report">
-        {renewals.loading && <LoadingState label="Loading renewals…" />}
         {!renewals.loading && renewals.error && <ErrorState message={renewals.error} onRetry={renewals.reload} />}
         {!renewals.loading && renewals.data?.error && <ErrorState message={renewals.data.error} onRetry={renewals.reload} />}
-        {!renewals.loading && !renewals.error && !renewals.data?.error && (
+        {(renewals.loading || (!renewals.error && !renewals.data?.error)) && (
           <DataGrid
             headers={[
               'Renewed On', 'Container No', 'Client Name', 'Valid Till',
@@ -249,10 +249,11 @@ export function ReportsPage() {
               'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By'
             ]}
             rows={renewalRows}
+            loading={renewals.loading}
             rowKey={(r, i) => `${r.container}-${r.timestamp}-${i}`}
             emptyMessage="No renewals for this period"
             renderRow={(_v, r) => [
-              <td key="t">{r.timestamp || '—'}</td>,
+              <td key="t">{formatActionTimestamp(r.timestamp) || '—'}</td>,
               <td key="c"><strong>{r.container}</strong></td>,
               <td key="n">{r.clientName || '—'}</td>,
               <td key="v">{r.validTill || '—'}</td>,
