@@ -28,22 +28,11 @@ export function useAsync(fetcher, deps = []) {
 
   const run = useCallback(async () => {
     const myRequestId = ++requestIdRef.current;
-    const t0 = performance.now();
-    // TEMP DIAGNOSTIC (2026-08-21) — pinning down a reported "instant backend,
-    // stale UI" case. Remove once resolved.
-    // eslint-disable-next-line no-console
-    console.log(`[useAsync] #${myRequestId} START`);
     setLoading(true);
     setError('');
     try {
       const res = await fetcher();
-      const willCommit = mounted.current && myRequestId === requestIdRef.current;
-      // Compact summary, not the full payload — easy to eyeball across
-      // several overlapping log lines instead of expanding a huge object.
-      const renewedCount = Array.isArray(res?.data) ? res.data.filter((r) => r.actionStatus).length : null;
-      // eslint-disable-next-line no-console
-      console.log(`[useAsync] #${myRequestId} RESOLVED after ${(performance.now() - t0).toFixed(0)}ms | current=${requestIdRef.current} | commit=${willCommit} | rows=${res?.data?.length ?? '?'} | withActionStatus=${renewedCount}`);
-      if (willCommit) setData(res);
+      if (mounted.current && myRequestId === requestIdRef.current) setData(res);
     } catch (e) {
       if (mounted.current && myRequestId === requestIdRef.current) setError(apiErrorMessage(e));
     } finally {

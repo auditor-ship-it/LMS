@@ -74,7 +74,8 @@ export function ApproveLeasePage() {
       }
       setPendingReject(null);
       setSelectedRowNum(null);
-      reload();
+      // Write, then read — one sequential reload, nothing racing it.
+      await reload();
       setTimeout(() => setBanner(null), 5000);
     } catch (e) {
       const msg = apiErrorMessage(e);
