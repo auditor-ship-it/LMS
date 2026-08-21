@@ -36,16 +36,12 @@ export function DataGrid({
             {renderActions && <th className={styles.actionsCol}>Actions</th>}
           </tr>
         </thead>
-        {loading && !rows.length ? (
-          // Skeleton only for a true initial load (no rows to show yet).
-          // A background refresh (loading again while rows from the
-          // previous fetch — or an optimistic local patch — are already on
-          // screen) keeps showing them instead of blanking the table:
-          // swapping already-correct rows for a skeleton for the length of
-          // a live Sheets round trip (1-4s+, no longer the sub-second Mongo
-          // read this behavior was written for) hid genuinely-correct data
-          // behind a loading state for no reason. Confirmed 2026-08-21,
-          // Lease Expiry's "Renew" action.
+        {loading ? (
+          // Every load shows the skeleton, initial or a manual Refresh
+          // alike — the app is RAW app<->sheet now (no cache, no
+          // optimistic local patches to protect from being hidden), so
+          // there's no longer a reason to suppress this: a Refresh click
+          // with no visible feedback looks broken even when it's working.
           <tbody>
             <tr>
               <td colSpan={headers.length + (renderActions ? 1 : 0)} className={styles.skeletonCell}>

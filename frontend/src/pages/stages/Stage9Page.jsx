@@ -136,7 +136,8 @@ export function Stage9Page({ embedded }) {
       await submitMovement(form);
       setNotice(`Movement saved for ${form.containerNo}.`);
       setForm(BLANK);
-      movements.reload();
+      // Write, then read — one sequential reload, nothing racing it.
+      await movements.reload();
       if (autoFill) reloadSources(); // the container may no longer be pending
     } catch (err) {
       setError(apiErrorMessage(err));

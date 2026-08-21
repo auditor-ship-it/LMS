@@ -121,8 +121,11 @@ export function RenewDocumentPage() {
       });
       setRenewItem(null);
       setSelectedContainer(null);
-      reload();
-      reloadCounts();
+      // Write, then read, sequentially — see LeaseExpiryPage's runAction for
+      // why: a self-triggered background reload racing an in-flight write's
+      // own reflection is what caused rows to visibly update then revert.
+      await reload();
+      await reloadCounts();
       invalidate('deployed-sheet');
     } catch (e) {
       setRenewError(apiErrorMessage(e));
@@ -161,7 +164,12 @@ export function RenewDocumentPage() {
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else if (result === 'MISSING_PO') setDocError('A PO number/file URL is required first.');
       else if (result === 'MISSING_AGR') setDocError('A signed agreement copy URL is required first.');
-      else { setDocItem(null); setSelectedContainer(null); reload(); reloadCounts(); invalidate('deployed-sheet'); }
+      else {
+        setDocItem(null); setSelectedContainer(null);
+        await reload();
+        await reloadCounts();
+        invalidate('deployed-sheet');
+      }
     } catch (e) {
       setDocError(apiErrorMessage(e));
     } finally {
@@ -174,7 +182,7 @@ export function RenewDocumentPage() {
       <PageHeader
         title="Renew & Document"
         subtitle="Update lease periods for renewed containers and complete post-renewal documentation"
-        actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}
+        actions={<Button variant="secondary" size="sm" onClick={reloadBoth}>Refresh</Button>}
       />
 
       <div className={styles.kpiRow}>
@@ -219,7 +227,7 @@ export function RenewDocumentPage() {
               rows={pageRows}
               loading={loading}
               error={error}
-              onRetry={reload}
+              onRetry={reloadBoth}
               emptyMessage={tab === 'renewed' ? 'No renewed containers awaiting a lease-period update' : 'No containers awaiting document completion'}
               renderRow={(values, item) => tableColIdx.map((ci) => (
                 <td key={ci} className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>

@@ -47,7 +47,7 @@ const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle|po)$/i;
  * container number (row[0]) as the identifier, matching the main app.
  */
 export function LeaseExpiryPage() {
-  const { data, loading, error, reload, setData } = useAsync(() => fetchExpiryList(), []);
+  const { data, loading, error, reload } = useAsync(() => fetchExpiryList(), []);
   // Renew & Document reads the same Deployed-sheet columns this page's
   // Renew/Off-Lease actions write — without this, switching to that page
   // after an action here would still show whatever it last had cached
@@ -182,23 +182,19 @@ export function LeaseExpiryPage() {
       const result = await actionExpiryRow(containerNo, new Date().toISOString(), status);
       if (result === 'ALREADY_PROCESSED') {
         setActionError(`${containerNo} was already actioned by someone else.`);
-      } else {
-        // Patch the row locally with what we already know just happened —
-        // the write already succeeded against the live sheet (Sheets-first
-        // app-wide as of 2026-08-21), so this optimistic patch is already
-        // fully correct. Deliberately NOT followed by an immediate reload()
-        // on this page: DataGrid's loading state swaps the whole table body
-        // for a skeleton, which would hide this already-correct row behind
-        // a 1-4s skeleton flash (a real Sheets round trip, no longer the
-        // sub-second Mongo read this used to be) for no benefit. Other
-        // pages still catch up via invalidate() below, in the background,
-        // at their own pace.
-        setData((prev) => (prev?.data ? {
-          ...prev,
-          data: prev.data.map((r) => (r.row?.[0] === containerNo ? { ...r, actionStatus: status } : r))
-        } : prev));
       }
       setSelectedIdx(null);
+      // ONE rule, deliberately: write, then read. The write above already
+      // completed against the live sheet, so a read taken strictly after it
+      // is authoritative — no optimistic local patch to keep in sync, no
+      // second background fetch racing it. Confirmed 2026-08-21: running an
+      // optimistic patch AND a self-triggered background reload side by
+      // side let the (slower, real Sheets-latency) reload silently
+      // overwrite the already-correct optimistic state a moment later — a
+      // visible "chip flashes in, then vanishes" bug. awaiting this reload
+      // before invalidate() also means OTHER pages' own reloads (triggered
+      // below) start after this one has already landed, not racing it.
+      await reload();
       invalidate('deployed-sheet');
     } catch (e) {
       setActionError(apiErrorMessage(e));
@@ -222,7 +218,8 @@ export function LeaseExpiryPage() {
       const result = await trackContainer(containerNo);
       if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
       setSelectedIdx(null);
-      reload();
+      // Write, then read — see runAction's identical note above.
+      await reload();
       invalidate('deployed-sheet');
     } catch (e) {
       setActionError(apiErrorMessage(e));

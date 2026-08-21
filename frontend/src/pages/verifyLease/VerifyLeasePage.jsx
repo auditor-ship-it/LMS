@@ -38,7 +38,7 @@ export function VerifyLeasePage() {
   const { canAct } = usePermission();
   const canVerify = canAct('verify');
 
-  const { data, loading, error, reload, setData } = useAsync(fetchVerifyList, []);
+  const { data, loading, error, reload } = useAsync(fetchVerifyList, []);
   const headers = data?.headers || [];
   const items = data?.data || [];
 
@@ -99,20 +99,17 @@ export function VerifyLeasePage() {
         invoiceType,
         linkContainer
       });
-      const approvedRowNum = actionTarget._rowNum;
       setActionTarget(null);
       setSelectedRowNum(null);
       if (res?.message === 'ALREADY_PROCESSED') {
         setBanner({ type: 'error', text: 'This row was already processed by someone else.' });
-        reload();
       } else {
         setBanner({ type: 'success', text: `Approved — ${billingType}, ${invoiceType}.` });
-        // Drop it from the list immediately instead of waiting on reload(): a
-        // reload right now would re-fetch the Mongo mirror, which can lag the
-        // write that just landed on the live Sheet by up to the 5-minute
-        // reconciliation cycle — re-showing a row we just successfully approved.
-        setData((prev) => (prev ? { ...prev, data: prev.data.filter((it) => it._rowNum !== approvedRowNum) } : prev));
       }
+      // Write, then read — the write above already completed against the
+      // live sheet (Sheets-first app-wide), so a read taken strictly after
+      // it is authoritative. One sequential reload, nothing racing it.
+      await reload();
       setTimeout(() => setBanner(null), 5000);
     } catch (e) {
       setActionError(apiErrorMessage(e));
@@ -128,7 +125,7 @@ export function VerifyLeasePage() {
       await addVerifyFollowUp(followUpTarget.row[0], { timestamp: new Date().toISOString(), remarks, issue });
       setFollowUpTarget(null);
       setBanner({ type: 'success', text: 'Sent back — recorded.' });
-      reload();
+      await reload();
       setTimeout(() => setBanner(null), 5000);
     } catch (e) {
       setBanner({ type: 'error', text: apiErrorMessage(e) });

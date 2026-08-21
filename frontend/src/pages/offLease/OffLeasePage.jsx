@@ -144,7 +144,8 @@ function ApprovalQueue() {
     try {
       const message = await decideApproval(item.row[0], status);
       if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
-      reload();
+      // Write, then read — one sequential reload, nothing racing it.
+      await reload();
     } catch (e) {
       setActionError(apiErrorMessage(e));
     } finally {

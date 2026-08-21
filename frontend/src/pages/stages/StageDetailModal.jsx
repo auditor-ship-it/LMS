@@ -203,7 +203,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
       const message = await submitStage(containerNo, stageNumber, payload);
       if (message === 'ALREADY_PROCESSED') {
         setSaveError('This record was already processed by someone else — refreshing…');
-        reload();
+        await reload();
       } else if (REPORT_STAGES.includes(stageNumber)) {
         setJustSaved(true);
       } else {
