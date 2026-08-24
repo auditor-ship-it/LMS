@@ -26,17 +26,30 @@ export function useAsync(fetcher, deps = []) {
   // most-recently-STARTED call's result is ever allowed to commit.
   const requestIdRef = useRef(0);
 
-  const run = useCallback(async () => {
+  /* `silent`: used by usePolling for pages whose data can change from OUTSIDE
+     this app (an external Google Form submission, another user's Sheet
+     edit) with no in-app write to invalidate() from. A normal reload sets
+     loading=true, which flashes a full-page skeleton — fine for an explicit
+     Refresh click, disruptive every 60s in the background. Silent mode
+     still commits fresher data (and still respects requestIdRef, so an
+     overlapping manual Refresh can't be clobbered by a slower background
+     poll resolving after it), but never touches loading/error — a failed
+     background poll degrades to "still showing the last good data" rather
+     than replacing the screen with an error banner. */
+  const run = useCallback(async (opts = {}) => {
+    const { silent = false } = opts;
     const myRequestId = ++requestIdRef.current;
-    setLoading(true);
-    setError('');
+    if (!silent) { setLoading(true); setError(''); }
     try {
       const res = await fetcher();
       if (mounted.current && myRequestId === requestIdRef.current) setData(res);
     } catch (e) {
-      if (mounted.current && myRequestId === requestIdRef.current) setError(apiErrorMessage(e));
+      if (mounted.current && myRequestId === requestIdRef.current) {
+        if (!silent) setError(apiErrorMessage(e));
+        else console.warn('[useAsync] silent poll failed:', e?.message || e);
+      }
     } finally {
-      if (mounted.current && myRequestId === requestIdRef.current) setLoading(false);
+      if (mounted.current && myRequestId === requestIdRef.current && !silent) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);

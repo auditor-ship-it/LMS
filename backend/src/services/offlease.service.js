@@ -85,6 +85,8 @@ import { getCollection } from './mongo.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
+import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
+import { getDeliveredKeys } from './stage8.service.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
@@ -1230,6 +1232,14 @@ export async function isOffLeaseContainerVisibleToUser(containerNo, user) {
   return names.some((n) => gate(n));
 }
 
+/** Internal stage number for "Inspection Checklist" (displays as Stage 4) —
+ *  named for the same reason as OL_STAGE2_INTERNAL/OL_STAGE3_INTERNAL above:
+ *  the display number is not the internal one, and `3` read inline invites
+ *  the wrong assumption. */
+const OL_INSPECTION_INTERNAL = 3;
+/** Internal stage number for "Billing Reconciliation" (displays as Stage 5). */
+const OL_BILLING_INTERNAL = 5;
+
 export async function getOffLeaseData(stage, opts = {}, user) {
   // Display-only list read, no embedded write in this function — safe to
   // serve from the Mongo mirror (Phase 1b), and therefore no
@@ -1239,7 +1249,24 @@ export async function getOffLeaseData(stage, opts = {}, user) {
   if (!rows.length || !info) return { headers: [], data: [], stage };
 
   const gate = await _offLeaseAccessGate(user);
-  const { deliveredKeys } = opts;
+  /* gateFormIndex: the Stage 3 (Gate In) form was removed from the app
+     2026-08-24 — a container is gated in the moment the external Google
+     Form log ("Stage 3 " tab, read by stage3Form.service.js) shows "Inward
+     (Gate-In)" for it, no manual save needed. Repair-not-required rows
+     (that SAME form row also marked "Repair Required? = No") skip Stage 4
+     (Inspection Checklist) entirely and go straight to Stage 5 (Billing).
+     Same "read-time rule, no write" approach as the STAGE-10 delivery
+     bypass just above (see its doc comment) and for the identical reason:
+     the tracking sheet's own Gate In status column (135) has nothing left
+     to write it, exactly like Stage 2's never-fillable column.
+
+     Resolved per-ROW (container + that row's own client), not by container
+     number alone — the same box gets reused across different clients over
+     its lifetime (GESU9440432: gated in for one client, gated out to
+     another, over a year before either one's off-lease cycle), so matching
+     by container only risks pulling a different client's stale event. See
+     pickGateFormForClient's doc comment in stage3Form.service.js. */
+  const { deliveredKeys, gateFormIndex } = opts;
   const displayIndices = [0, 1, 2, 3, 5, 6, 7, 8, 9];
   const displayHeaders = ['Container No', 'Lease ID', 'Size', 'Type', 'Client Name', 'Location', 'Deployed Date', 'Valid Upto', 'Rate'];
   /* The gate is the previous ACTIVE stage, not stage-1: with Stage 4 retired,
@@ -1266,12 +1293,26 @@ export async function getOffLeaseData(stage, opts = {}, user) {
 
     if (gate && !gate(safeStr(row[5]))) continue;
 
+    const containerKey = _containerKey(row[0]);
+    const gfRow = gateFormIndex ? pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]) : null;
+    const gatedIn = isGatedIn(gfRow);
+    const repairSkip = isRepairNotRequired(gfRow);
+
     const statusVal = row[info.statusCol];
+    /* Gate In (internal 7) has no form left to fill its own status column —
+       the external form confirming it IS the completion signal, so a
+       gated-in container must drop out of this queue exactly as if that
+       column had been written. Inspection Checklist (internal 3) similarly
+       drops a repair-not-required container from ITS queue: that container
+       is not "pending inspection", it was routed around inspection
+       entirely and belongs in Billing's queue instead. */
+    if (Number(stage) === OL_STAGE3_INTERNAL && gatedIn) continue;
+    if (Number(stage) === OL_INSPECTION_INTERNAL && repairSkip) continue;
     if (statusVal && String(statusVal).trim() !== '') continue;
 
     /* Has this container's site delivery been recorded in STAGE-10? Keyed on
        container alone — see getDeliveredKeys() for why client is not used. */
-    const delivered = deliveredKeys ? deliveredKeys.has(_containerKey(row[0])) : false;
+    const delivered = deliveredKeys ? deliveredKeys.has(containerKey) : false;
 
     /* Stage 2 (internal 6) is DONE once STAGE-10 has its delivery — drop it
        from that queue so it is not shown as still awaiting transport. Only
@@ -1292,21 +1333,41 @@ export async function getOffLeaseData(stage, opts = {}, user) {
          records. */
       const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
       const releasedByDelivery = Number(stage) === OL_STAGE3_INTERNAL && delivered && stage1Done;
+      /* Gate In being confirmed says nothing about whether Transportation
+         itself was ever completed — the external form only tracks physical
+         gate movements, not this app's own Stage 2. A container gated in
+         without Transportation done (or delivered) is the SAME "physical
+         progress outran paperwork" shape as the intimation-approval check
+         below, one stage earlier: MSCU9692143 showed gated in with
+         Transportation still blank and no STAGE-10 delivery, and without
+         this check it jumped straight into the Inspection queue while
+         Transportation's own tab still correctly listed it as pending —
+         two queues both claiming the same container. */
+      const transportDone = safeStr(row[OL_STAGE_INFO[OL_STAGE2_INTERNAL].statusCol]).trim() !== '' || (delivered && stage1Done);
+      /* Same "released past a column nothing can fill" shape as the
+         delivery bypass, one link further down the chain: Inspection's gate
+         is normally Gate In's status column (135); a gated-in container
+         releases into Inspection instead on the external form's signal.
+         Billing's gate is normally Inspection's status column (28); a
+         repair-not-required container releases straight into Billing on
+         the SAME form's signal, skipping Inspection's column entirely. */
+      const releasedByGateForm = Number(stage) === OL_INSPECTION_INTERNAL && gatedIn && !repairSkip && transportDone;
+      const releasedByRepairSkip = Number(stage) === OL_BILLING_INTERNAL && repairSkip && transportDone;
+      const bypassed = releasedByDelivery || releasedByGateForm || releasedByRepairSkip;
       const prevStatus = row[prevInfo.statusCol];
-      if (!releasedByDelivery && (!prevStatus || String(prevStatus).trim() === '')) continue;
+      if (!bypassed && (!prevStatus || String(prevStatus).trim() === '')) continue;
 
       /* The intimation approval gate sits right after Stage 1 — normally
          only checked here when this stage directly follows Stage 1
-         (gatedByApproval). The STAGE-10 delivery bypass above skips
-         straight from "Stage 1 done" into Stage 3, walking around that gate
-         entirely: a container whose physical delivery the external FMS
-         recorded before its intimation was ever approved in this app must
-         still wait in Pending Approval, not jump the Gate In queue. Found
-         2026-08-20 via CXRU1042578 — delivered, Stage 1 done, approval
-         status still blank — showing in the Stage 3 tab (17) but correctly
-         absent from the dashboard scorecard's count (16), which classifies
-         from status columns alone and has no such bypass to skip the gate. */
-      if ((gatedByApproval || releasedByDelivery) && intApprovalCol >= 0) {
+         (gatedByApproval). The bypasses above skip straight past a stage
+         that directly follows Stage 1 in various ways, walking around that
+         gate entirely: a container whose physical progress outran its own
+         intimation approval in this app must still wait in Pending
+         Approval, not jump the queue. Found 2026-08-20 via CXRU1042578 for
+         the original delivery bypass — the same risk applies to gateInKeys/
+         repairNotRequiredKeys, both external signals with no idea whether
+         this app's own approval step ever happened. */
+      if ((gatedByApproval || bypassed) && intApprovalCol >= 0) {
         const intApproval = row[intApprovalCol];
         if (!intApproval || String(intApproval).trim().toLowerCase() !== 'approved') continue;
       }
@@ -1419,6 +1480,25 @@ export async function getOffLeaseStageDetail(containerNo, stage, user) {
 
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+
+    /* Inspection Checklist (internal 3) has no manual form to fill for a
+       container the Stage 3 (Gate In) form already marked "Repair Required?
+       = No" — it was routed straight to Billing, not inspected. Flagged here
+       so the modal shows that fact (and the form's own repair verdict)
+       instead of a blank 44-field checklist a fill would be meaningless on.
+       Resolved against THIS row's own client (row[5]) — see
+       pickGateFormForClient's doc comment for why container number alone
+       is not enough. */
+    if (Number(stage) === OL_INSPECTION_INTERNAL) {
+      const gf = getGateFormForContainer(containerNo, row[5]);
+      if (isRepairNotRequired(gf)) {
+        result._skipped = true;
+        result._skipReason = [
+          gf.repairRequired ? `Repair Required: ${gf.repairRequired}` : '',
+          gf.remarks ? `Remarks: ${gf.remarks}` : ''
+        ].filter(Boolean).join(' · ');
+      }
+    }
 
     return result;
   } catch (e) {
@@ -1748,9 +1828,30 @@ function _clientNameFallback(leaseInfo) {
   return safeStr(leaseInfo?.clientName || '');
 }
 
-function _classifyOffLeaseStages(headers, row) {
+/**
+ * @param gatedIn true when this container's LATEST Stage 3 (Gate In) form
+ *   row shows "Inward (Gate-In)" — see stage3Form.service.js. Gate In has no
+ *   status column left to fill, so this substitutes for it here exactly as
+ *   it does in getOffLeaseData's queue gating; without it the dashboard
+ *   would show every gated-in container permanently stuck at Stage 3 (Gate
+ *   In), the same class of scorecard/queue mismatch fixed 2026-08-20 for
+ *   the STAGE-10 delivery bypass.
+ * @param repairSkip true when that SAME form row is also marked "Repair
+ *   Required? = No" — Inspection Checklist (Stage 4) is skipped entirely,
+ *   so it counts as done here too, advancing straight to Billing.
+ * @param delivered true when STAGE-10 has this container's site delivery —
+ *   Transportation (Stage 2) has no status column left to fill either, so
+ *   this substitutes for it the same way. Applied HERE, inline with every
+ *   other bypass, rather than as a one-hop "move it to whatever's next"
+ *   patch after the fact — a delivered container that is ALSO gated in
+ *   and/or repair-skipped needs to land on its true current stage in one
+ *   pass, not get stranded one hop short at Gate In because the patch only
+ *   knew how to advance past Transportation.
+ */
+function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSkip = false, delivered = false) {
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const approval = apCol >= 0 ? safeStr(row[apCol]).trim() : '';
+  const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
 
   const stages = OL_ACTIVE_STAGE_NUMS.map((s) => {
     const info = OL_STAGE_INFO[s];
@@ -1763,11 +1864,15 @@ function _classifyOffLeaseStages(headers, row) {
        another stage's data on the dashboard. */
     const remarkCol = info.statusCol - 3;
     const remark = /remark/i.test(safeStr(headers[remarkCol])) ? safeStr(row[remarkCol]).trim() : '';
+    const bypassDone = (s === OL_STAGE2_INTERNAL && delivered && stage1Done)
+      || (s === OL_STAGE3_INTERNAL && gatedIn)
+      || (s === OL_INSPECTION_INTERNAL && repairSkip);
     return {
       stage: s,
       displayStage: displayStageNum(s),
       label: OL_STAGE_LABELS[s],
-      done: st !== '',
+      done: st !== '' || bypassDone,
+      skipped: s === OL_INSPECTION_INTERNAL && repairSkip,
       timestamp: row[info.statusCol - 2],
       remark
     };
@@ -1821,6 +1926,14 @@ export async function getOffLeaseDashboardData(user) {
      into the circuit breaker refusing the whole dashboard. */
   const { headers, rows } = await getSheetData(OL_SHEET);
   const gate = await _offLeaseAccessGate(user);
+  const gateFormIndex = getGateFormIndexSync();
+  /* Cache/disk-only, same as the gate form index — cheap enough to always
+     resolve. Keyed on container alone (see getDeliveredKeys' own doc
+     comment for why client is not used there). Best-effort: an FMS read
+     failure degrades to the pre-delivery-bypass count, not a broken
+     dashboard. */
+  let deliveredKeys;
+  try { deliveredKeys = await getDeliveredKeys(); } catch (e) { deliveredKeys = undefined; }
 
   const items = [];
   const kpis = { active: 0, pendingApproval: 0, byStage: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0 }, completedThisMonth: 0 };
@@ -1828,7 +1941,11 @@ export async function getOffLeaseDashboardData(user) {
   for (const row of rows) {
     if (!row[0] || String(row[0]).trim() === '') continue;
     if (gate && !gate(safeStr(row[5]))) continue;
-    const c = _classifyOffLeaseStages(headers, row);
+    const containerKey = _containerKey(row[0]);
+    // Client-aware match (row[5]) — see pickGateFormForClient's doc comment.
+    const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]);
+    const delivered = deliveredKeys ? deliveredKeys.has(containerKey) : false;
+    const c = _classifyOffLeaseStages(headers, row, isGatedIn(gfRow), isRepairNotRequired(gfRow), delivered);
     items.push({
       container: safeStr(row[0]),
       leaseId: safeStr(row[1]),
@@ -1887,6 +2004,15 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
      Same fix already applied to the dashboard and the stage lists. */
   const { headers, rows } = await getSheetData(OL_SHEET);
   const gate = await _offLeaseAccessGate(user);
+  /* Same Gate In / repair-skip bypass getOffLeaseData and
+     getOffLeaseDashboardData use — see stage3Form.service.js and the doc
+     comment on _classifyOffLeaseStages. Resolved per MATCH below (each
+     match's own row[5] client), not once for the whole container — the same
+     box can be gated in/out under different clients at different times (see
+     pickGateFormForClient's doc comment), so a blanket container-only
+     lookup risked showing one client's record with another's gate data. */
+  const gateFormIndex = getGateFormIndexSync();
+  const containerKey = _containerKey(containerNo);
 
   /* A container can appear more than once — the same box off-leased by two
      different clients at different times (e.g. TRIU6681671). Collect every
@@ -1915,16 +2041,20 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
       found: true,
       container: safeStr(visibleMatches[0].row[0]),
       multiple: true,
-      matches: visibleMatches.map((m) => ({
-        leaseId: safeStr(m.row[1]),
-        clientName: safeStr(m.row[5]) || _clientNameFallback(leaseInfo),
-        clientCode: safeStr(m.row[4]),
-        size: safeStr(m.row[2]),
-        type: safeStr(m.row[3]),
-        deployedDate: formatDateVal(m.row[7]),
-        validUpto: formatDateVal(m.row[8]),
-        currentStage: _classifyOffLeaseStages(headers, m.row).currentStage
-      }))
+      matches: visibleMatches.map((m) => {
+        const mClient = safeStr(m.row[5]) || _clientNameFallback(leaseInfo);
+        const mGfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], mClient);
+        return {
+          leaseId: safeStr(m.row[1]),
+          clientName: mClient,
+          clientCode: safeStr(m.row[4]),
+          size: safeStr(m.row[2]),
+          type: safeStr(m.row[3]),
+          deployedDate: formatDateVal(m.row[7]),
+          validUpto: formatDateVal(m.row[8]),
+          currentStage: _classifyOffLeaseStages(headers, m.row, isGatedIn(mGfRow), isRepairNotRequired(mGfRow)).currentStage
+        };
+      })
     };
   }
 
@@ -1987,6 +2117,12 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   res.approvalDate = apTsCol >= 0 ? formatDateVal(row[apTsCol]) : '';
   res.approvalUser = apUsCol >= 0 ? safeStr(row[apUsCol]) : '';
 
+  // This resolved record's own client — see pickGateFormForClient's doc
+  // comment for why container number alone is not enough here.
+  const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], res.clientName);
+  const gatedIn = isGatedIn(gfRow);
+  const repairSkip = isRepairNotRequired(gfRow);
+
   const stages = [];
   /* WORKFLOW ORDER, not 1..8 ascending. Internal stage numbers do not run in
      workflow order (the sequence is 1 -> 6 -> 7 -> 3 -> 5 -> 8), so counting
@@ -2010,6 +2146,7 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
     // — skip rather than dereference undefined.
     if (!info) continue;
     const st = safeStr(row[info.statusCol]).trim();
+    const bypassDone = (s === OL_STAGE3_INTERNAL && gatedIn) || (s === OL_INSPECTION_INTERNAL && repairSkip);
 
     const fields = [];
     for (let c = info.startCol; c <= info.statusCol - 3; c++) {
@@ -2024,7 +2161,14 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
     let machine = null;
     let cabin = null;
     let technician = null;
-    if (s === 3) {
+    /* Skipped when bypassDone (repair-not-required): the sheet's inspection
+       columns were never filled in because inspection never happened, but a
+       stray non-empty cell in one of the estimate/photo/remark columns
+       (leftover from earlier manual data entry) could still make readPoints
+       below report a phantom point. A container that skipped inspection has
+       no inspection data to show, full stop — the real "why" lives in the
+       Stage 3 form fields attached below instead. */
+    if (s === 3 && !bypassDone) {
       for (const eci of OL_STAGE3_EXTRA_COLS) {
         if (OL_INSPECTION_COL_SET.has(eci)) continue;
         const sv2 = fmtCell(row[eci]);
@@ -2071,15 +2215,72 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
       }
     }
 
+    /* Gate In (internal 7) and a repair-not-required Inspection Checklist
+       (internal 3) both have no column of their own left to fill — the
+       external "Stage 3 " form log (same tab covers both: gate movement AND
+       its Repair Required verdict) IS the record for either, so a bypassed
+       stage shows that form's own fields here instead of the blank sheet
+       columns every other stage reads from. Without this the history table
+       and the "Filled Stage Data" card both show a completed stage with
+       nothing in it — technically true (nothing was written to the sheet)
+       but not what "fetch the data" means. */
+    let gateFormFields = fields;
+    let gateFormTimestamp = formatDateVal(row[info.statusCol - 2]);
+    let gateFormUser = safeStr(row[info.statusCol - 1]);
+    if (bypassDone && (s === OL_STAGE3_INTERNAL || s === OL_INSPECTION_INTERNAL)) {
+      // Reuse the same client-resolved row bypassDone was computed from,
+      // rather than re-matching (and risking a different client's row).
+      const gf = gfRow;
+      if (gf) {
+        gateFormTimestamp = gf.date || gf.timestamp || gateFormTimestamp;
+        gateFormUser = s === OL_STAGE3_INTERNAL ? 'Auto — Gate-In Form' : 'Auto — Repair Not Required (Gate-In Form)';
+        gateFormFields = (s === OL_STAGE3_INTERNAL
+          ? [
+            { label: 'Customer Name (Gate-In Form)', value: gf.customer },
+            { label: 'Location', value: gf.location },
+            { label: 'Transporter Name', value: gf.transporterName },
+            { label: 'Transporter Number', value: gf.transporterNumber },
+            { label: 'Vehicle Number', value: gf.vehicleNumber },
+            { label: 'LR Copy', value: gf.lrCopy },
+            { label: 'Left Side Photo', value: gf.photos?.left },
+            { label: 'Right Side Photo', value: gf.photos?.right },
+            { label: 'Back View Photo', value: gf.photos?.back },
+            { label: 'Inside – Front Photo', value: gf.photos?.insideFront },
+            { label: 'Inside – Rear Photo', value: gf.photos?.insideRear },
+            { label: 'Roof Photo', value: gf.photos?.roof },
+            { label: 'Floor Photo', value: gf.photos?.floor },
+            { label: 'Door Lock Photo', value: gf.photos?.doorLock },
+            { label: 'Container Number (Close-up) Photo', value: gf.photos?.closeup },
+            { label: 'Container Photos (Merged PDF)', value: gf.photos?.mergedPdf },
+            { label: 'Repair Required?', value: gf.repairRequired },
+            { label: 'Estimated Repair Budget', value: gf.repairBudget },
+            { label: 'Remarks', value: gf.remarks }
+          ]
+          : [
+            { label: 'Repair Required?', value: gf.repairRequired },
+            { label: 'Estimated Repair Budget', value: gf.repairBudget },
+            { label: 'Remarks', value: gf.remarks },
+            { label: 'Container Photos (Merged PDF)', value: gf.photos?.mergedPdf }
+          ]
+        ).filter((f) => f.value && String(f.value).trim() !== '');
+      }
+    }
+
     stages.push({
       stage: s,
       displayStage: displayStageNum(s),
       label: OL_STAGE_LABELS[s],
-      done: st !== '',
+      done: st !== '' || bypassDone,
+      /* Gate In is genuinely done (the external form confirms the physical
+         event happened); Inspection Checklist bypassed by repair-skip never
+         happened at all — it was routed around, not completed. Both count
+         as `done` for gating the next stage, but only one should ever say
+         "Completed" on screen. */
+      skipped: s === OL_INSPECTION_INTERNAL && repairSkip,
       status: st,
-      timestamp: formatDateVal(row[info.statusCol - 2]),
-      user: safeStr(row[info.statusCol - 1]),
-      fields,
+      timestamp: gateFormTimestamp,
+      user: gateFormUser,
+      fields: gateFormFields,
       ...(inspection ? { inspection } : {}),
       ...(machine ? { machine } : {}),
       ...(cabin ? { cabin } : {}),

@@ -2,9 +2,11 @@ import * as offLeaseService from '../services/offlease.service.js';
 import * as stage9Service from '../services/stage9.service.js';
 import * as remarksService from '../services/offleaseRemarks.service.js';
 import * as stage8Service from '../services/stage8.service.js';
+import * as stage3FormService from '../services/stage3Form.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound } from '../utils/AppError.js';
+import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
 
 /* ---- Core 8-stage pipeline ---- */
 
@@ -15,14 +17,36 @@ const STAGE2_INTERNAL = 6;
 /** Internal stage 7 — the tab shown as "Stage 3 (Gate In)". */
 const STAGE3_INTERNAL = 7;
 
+/** Internal stage 3 — the tab shown as "Stage 4 (Inspection Checklist)". */
+const INSPECTION_INTERNAL = 3;
+
+/** Internal stage 5 — the tab shown as "Stage 5 (Billing Reconciliation)". */
+const BILLING_INTERNAL = 5;
+
+/** Cache/disk-only read (see stage3Form.service.js) — cheap enough to always
+ *  resolve, needed by every stage from Gate In onward. Container -> its
+ *  Stage 3 form rows; resolved per-row against that row's OWN client inside
+ *  offlease.service.js (see pickGateFormForClient's doc comment for why a
+ *  container number alone can resolve to the wrong client's gate event). */
+function gateFormIndex() {
+  return stage3FormService.getGateFormIndexSync();
+}
+
 export async function getData(req, res) {
   const stage = parseInt(req.query.stage, 10);
 
   /* A STAGE-10 site delivery completes the Stage 2 transport leg and releases
-     the container into Stage 3. Only those two queues need the lookup, and it
-     reads from cache so it costs nothing. */
+     the container into Stage 3 — and Transportation has no status column of
+     its own to fill, so Inspection/Billing's bypass gate (transportDone in
+     getOffLeaseData) needs this signal too, not just Transportation/Gate In
+     themselves: without it here, every container whose Transportation only
+     ever completed via this delivery signal (the normal case — that column
+     is "unfillable" by design) failed transportDone and vanished from the
+     Inspection queue entirely, while the tab badge (getStageCounts, which
+     always fetches this) still showed the correct count. Reads from cache,
+     so fetching it for four stages instead of two costs nothing. */
   let deliveredKeys;
-  if (stage === STAGE2_INTERNAL || stage === STAGE3_INTERNAL) {
+  if ([STAGE2_INTERNAL, STAGE3_INTERNAL, INSPECTION_INTERNAL, BILLING_INTERNAL].includes(stage)) {
     try {
       deliveredKeys = await stage8Service.getDeliveredKeys();
     } catch (e) {
@@ -30,7 +54,14 @@ export async function getData(req, res) {
     }
   }
 
-  const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys }, req.user);
+  /* Gate In (Stage 3) has no form left to fill its own status column, and
+     Inspection (Stage 4) / Billing (Stage 5) both need to know its result —
+     see offlease.service.js's getOffLeaseData doc comment. */
+  const gfIndex = [STAGE3_INTERNAL, INSPECTION_INTERNAL, BILLING_INTERNAL].includes(stage)
+    ? gateFormIndex()
+    : undefined;
+
+  const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys, gateFormIndex: gfIndex }, req.user);
   if (stage === STAGE2_INTERNAL) await stage8Service.enrichWithStage8Movements(data);
 
   /* TAT per row — how long this container has been waiting AT THIS STAGE
@@ -55,12 +86,13 @@ export async function getData(req, res) {
 export async function getStageCounts(req, res) {
   let deliveredKeys;
   try { deliveredKeys = await stage8Service.getDeliveredKeys(); } catch (e) { /* queues fall back */ }
+  const gfIndex = gateFormIndex();
 
   const stages = offLeaseService.OL_ACTIVE_STAGE_NUMS;
   const counts = {};
   await Promise.all(stages.map(async (s) => {
     try {
-      const d = await offLeaseService.getOffLeaseData(s, { deliveredKeys }, req.user);
+      const d = await offLeaseService.getOffLeaseData(s, { deliveredKeys, gateFormIndex: gfIndex }, req.user);
       counts[s] = d.data.length;
     } catch (e) {
       counts[s] = null;   // null = unknown, so the tab shows no badge at all
@@ -76,7 +108,29 @@ export async function getStageCounts(req, res) {
 
 export async function getStageDetail(req, res) {
   const stage = parseInt(req.params.stage, 10);
-  res.json(await offLeaseService.getOffLeaseStageDetail(req.params.containerNo, stage, req.user));
+  const detail = await offLeaseService.getOffLeaseStageDetail(req.params.containerNo, stage, req.user);
+
+  /* Billing Reconciliation needs the transport cost (STAGE-9 Freight Cost)
+     and the inspection/repair estimate (Gate-In form's "Estimated repair
+     budget") in front of the person reconciling — both are already fetched
+     elsewhere in the app but never surfaced HERE, where the reconciliation
+     actually happens, so this was manual lookup across two other screens.
+     Best-effort: a read failure must not take the whole form down over a
+     reference figure. */
+  if (stage === BILLING_INTERNAL) {
+    try {
+      const fms = await stage8Service.getFmsForContainer(req.params.containerNo, detail.col_5);
+      const freight = fms?.transport?.fields?.find(([label]) => /freight cost/i.test(label));
+      detail._transportCost = freight ? freight[1] : null;
+    } catch (e) { detail._transportCost = undefined; }
+
+    try {
+      const gf = stage3FormService.getGateFormForContainer(req.params.containerNo, detail.col_5);
+      detail._inspectionCost = gf?.repairBudget ?? null;
+    } catch (e) { detail._inspectionCost = undefined; }
+  }
+
+  res.json(detail);
 }
 
 export async function saveStage(req, res) {
@@ -203,14 +257,40 @@ export async function getContainerDetail(req, res) {
     } catch (e) { /* timers are additive — never fail the lookup over them */ }
 
     const f = detail.fms;
-    if (f?.movement && f?.transport && f?.delivery) {
-      const s2 = (detail.stages || []).find((s) => s.stage === STAGE2_INTERNAL);
-      if (s2 && !s2.done) {
+    const s2 = (detail.stages || []).find((s) => s.stage === STAGE2_INTERNAL);
+    if (f?.movement && f?.transport && f?.delivery && s2) {
+      if (!s2.done) {
         s2.done = true;
         s2.status = 'Completed';
         s2.autoCompleted = true;
         s2.timestamp = f.transport.lastUpdated || f.movement.timestamp || '';
         s2.user = 'Auto — FMS Stage 8 · 9 · 10';
+      }
+
+      /* Transportation (internal 6) has no column of its own to fill either
+         — same shape as Gate In, one step earlier in the workflow — so a
+         container auto-completed here from the FMS chain showed "Completed"
+         with "No fields recorded for this stage" in the container report's
+         Filled Stage Data card, even though the data exists (and is already
+         shown, grouped, in the Transportation (FMS) section above). Filled
+         once, only when genuinely empty — never overwrites a real save. */
+      if (!s2.fields?.length) {
+        /* Rate/amount/cost columns dropped — system-wide convention, pricing
+           is never shown outside Billing Reconciliation (see
+           isRateOrAmountHeader's doc comment) — EXCEPT Freight Cost and
+           Advance Amount specifically: asked for by name to be visible here
+           too, alongside the rest of Stage 9's fields, not just on the
+           Billing form's Cost Reference panel. */
+        const COST_ALLOWLIST = /freight cost|advance amount/i;
+        const fromRecord = (prefix, record) => (record?.fields || [])
+          .filter(([label]) => COST_ALLOWLIST.test(label) || !isRateOrAmountHeader(label))
+          .map(([label, value]) => ({ label: `${prefix}: ${label}`, value }))
+          .filter((x) => x.value && String(x.value).trim() !== '');
+        s2.fields = [
+          ...fromRecord('Stage 8 (Movement)', f.movement),
+          ...fromRecord('Stage 9 (Transport)', f.transport),
+          ...fromRecord('Stage 10 (Delivery)', f.delivery)
+        ];
       }
     }
   }
@@ -221,38 +301,15 @@ export async function getContainerDetail(req, res) {
 export async function getDashboardData(req, res) {
   const data = await offLeaseService.getOffLeaseDashboardData(req.user);
 
-  /* Apply the same FMS release the stage queues use. The dashboard classifies
-     purely from the sheet's status columns, so a container the queues had
-     already moved to Gate In still showed as sitting at Transportation — the
-     KPI card read 0 while the Stage 3 tab listed 9. */
-  try {
-    const delivered = await stage8Service.getDeliveredKeys();
-    if (delivered.size) {
-      const norm = (v) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-      for (const it of data.items) {
-        if (it.currentStageNum !== STAGE2_INTERNAL) continue;
-        if (!delivered.has(norm(it.container))) continue;
-
-        /* Stage 2 is done, so the container now sits at the next stage in the
-           workflow — read off its own stages array rather than hard-coding, so
-           this survives another reordering. */
-        const order = (it.stages || []).map((s) => s.stage);
-        const next = order[order.indexOf(STAGE2_INTERNAL) + 1];
-        const s = (it.stages || []).find((x) => x.stage === next);
-        if (!s) continue;
-
-        const s2 = (it.stages || []).find((x) => x.stage === STAGE2_INTERNAL);
-        if (s2) { s2.done = true; s2.autoCompleted = true; }
-        it.currentStageNum = next;
-        it.currentStage = `Stage ${s.displayStage} · ${s.label}`;
-
-        if (data.kpis?.byStage) {
-          data.kpis.byStage[STAGE2_INTERNAL] = Math.max(0, (data.kpis.byStage[STAGE2_INTERNAL] || 0) - 1);
-          data.kpis.byStage[next] = (data.kpis.byStage[next] || 0) + 1;
-        }
-      }
-    }
-  } catch (e) { /* FMS unavailable -> dashboard falls back to sheet status */ }
+  /* The STAGE-10 delivery release (Transportation has no status column left
+     to fill, same shape as Gate In) is now applied INSIDE
+     getOffLeaseDashboardData itself, inline with the Gate In / repair-skip
+     bypasses — so a delivered container lands on its TRUE current stage in
+     one pass. This used to be a post-hoc single-hop patch here (Stage 2 ->
+     whatever's immediately next), which stranded a delivered+gated-in+
+     repair-skipped container showing as "Gate In" when it had actually
+     already reached Billing — the KPI card read 17 pending at Gate In while
+     the tab itself only listed 3, the other 14 having moved on. */
 
   /* Live remarks are joined here, from ONE read of the remarks sheet, so the
      dashboard costs a constant two reads rather than one per record.

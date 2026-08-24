@@ -357,36 +357,16 @@ export const STAGE_FIELDS = {
     { key: 'col_118', label: 'Remarks', type: 'textarea' }
   ],
 
-  /* `group` splits this form into labelled sections. Twenty fields in one flat
-     grid — half of them near-identical "Choose file" links — made the reader
-     scan the whole form to find anything. The photo labels also drop their
-     "Photo: " prefix because the section already says it. */
-  7: [
-    { key: 'col_142', label: 'Gate Status', type: 'select', options: ['Inward (Gate-In)', 'Outward (Gate-Out)'], group: 'Gate entry' },
-    { key: 'col_143', label: 'Gate Date', type: 'date', required: true, group: 'Gate entry' },
-    { key: 'col_144', label: 'Location', type: 'text', required: true, group: 'Gate entry' },
-
-    { key: 'col_145', label: 'Transporter Name', type: 'text', required: true, group: 'Transport' },
-    { key: 'col_146', label: 'Transporter Number', type: 'text', group: 'Transport' },
-    { key: 'col_147', label: 'Vehicle Number', type: 'text', required: true, group: 'Transport' },
-    { key: 'col_148', label: 'LR Copy', type: 'file', group: 'Transport' },
-
-    { key: 'col_149', label: 'Left Side', type: 'file', group: 'Container photos' },
-    { key: 'col_150', label: 'Right Side', type: 'file', group: 'Container photos' },
-    { key: 'col_151', label: 'Back View', type: 'file', group: 'Container photos' },
-    { key: 'col_152', label: 'Inside Front', type: 'file', group: 'Container photos' },
-    { key: 'col_153', label: 'Inside Rear', type: 'file', group: 'Container photos' },
-    { key: 'col_154', label: 'Roof', type: 'file', group: 'Container photos' },
-    { key: 'col_155', label: 'Floor', type: 'file', group: 'Container photos' },
-    { key: 'col_156', label: 'Door Lock', type: 'file', group: 'Container photos' },
-    { key: 'col_157', label: 'Container Close up', type: 'file', group: 'Container photos' },
-
-    { key: 'col_158', label: 'Repair Required?', type: 'radio', options: YES_NO, group: 'Condition' },
-    /* Only meaningful when a repair is needed — asking for a budget on a
-       container in good order is a question the user has to decide to skip. */
-    { key: 'col_159', label: 'Est. Budget', type: 'number', group: 'Condition', showIf: (v) => String(v.col_158 || '').trim().toLowerCase() === 'yes' },
-    { key: 'col_160', label: 'Remark', type: 'text', group: 'Condition' }
-  ],
+  /* Gate Entry form removed 2026-08-24: gate/depot staff already fill out a
+     separate Google Form (the "Stage 3 " tab, read by
+     backend/src/services/stage3Form.service.js) for every container's Gate
+     Status, Date, Location, Transporter, Container Photos, and Repair
+     Required — asking for all of it again here was pure duplication. The
+     app now reads that form directly and treats a container as gated in
+     the moment it shows "Inward (Gate-In)"; a "Repair Required? = No" row
+     also skips Stage 4 (Inspection Checklist) entirely. Nothing left to
+     submit here — see StageDetailModal.jsx's empty-fields message. */
+  7: [],
 
   8: [
     { key: 'col_122', label: 'Billing & Filing', type: 'file' },

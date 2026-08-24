@@ -45,6 +45,7 @@ import { runAutoApproval } from '../services/approve.service.js';
 import { copyApprovedData } from '../services/offlease.service.js';
 import { runSheetsReconciliation } from './sheetsReconcile.job.js';
 import { refreshFmsCaches } from '../services/stage8.service.js';
+import { refreshStage3FormCache } from '../services/stage3Form.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -72,6 +73,7 @@ export function registerCronJobs() {
 export function registerSheetsSync() {
   cron.schedule('1-59/5 * * * *', safeRun('sheetsReconcile', runSheetsReconciliation));
   cron.schedule('3-59/5 * * * *', safeRun('refreshFmsCaches', refreshFmsCaches));
+  cron.schedule('3-59/5 * * * *', safeRun('refreshStage3FormCache', refreshStage3FormCache));
   logger.info('[SYNC] Sheets<->Mongo reconciliation registered (every 5 min, offset :01)');
-  logger.info('[SYNC] FMS (STAGE-8/9/10) refresh registered (every 5 min, offset :03)');
+  logger.info('[SYNC] FMS (STAGE-8/9/10) + Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
 }

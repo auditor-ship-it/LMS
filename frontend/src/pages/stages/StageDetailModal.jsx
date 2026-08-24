@@ -53,10 +53,12 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
   const billing = billingDetail?.billing?.records?.length ? billingDetail.billing : null;
 
   /* Tally outstanding for this container + client, from the Accounts &
-     Collection app via our own proxy. Stage 1 only — it is the figure the
-     intimation decision is made against. */
+     Collection app via our own proxy. Stage 1 — the figure the intimation
+     decision is made against — and Billing (BILLING_STAGE), where the
+     reconciler needs the same invoice-wise figures the decision was
+     originally based on. */
   const { data: outstanding, loading: outstandingLoading } = useAsync(
-    () => (stageNumber === 1 && containerNo
+    () => ((stageNumber === 1 || stageNumber === BILLING_STAGE) && containerNo
       ? getOutstanding(containerNo, data?.col_5 || '')
       : Promise.resolve(null)),
     [stageNumber, containerNo, data?.col_5]
@@ -276,8 +278,46 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                 />
               )}
 
-              {stageNumber === 1 && (
+              {(stageNumber === 1 || stageNumber === BILLING_STAGE) && (
                 <OutstandingPanel data={outstanding} loading={outstandingLoading} />
+              )}
+
+              {stageNumber === BILLING_STAGE && (
+                <CostReferencePanel transportCost={data?._transportCost} inspectionCost={data?._inspectionCost} />
+              )}
+
+              {/* Gate In's own form was removed 2026-08-24: gate/depot staff
+                  already fill out a separate Google Form for every container
+                  movement, and the app now reads that directly (Status +
+                  Repair Required, matched by container) instead of asking
+                  for the same information twice. A container still sitting
+                  here has not shown up as "Inward (Gate-In)" on that form
+                  yet — there is nothing to save in the app itself. */}
+              {!identityOnly && !fields.length && (
+                <div className={styles.savedPanel}>
+                  <p className={styles.savedTitle}>Waiting for Gate-In confirmation</p>
+                  <p className={styles.savedHint}>
+                    This container moves on automatically once the Gate Entry Google Form
+                    (filled out by gate/depot staff) shows it as "Inward (Gate-In)" — usually
+                    within a few minutes. Nothing to fill in here.
+                  </p>
+                </div>
+              )}
+
+              {/* Inspection Checklist has real fields (unlike Gate In), so the
+                  !fields.length check above never fires for it — this container
+                  specifically was routed around inspection because its Gate-In
+                  form already marked "Repair Required? = No". Nothing here to
+                  fill in, and the checklist below would be meaningless anyway. */}
+              {!identityOnly && !!data?._skipped && (
+                <div className={styles.savedPanel}>
+                  <p className={styles.savedTitle}>Skipped — Repair Not Required</p>
+                  <p className={styles.savedHint}>
+                    The Gate-In form for this container already marked it as not needing
+                    repair, so it moved straight to Billing without an inspection.
+                    {data._skipReason ? ` ${data._skipReason}.` : ''} Nothing to fill in here.
+                  </p>
+                </div>
               )}
 
               {billing && <BillingTable billing={billing} clientName={data?.col_5} />}
@@ -288,7 +328,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                   are not part of that. */}
               {/* Fields carrying a `group` are rendered in labelled sections;
                   ungrouped stages keep the single flat grid they had. */}
-              {!identityOnly && plainFields.some((f) => f.group) && (
+              {!identityOnly && !data?._skipped && plainFields.some((f) => f.group) && (
                 <FormSections
                   fields={plainFields}
                   values={values}
@@ -299,7 +339,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                 />
               )}
 
-              {!identityOnly && !plainFields.some((f) => f.group) && (
+              {!identityOnly && !data?._skipped && !plainFields.some((f) => f.group) && (
               <div className={styles.fieldGrid}>
                 {plainFields.map((f) => (
                   <Field
@@ -315,7 +355,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
               </div>
               )}
 
-              {!identityOnly && checklists.map((c) => (
+              {!identityOnly && !data?._skipped && checklists.map((c) => (
                 <ChecklistTable
                   key={c.group}
                   title={c.title}
@@ -330,7 +370,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                 />
               ))}
 
-              {!identityOnly && cabinFields.length > 0 && (
+              {!identityOnly && !data?._skipped && cabinFields.length > 0 && (
                 <CabinTable
                   fields={cabinFields}
                   size={data?.col_2}
@@ -358,7 +398,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                 <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>
                   {readOnly ? 'Close' : 'Cancel'}
                 </Button>
-                {!readOnly && (
+                {!readOnly && fields.length > 0 && !data?._skipped && (
                   <Button type="submit" variant="primary" loading={busy}>
                     {uploading ? 'Uploading files…' : saving ? 'Saving…' : 'Save Stage'}
                   </Button>
@@ -598,6 +638,53 @@ function OutstandingPanel({ data, loading }) {
           )}
         </div>
       )}
+    </>
+  );
+}
+
+/**
+ * Reference-only figures for whoever is reconciling billing: STAGE-9's
+ * Freight Cost and the Gate-In form's own repair-budget estimate, fetched
+ * server-side (getStageDetail, offlease.controller.js) so the person filling
+ * this form doesn't have to go find them on two other screens. Never written
+ * anywhere — this is a lookup aid, not a form field, same relationship
+ * OutstandingPanel has to Stage 1's intimation decision. `null` means the
+ * figure was read but held nothing usable (a blank cell, or "NA"); it is
+ * only ever missing (undefined) when the underlying sheet read itself
+ * failed, in which case that card still just says "—" rather than
+ * pretending it's zero.
+ */
+function CostReferencePanel({ transportCost, inspectionCost }) {
+  const num = (v) => {
+    const n = Number(String(v ?? '').replace(/,/g, '').trim());
+    return Number.isFinite(n) && String(v ?? '').trim() !== '' ? n : null;
+  };
+  const t = num(transportCost);
+  const i = num(inspectionCost);
+  const hasAny = t !== null || i !== null;
+  const inr = (n) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+  return (
+    <>
+      <h3 className={styles.sectionTitle}>Cost Reference (Transport + Inspection)</h3>
+      <p className={styles.sectionHint}>
+        Fetched from Stage 9 (Transport) and the Gate-In form's repair estimate — for
+        reference while reconciling, not saved anywhere on this form.
+      </p>
+      <div className={styles.outstandingRow}>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Transport Cost (Stage 9 Freight)</span>
+          <span className={styles.outstandingValue}>{t !== null ? inr(t) : '—'}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Inspection / Repair Estimate</span>
+          <span className={styles.outstandingValue}>{i !== null ? inr(i) : '—'}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Total</span>
+          <span className={styles.outstandingValue}>{hasAny ? inr((t ?? 0) + (i ?? 0)) : '—'}</span>
+        </div>
+      </div>
     </>
   );
 }
