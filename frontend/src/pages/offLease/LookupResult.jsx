@@ -19,7 +19,7 @@ import styles from './LookupResult.module.css';
  * every grid/detail view — see utils/isRateOrAmountHeader.js), even though
  * the API response includes it.
  */
-export function LookupResult({ result, showFms }) {
+export function LookupResult({ result }) {
   const {
     container, clientCode, clientName, inOffLease, approvalStatus,
     approvalDate, approvalUser, stages = [], currentStage
@@ -64,13 +64,6 @@ export function LookupResult({ result, showFms }) {
         </>
       )}
 
-      {/* Transportation as the FMS workbook records it — STAGE-8 movement,
-          STAGE-9 transport, STAGE-10 site delivery. Off by default: Container
-          Lookup answers "where is this container in the off-lease workflow",
-          and three FMS cards that usually say "no record" crowd that out. The
-          dashboard's all-stage-data view opts in. */}
-      {showFms && <FmsSection fms={result.fms} />}
-
       <InvoicesSection invoices={buildInvoices(result)} />
 
       <MovementsSection movements={buildMovements(result)} error={result.movementsError} />
@@ -96,12 +89,19 @@ export function LookupResult({ result, showFms }) {
                     <div className={styles.filledHeader}>
                       <span className={styles.filledBadge}>{s.displayStage ? `Stage ${s.displayStage}` : 'Retired'}</span>
                       <span className={styles.filledTitle}>{s.label}</span>
-                      <span className={styles.filledStatus}>Completed</span>
+                      <span className={styles.filledStatus}>{s.skipped ? 'Skipped' : 'Completed'}</span>
                       <span className={styles.filledMeta}>
                         {formatActionTimestamp(s.timestamp)}{s.user ? ` · ${s.user}` : ''}
                       </span>
                     </div>
-                    {s.fields.length > 0 && (
+                    {/* Skipped means nothing actually happened at this stage —
+                        the fields underneath it (repair verdict, remarks,
+                        photos) describe the Gate-In event that routed AROUND
+                        it, not an inspection that occurred here, so showing
+                        them under "Skipped" reads as a completed checklist
+                        that never happened. The status badge alone is the
+                        whole story. */}
+                    {!s.skipped && s.fields.length > 0 && (
                       <div className={styles.filledGrid}>
                         {s.fields.map((f) => (
                           <div key={f.label} className={styles.item}>
@@ -111,13 +111,13 @@ export function LookupResult({ result, showFms }) {
                         ))}
                       </div>
                     )}
-                    {s.inspection?.length > 0 && (
+                    {!s.skipped && s.inspection?.length > 0 && (
                       <ChecklistTable title="Container Inspection Checklist" columnLabel="Instruction Point" points={s.inspection} />
                     )}
-                    {s.machine?.length > 0 && (
+                    {!s.skipped && s.machine?.length > 0 && (
                       <ChecklistTable title="Machine Check" columnLabel="Machine Point" points={s.machine} />
                     )}
-                    {s.fields.length === 0 && !s.inspection?.length && !s.machine?.length && (
+                    {!s.skipped && s.fields.length === 0 && !s.inspection?.length && !s.machine?.length && (
                       <p className={styles.filledEmpty}>No fields recorded for this stage.</p>
                     )}
                   </div>
@@ -138,7 +138,8 @@ const HISTORY_TONE = {
   approved: 'histDone',
   logged: 'histLogged',
   rejected: 'histRejected',
-  pending: 'histPending'
+  pending: 'histPending',
+  skipped: 'histNeutral'
 };
 
 function HistoryTable({ rows }) {
@@ -172,54 +173,6 @@ function HistoryTable({ rows }) {
         </tbody>
       </table>
     </div>
-  );
-}
-
-/** One FMS tab's matched row, as label/value pairs. `undefined` means the
- *  sheet could not be read; `null` means it was read and held no match — two
- *  different facts that must not read the same. */
-function FmsCard({ title, record }) {
-  return (
-    <div className={styles.filledCard}>
-      <div className={styles.filledHeader}>
-        <span className={styles.filledTitle}>{title}</span>
-        <span className={styles.filledStatus}>
-          {record === undefined ? 'Unavailable' : record ? 'Fetched' : 'No record'}
-        </span>
-      </div>
-      {record
-        ? (
-          <div className={styles.filledGrid}>
-            {record.fields.map(([label, value]) => (
-              <div key={label} className={styles.item}>
-                <span className={styles.label}>{label}</span>
-                <span className={styles.value}>{renderCellValue(value)}</span>
-              </div>
-            ))}
-          </div>
-        )
-        : (
-          <p className={styles.filledEmpty}>
-            {record === undefined
-              ? 'Sheet could not be read — Google Sheets read quota exhausted.'
-              : 'No matching record in this sheet for this container.'}
-          </p>
-        )}
-    </div>
-  );
-}
-
-function FmsSection({ fms }) {
-  if (!fms) return null;
-  return (
-    <>
-      <h4 className={styles.sectionTitle}>Transportation (FMS) — Stage 8 · 9 · 10</h4>
-      <div className={styles.filledStack}>
-        <FmsCard title="Stage 8 — Offlease Movement" record={fms.movement} />
-        <FmsCard title="Stage 9 — Transport" record={fms.transport} />
-        <FmsCard title="Stage 10 — Site Delivery" record={fms.delivery} />
-      </div>
-    </>
   );
 }
 
@@ -373,7 +326,7 @@ function StageCard({ stage, isCurrent }) {
           than showing a number that now belongs to a different stage. */}
       <span className={styles.stageCardLabel}>{stage.displayStage ? `Stage ${stage.displayStage}` : 'Retired'}</span>
       <span className={styles.stageCardTitle}>{stage.label}</span>
-      <span className={styles.stageCardStatus}>{stage.done ? 'Completed' : 'Pending'}</span>
+      <span className={styles.stageCardStatus}>{stage.skipped ? 'Skipped' : stage.done ? 'Completed' : 'Pending'}</span>
       {stage.done && (
         <span className={styles.stageCardMeta}>{formatActionTimestamp(stage.timestamp)}{stage.user ? ` · ${stage.user}` : ''}</span>
       )}

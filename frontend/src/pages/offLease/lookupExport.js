@@ -72,7 +72,10 @@ export function exportLookupToExcel(result) {
   if (filled.length) {
     const stageAoa = [['Stage', 'Stage Name', 'Completed On', 'By', 'Field', 'Value']];
     filled.forEach((s) => {
-      if (!s.fields.length) {
+      // Skipped: same reasoning as the on-screen card and the PDF — the
+      // fields describe the event that routed around this stage, not this
+      // stage itself.
+      if (s.skipped || !s.fields.length) {
         stageAoa.push([s.stage, s.label, s.timestamp, s.user, '', '']);
         return;
       }
@@ -215,23 +218,27 @@ export function exportLookupToPdf(result) {
     drawStageHeader(rpt, doc, {
       stage: s.retired ? null : s.stage,
       label: s.retired ? `${s.label} (retired)` : s.label,
-      status: 'Completed',
+      status: s.skipped ? 'Skipped' : 'Completed',
       meta: [s.timestamp, s.user].filter(Boolean).join(' · ')
     });
-    if (s.fields.length) {
+    // Skipped: the fields below describe the event that routed AROUND this
+    // stage, not the stage itself — same reasoning as the on-screen card.
+    if (!s.skipped && s.fields.length) {
       drawFieldGrid(rpt, doc, s.fields.map(([label, value]) => ({ label, value })));
     }
     // Stage 3's checklists — column tables, not label/value cells.
-    s.checklists.forEach((c) => {
-      drawSubHeading(rpt, doc, c.title);
-      // The "#" column must fit two digits (points 10 and 11) plus cell padding.
-      drawDataTable(rpt, doc, checklistHead(c.pointLabel), c.rows, [10, 43, 24, 22, 22, 45]);
-    });
-    if (s.cabin.length) {
+    if (!s.skipped) {
+      s.checklists.forEach((c) => {
+        drawSubHeading(rpt, doc, c.title);
+        // The "#" column must fit two digits (points 10 and 11) plus cell padding.
+        drawDataTable(rpt, doc, checklistHead(c.pointLabel), c.rows, [10, 43, 24, 22, 22, 45]);
+      });
+    }
+    if (!s.skipped && s.cabin.length) {
       drawSubHeading(rpt, doc, 'Site Cabin Fittings');
       drawDataTable(rpt, doc, CABIN_HEAD, s.cabin, [10, 60, 20, 24, 20]);
     }
-    if (!s.fields.length && !s.checklists.length && !s.cabin.length) {
+    if (!s.skipped && !s.fields.length && !s.checklists.length && !s.cabin.length) {
       drawEmptyStageBody(rpt, doc, 'No fields recorded for this stage.');
     }
     rpt.closeCard();

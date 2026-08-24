@@ -74,7 +74,7 @@ export function buildProgressRows(result) {
     const row = {
       stage: s.displayStage ? `Stage ${s.displayStage}` : 'Retired',
       name: cellText(s.label),
-      status: s.done ? 'Completed' : 'Pending',
+      status: s.skipped ? 'Skipped' : s.done ? 'Completed' : 'Pending',
       on: s.done ? formatActionTimestamp(s.timestamp) : '',
       by: s.done ? cellText(s.user) : '',
       sla: s.sla || null
@@ -213,6 +213,7 @@ export function buildFilledStages(result) {
       // anchor to a specific stage (the estimate summary sits above Stage 3).
       internalStage: s.stage,
       retired: !s.displayStage,
+      skipped: !!s.skipped,
       label: cellText(s.label),
       timestamp: formatActionTimestamp(s.timestamp),
       user: cellText(s.user),

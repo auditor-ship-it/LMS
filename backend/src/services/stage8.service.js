@@ -110,7 +110,7 @@ function editDistance(a, b, max) {
  * longer ones, and only once both are at least 5 characters — so it forgives
  * a typo without merging two genuinely different clients.
  */
-function clientMatches(a, b) {
+export function clientMatches(a, b) {
   const x = normClient(a);
   const y = normClient(b);
   if (!x || !y) return false;

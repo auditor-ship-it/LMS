@@ -10,6 +10,7 @@ import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { ALL_STAGES, stageDisplayNumber, stageCaption, isReadOnlyStage } from '../../constants/stages.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { useAsync } from '../../hooks/useAsync.js';
+import { usePolling } from '../../hooks/usePolling.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -67,6 +68,13 @@ export function StagePageBase({ stageNumber, embedded }) {
   const canEdit = !readOnly && canAct(permKey);
 
   const { data, loading, error, reload } = useAsync(() => fetchStageList(stageNumber), [stageNumber]);
+  /* Catches a container becoming eligible from OUTSIDE this app — a Gate-In
+     form submission, an FMS sheet update — without the user clicking
+     Refresh. Those land in the 5-minute cache the backend already refreshes
+     on its own cron; this just re-reads it more often than "next page
+     load" so the tab reflects it within a minute instead of whenever
+     someone happens to navigate back here. */
+  usePolling(() => reload({ silent: true }), 60000);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
   const [activeRow, setActiveRow] = useState(null);

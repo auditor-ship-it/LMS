@@ -44,8 +44,7 @@ export function ContainerDetailModal({ container, leaseId, onClose }) {
             <Button variant="secondary" size="sm" onClick={() => exportLookupToExcel(data)}>Download Excel</Button>
             <Button variant="secondary" size="sm" onClick={() => exportLookupToPdf(data)}>Download PDF</Button>
           </div>
-          {/* This IS the all-stage view, so it opts into the FMS cards. */}
-          <LookupResult result={data} showFms />
+          <LookupResult result={data} />
         </>
       )}
     </Modal>

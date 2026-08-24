@@ -3,6 +3,7 @@ import {
   PageHeader, Card, Button, SearchBar, Pagination, DataGrid, LoadingState, ErrorState, EmptyState, renderCellValue
 } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
+import { usePolling } from '../../hooks/usePolling.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -68,8 +69,12 @@ export function OffLeasePage() {
      `|| {}`, not a default parameter: useAsync returns NULL while loading and
      on error, and a default only applies to `undefined`. Tabs without a
      countKey then indexed null and the whole page crashed. */
-  const { data: countsData } = useAsync(fetchStageCounts, []);
+  const { data: countsData, reload: reloadCounts } = useAsync(fetchStageCounts, []);
   const counts = countsData || {};
+  // Badges reflect a container becoming eligible in the background (an
+  // external Gate-In form submission, an FMS update) without a manual
+  // refresh — see usePolling's doc comment.
+  usePolling(() => reloadCounts({ silent: true }), 60000);
 
   return (
     <>
@@ -110,6 +115,7 @@ export function OffLeasePage() {
 
 function ApprovalQueue() {
   const { data, loading, error, reload } = useAsync(() => fetchApprovalQueue(), []);
+  usePolling(() => reload({ silent: true }), 60000);
   const { canAct } = usePermission();
   const canActApproval = canAct('offleaseapproval');
 

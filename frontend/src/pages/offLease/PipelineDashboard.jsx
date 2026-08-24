@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { StatCard, Card, Button, SearchBar, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
+import { usePolling } from '../../hooks/usePolling.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { STAGES } from '../../constants/stages.js';
@@ -30,6 +31,8 @@ const VIEWS = [
 
 export function PipelineDashboard({ onOpenTab }) {
   const { data, loading, error, reload } = useAsync(fetchOffLeaseDashboard, []);
+  // Same background-eligibility catch as StagePageBase — see usePolling's doc comment.
+  usePolling(() => reload({ silent: true }), 60000);
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
   // The record whose full stage history is open, or null.
@@ -239,7 +242,7 @@ function MiniPipeline({ item }) {
     if (i !== 0) nodes.push(<span key={`l${s.stage}`} className={lineClass(stages[i - 1].done)} />);
     nodes.push(
       // displayStage, not stage — the dot shows the user-facing number.
-      <span key={`s${s.stage}`} className={dotClass(s.done, s.stage === currentStageNum)} title={`Stage ${s.displayStage ?? s.stage} · ${s.label}${s.done ? ' — Completed' : s.stage === currentStageNum ? ' — In progress' : ''}`}>
+      <span key={`s${s.stage}`} className={dotClass(s.done, s.stage === currentStageNum)} title={`Stage ${s.displayStage ?? s.stage} · ${s.label}${s.skipped ? ' — Skipped' : s.done ? ' — Completed' : s.stage === currentStageNum ? ' — In progress' : ''}`}>
         {s.displayStage ?? s.stage}
       </span>
     );
