@@ -15,15 +15,23 @@ const EMPTY_FORM = {
  * submitDocumentCompletion -> POST /expiry/renewal/complete-document-stage;
  * the signed copy / PO file are uploaded to Drive first (RenewDocumentPage's
  * handleDocSubmit) and their resulting URLs sent in place of signedCopy/poFile.
+ *
+ * Also doubles as the BULK version: pass `items` (an array, one entry per
+ * selected container) instead of `item`. One form, filled once — every
+ * field, INCLUDING the uploaded signed copy/PO file, applies identically to
+ * every container in the list (e.g. one PO/agreement batch covering several
+ * containers). `item` and `items` are mutually exclusive.
  */
-export function CompleteDocumentModal({ open, item, submitting, error, onClose, onSubmit }) {
+export function CompleteDocumentModal({ open, item, items, submitting, error, onClose, onSubmit }) {
   const [form, setForm] = useState(EMPTY_FORM);
+  const bulk = Array.isArray(items);
 
   useEffect(() => {
     if (open) setForm(EMPTY_FORM);
-  }, [open, item]);
+  }, [open, item, items]);
 
-  if (!item) return null;
+  if (!bulk && !item) return null;
+  if (bulk && !items.length) return null;
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
@@ -33,12 +41,24 @@ export function CompleteDocumentModal({ open, item, submitting, error, onClose, 
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Update Agreement" width="540px">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={bulk ? `Update Agreement — ${items.length} containers` : 'Update Agreement'}
+      width="540px"
+    >
       <form onSubmit={handleSubmit} className={styles.form}>
-        <label className={styles.field}>
-          <span className={styles.label}>Container</span>
-          <input type="text" value={item.containerNo || ''} disabled />
-        </label>
+        {bulk ? (
+          <div className={styles.field}>
+            <span className={styles.label}>Containers ({items.length})</span>
+            <div className={styles.bulkList}>{items.map((it) => it.containerNo).join(', ')}</div>
+          </div>
+        ) : (
+          <label className={styles.field}>
+            <span className={styles.label}>Container</span>
+            <input type="text" value={item.containerNo || ''} disabled />
+          </label>
+        )}
 
         <div className={styles.grid2}>
           <label className={styles.field}>
@@ -103,7 +123,9 @@ export function CompleteDocumentModal({ open, item, submitting, error, onClose, 
 
         <div className={styles.footer}>
           <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button type="submit" variant="primary" loading={submitting}>Update Agreement</Button>
+          <Button type="submit" variant="primary" loading={submitting}>
+            {bulk ? `Update ${items.length}` : 'Update Agreement'}
+          </Button>
         </div>
       </form>
     </Modal>

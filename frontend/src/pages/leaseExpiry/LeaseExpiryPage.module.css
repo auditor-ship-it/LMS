@@ -17,6 +17,18 @@
 }
 
 .actionsCell { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+}
+.bulkCount { font-size: 13px; font-weight: 700; color: var(--text); margin-right: auto; }
 .actionError {
   color: var(--error);
   font-size: 12px;
