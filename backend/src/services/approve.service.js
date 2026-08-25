@@ -1,11 +1,13 @@
 /**
  * Port of LMS.js lines 872-1103: getApproveData, runAutoApproval,
- * revertAutoApproved, saveActionData, saveApproveLeaseByRow, plus internal
- * helpers _expiryOrderNoMap / _olStageCounts.
+ * revertAutoApproved, saveActionData, saveApproveLeaseByRow, plus the
+ * internal helper _expiryOrderNoMap. (This file used to also own
+ * _olStageCounts, the Off-Lease stage-count helper My Task called — removed
+ * 2026-08-25, replaced by offlease.service.js's getOffLeaseStageCounts.)
  *
- * _expiryOrderNoMap and _olStageCounts are exported even though only used
- * internally by this migration slice — later modules (Lease Expiry, My Task
- * dashboard) reuse them exactly as the original did (see MIGRATION_MAP.md).
+ * _expiryOrderNoMap is exported even though only used internally by this
+ * migration slice — Lease Expiry reuses it exactly as the original did (see
+ * MIGRATION_MAP.md).
  *
  * RECONCILE: expiry.service.js (a sibling migration pass, ported concurrently)
  * also has its own copy of _expiryOrderNoMap (same body, needed there as a
@@ -28,7 +30,7 @@ import { normKey, splitContainers } from '../utils/normalize.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { cacheGet, cachePut } from '../utils/memoryCache.js';
-import { OL_STAGE_INFO, _findOlColumnMulti } from './offlease.service.js';
+import { _findOlColumnMulti } from './offlease.service.js';
 import { parseStamp } from './offleaseSla.service.js';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -494,42 +496,14 @@ export async function _expiryOrderNoMap() {
   return map;
 }
 
-/* ===================== OFF-LEASE STAGE COUNTS ===================== */
-
-/**
- * Off-Lease pending counts for Stage 1..8 + Pending Approval.
- * Wired to the now-ported Off-Lease Tracking module (offlease.service.js).
- *
- * Pure display counts, no write anywhere in this function — safe to read
- * from the Mongo mirror (same reasoning as offlease.service.js's own
- * getOffLeaseData/getOffLeaseApprovalData). Previously read live Sheets
- * directly; a Sheets quota hit silently zeroed every Off-Lease count on My
- * Task (the try/catch below swallows it) without affecting Off-Lease's own
- * tabs, which were already Mongo-backed — confirmed 2026-08-01 as the cause
- * of My Task showing 0 across every Off-Lease scorecard.
- */
-export async function _olStageCounts() {
-  const c = { s1: 0, s2: 0, s3: 0, s4: 0, s5: 0, s6: 0, s7: 0, s8: 0, approval: 0 };
-  try {
-    const { headers, rows } = await getSheetData(SHEETS.OFF_LEASE_TRACKING);
-    if (!rows.length) return c;
-    const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
-    const s1Col = OL_STAGE_INFO[1].statusCol;
-    for (const row of rows) {
-      if (!row[0] || String(row[0]).trim() === '') continue;
-      const appr = apCol >= 0 ? String(row[apCol] || '').trim().toLowerCase() : '';
-      if (String(row[s1Col] || '').trim().toLowerCase() === 'completed' && appr === '') c.approval++;
-      for (let st = 1; st <= 8; st++) {
-        const info = OL_STAGE_INFO[st];
-        if (String(row[info.statusCol] || '').trim() !== '') continue; // already done at this stage
-        if (st > 1) {
-          const prev = OL_STAGE_INFO[st - 1];
-          if (String(row[prev.statusCol] || '').trim() === '') continue; // previous stage not done
-          if (st === 2 && appr !== 'approved') continue; // Stage 2 needs approval
-        }
-        c['s' + st]++;
-      }
-    }
-  } catch (e) { /* matches original: never throws, returns zeroed counts on any failure */ }
-  return c;
-}
+/* Off-Lease stage counts used to live here (_olStageCounts) — replaced
+   2026-08-25 by offlease.service.js's getOffLeaseStageCounts, which runs the
+   SAME queue logic (with the Gate-In/repair-skip/STAGE-10 bypasses) the
+   Off-Lease tabs themselves use, instead of this function's own much older
+   counter. That older version walked stages 1..8 in plain numeric order —
+   not the actual workflow order 1->6->7->3->5->8 — and had no idea any of
+   those bypasses existed, so the moment a container's progress depended on
+   one (the normal case, not the exception), its status column stayed
+   permanently blank to this function and every count past Stage 1 collapsed
+   to 0 on My Task while the real Off-Lease tabs correctly showed pending
+   work. See getOffLeaseStageCounts's doc comment for the full account. */

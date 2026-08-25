@@ -26,24 +26,31 @@ const GROUPS = {
 };
 
 const CARD_DEFS = [
-  { key: 'pendingVerify', label: 'Pending Verify', owner: 'Christopher', path: ROUTES.VERIFY_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
+  { key: 'pendingVerify', label: 'Pending Verify', owner: 'Yastika', path: ROUTES.VERIFY_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
   { key: 'pendingApprovals', label: 'Pending Approvals', owner: 'Pushpa Maam', path: ROUTES.APPROVE_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
-  { key: 'offleaseApproval', label: 'Off-Lease Pending Approval', owner: 'Pushpa Maam', path: ROUTES.OFF_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
   { key: 'expiring7', label: 'Expiring in 7 Days', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'warn', icon: 'alert' },
   { key: 'expired', label: 'Already Expired', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'error', icon: 'alert' },
   { key: 'renewPending', label: 'Renew Pending', path: ROUTES.RENEW_DOCUMENT, group: GROUPS.EXPIRY, tint: 'info', icon: 'edit' },
-  /* Labels only, updated 2026-08-18 to match constants/stages.js's live
-   * WORKFLOW order (1 Intimation, 2 Transportation, 3 Gate In, 4 Inspection,
-   * 5 Billing, 6 FMS Closure) instead of the pre-reorder internal numbering
-   * these had drifted to. Keys (olStage1..8) are untouched — they still
-   * index getMyTasks()'s response 1:1 by internal stage number. */
+  /* Labels updated 2026-08-18 to match constants/stages.js's live WORKFLOW
+   * order (1 Intimation, 2 Transportation, 3 Gate In, 4 Inspection,
+   * 5 Billing, 6 FMS Closure). Card ORDER fixed 2026-08-25 to match, and the
+   * two retired stages (olStage2 "Lifting/Arrival", olStage4 "Quotation/
+   * Order" — no active queue, no owner, permanently "All clear") dropped
+   * entirely rather than shown as dead cards. Keys (olStage1..8) are
+   * untouched on the ones that remain — they still index getMyTasks()'s
+   * response 1:1 by internal stage number. */
   { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage2', label: 'Off-Lease (Retired) Lifting / Arrival', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage4', label: 'Off-Lease (Retired) Quotation / Order', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage5', label: 'Off-Lease Stage 5: Billing Reconciliation', owner: 'Shivani Maam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  /* The approval gate sits BETWEEN Stage 1 and Stage 2 — same reasoning as
+   * the Off-Lease tab strip ("Stage 1A (Approval)") and the Dashboard KPI
+   * row ("Stage 1A · Pending approval"). Used to live in the Pending
+   * Actions group under a plain "Off-Lease Pending Approval" label, the
+   * only Off-Lease card not grouped or numbered with the rest of the
+   * pipeline — moved and renamed 2026-08-25 to match. */
+  { key: 'offleaseApproval', label: 'Off-Lease Stage 1A: Pending Approval', owner: 'Pushpa Maam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
   { key: 'olStage6', label: 'Off-Lease Stage 2: Transportation', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage5', label: 'Off-Lease Stage 5: Billing Reconciliation', owner: 'Shivani Maam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage8', label: 'Off-Lease Stage 6: FMS Closure', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
 ];
 
@@ -68,7 +75,7 @@ export function MyTaskPage() {
   /* data.visibleKeys (backend/src/services/tasks.service.js's getMyTasks) is
      null for most users — show every card, unchanged. For a Sale-Person-scoped
      login (Gauri/Kedar/Sagar/Sapna today) it's the small set of cards that are
-     actually theirs, so "Pending Verify (Christopher)" and every Off-Lease stage
+     actually theirs, so "Pending Verify (Yastika)" and every Off-Lease stage
      card — someone else's desk, not their lease work — don't show up here. */
   const tiles = useMemo(() => {
     const defs = data?.visibleKeys ? CARD_DEFS.filter((d) => data.visibleKeys.includes(d.key)) : CARD_DEFS;

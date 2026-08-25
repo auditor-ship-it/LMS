@@ -1385,6 +1385,47 @@ export async function getOffLeaseData(stage, opts = {}, user) {
 }
 
 /**
+ * Every active stage's pending count in one call, keyed by INTERNAL stage
+ * number (1, 3, 5, 6, 7, 8) plus `approval` — running the exact same queue
+ * logic (getOffLeaseData) each tab uses, with the same STAGE-10 delivery /
+ * Gate-In / repair-skip bypasses, rather than a separate counting pass that
+ * can silently drift from what the queues actually show.
+ *
+ * The single source of truth for BOTH the Off-Lease tab badges
+ * (offlease.controller.js's getStageCounts) and the My Task dashboard
+ * (tasks.service.js's getMyTasks) — which used to duplicate this with its
+ * own much older, bypass-unaware counter (_olStageCounts, approve.service.js)
+ * that walked stages 1..8 in plain NUMERIC order (not the actual workflow
+ * order 1->6->7->3->5->8) and had never heard of the Gate-In form, repair
+ * skip, or delivery signal. The moment a container's progress depended on
+ * any of those — which is now the normal case, not the exception — that
+ * counter saw its status column forever blank and stopped it dead, so My
+ * Task showed 0 pending at every stage past Intimation while the real
+ * queues (and this function) correctly saw 3, 11, 6, 3... (found 2026-08-25
+ * comparing the two dashboards side by side).
+ */
+export async function getOffLeaseStageCounts(user) {
+  let deliveredKeys;
+  try { deliveredKeys = await getDeliveredKeys(); } catch (e) { deliveredKeys = undefined; }
+  const gfIndex = getGateFormIndexSync();
+
+  const counts = {};
+  await Promise.all(OL_ACTIVE_STAGE_NUMS.map(async (s) => {
+    try {
+      const d = await getOffLeaseData(s, { deliveredKeys, gateFormIndex: gfIndex }, user);
+      counts[s] = d.data.length;
+    } catch (e) {
+      counts[s] = null;   // null = unknown, so the caller shows no badge at all
+    }
+  }));
+
+  let approval = null;
+  try { approval = (await getOffLeaseApprovalData(user)).data.length; } catch (e) { /* leave null */ }
+
+  return { counts, approval };
+}
+
+/**
  * Attaches a `tat` to every row of a stage list, in place.
  *
  * The clock starts when the stage became actionable, not when the container
