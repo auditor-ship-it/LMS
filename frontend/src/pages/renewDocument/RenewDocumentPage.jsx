@@ -68,6 +68,16 @@ export function RenewDocumentPage() {
   const [docBusy, setDocBusy] = useState(false);
   const [docError, setDocError] = useState('');
 
+  /* Bulk selection, keyed by container number — same identity
+     setSelectedContainer already uses for the single-row detail view, and
+     stable across pagination/filtering (unlike a row index, which shifts
+     depending on which page or filtered set it's read from). Cleared on tab
+     switch (Renewed and Documents are different container sets). */
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+
   const headers = data?.headers || [];
   const rows = data?.data || [];
   const validColIdx = data?.validColIdx ?? -1;
@@ -98,8 +108,28 @@ export function RenewDocumentPage() {
 
   const selected = selectedContainer != null ? filtered.find((it) => it.row?.[0] === selectedContainer) : null;
 
-  const switchTab = (key) => { setTab(key); setSearch(''); setSelectedContainer(null); resetPage(); };
+  // Derived from `filtered`, not just the current page, so a selection made
+  // on page 1 survives navigating to page 2.
+  const selectedItems = useMemo(
+    () => filtered.filter((r) => selectedKeys.has(r.row?.[0])),
+    [filtered, selectedKeys]
+  );
+
+  const switchTab = (key) => { setTab(key); setSearch(''); setSelectedContainer(null); setSelectedKeys(new Set()); resetPage(); };
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
+
+  const toggleRow = (key) => setSelectedKeys((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const toggleAllOnPage = () => setSelectedKeys((prev) => {
+    const pageKeys = pageRows.map((r) => r.row?.[0]).filter(Boolean);
+    const allSelected = pageKeys.length > 0 && pageKeys.every((k) => prev.has(k));
+    const next = new Set(prev);
+    pageKeys.forEach((k) => (allSelected ? next.delete(k) : next.add(k)));
+    return next;
+  });
 
   const openRenew = (item) => {
     setRenewError('');
@@ -177,6 +207,85 @@ export function RenewDocumentPage() {
     }
   };
 
+  /* Bulk actions — one form, same values applied to every selected
+     container, run in parallel (not one-after-another) since these are
+     independent writes to different rows. A per-container failure is
+     reported by container number rather than failing the whole batch
+     silently or losing which ones actually went through. */
+  const handleBulkRenewSubmit = async (payload) => {
+    if (!selectedItems.length) return;
+    setBulkBusy(true);
+    setBulkError('');
+    try {
+      const results = await Promise.allSettled(selectedItems.map((it) =>
+        submitRenewal({ containerNo: it.row?.[0], newDateString: payload.newDate })));
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? selectedItems[i].row?.[0] : null))
+        .filter(Boolean);
+      if (failed.length) {
+        setBulkError(`Failed for: ${failed.join(', ')}. The rest were updated.`);
+      } else {
+        setBulkOpen(false);
+        setSelectedKeys(new Set());
+      }
+      await reload();
+      await reloadCounts();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setBulkError(apiErrorMessage(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleBulkDocSubmit = async (payload) => {
+    if (!selectedItems.length) return;
+    setBulkBusy(true);
+    setBulkError('');
+    try {
+      // Uploaded ONCE — every selected container gets the same file/URL,
+      // per the "one form entry for the whole batch" request.
+      const [signedCopyUrl, poFileUrl] = await Promise.all([
+        payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+        payload.poFile ? uploadStageFile(payload.poFile) : ''
+      ]);
+
+      const results = await Promise.allSettled(selectedItems.map(async (it) => {
+        const result = await submitDocumentCompletion({
+          containerNo: it.row?.[0],
+          renewedDate: payload.renewedDate,
+          validTill: payload.validTill,
+          signedCopyUrl,
+          remarks: payload.remarks,
+          userEmail: user?.email || '',
+          poNo: payload.poNo,
+          poFileUrl,
+          billingCycle: payload.billingCycle,
+          poValidity: payload.poValidity
+        });
+        if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
+          throw new Error(result);
+        }
+      }));
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? selectedItems[i].row?.[0] : null))
+        .filter(Boolean);
+      if (failed.length) {
+        setBulkError(`Failed for: ${failed.join(', ')}. The rest were updated.`);
+      } else {
+        setBulkOpen(false);
+        setSelectedKeys(new Set());
+      }
+      await reload();
+      await reloadCounts();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setBulkError(apiErrorMessage(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -218,6 +327,20 @@ export function RenewDocumentPage() {
               <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
             </div>
 
+            {/* Only when there's something to act on — a scoped/view-only
+                caller can select rows (harmless) but has no action to run
+                on them, so the bar showing an "Update" button with nothing
+                behind it would be misleading. */}
+            {canActRenew && selectedItems.length > 0 && (
+              <div className={styles.bulkBar}>
+                <span className={styles.bulkCount}>{selectedItems.length} selected</span>
+                <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
+                <Button size="sm" variant="primary" onClick={() => { setBulkError(''); setBulkOpen(true); }}>
+                  {tab === 'renewed' ? 'Update Period' : 'Update Agreement'} ({selectedItems.length})
+                </Button>
+              </div>
+            )}
+
             <DataGrid
               /* No 'Action' header here: DataGrid appends its own 'Actions'
                  column whenever renderActions is passed. Adding one manually
@@ -229,6 +352,11 @@ export function RenewDocumentPage() {
               error={error}
               onRetry={reloadBoth}
               emptyMessage={tab === 'renewed' ? 'No renewed containers awaiting a lease-period update' : 'No containers awaiting document completion'}
+              selectable={canActRenew}
+              selectedKeys={selectedKeys}
+              onToggleRow={toggleRow}
+              onToggleAll={toggleAllOnPage}
+              rowKey={(r) => r.row?.[0]}
               renderRow={(values, item) => tableColIdx.map((ci) => (
                 <td key={ci} className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
                   {renderCellValue(values[ci])}
@@ -276,6 +404,26 @@ export function RenewDocumentPage() {
         onClose={() => setDocItem(null)}
         onSubmit={handleDocSubmit}
       />
+
+      {tab === 'renewed' ? (
+        <RenewModal
+          open={bulkOpen}
+          items={selectedItems.map((it) => ({ containerNo: it.row?.[0] }))}
+          submitting={bulkBusy}
+          error={bulkError}
+          onClose={() => setBulkOpen(false)}
+          onSubmit={handleBulkRenewSubmit}
+        />
+      ) : (
+        <CompleteDocumentModal
+          open={bulkOpen}
+          items={selectedItems.map((it) => ({ containerNo: it.row?.[0] }))}
+          submitting={bulkBusy}
+          error={bulkError}
+          onClose={() => setBulkOpen(false)}
+          onSubmit={handleBulkDocSubmit}
+        />
+      )}
     </>
   );
 }

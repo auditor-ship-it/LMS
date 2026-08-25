@@ -49,6 +49,7 @@
 /* The action button must never wrap or shrink — width:1% makes the column
    take only what the button needs and gives the rest to the data. */
 .actionsCol { white-space: nowrap; width: 1%; text-align: center; }
+.selectCol { white-space: nowrap; width: 1%; text-align: center; }
 /* Headers stay on one line; they are short and wrapping them costs more
    vertical space than it saves horizontally. */
 .table thead th { white-space: nowrap; }

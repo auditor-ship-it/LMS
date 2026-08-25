@@ -128,6 +128,19 @@ export async function getExpiryDataByFilter(filterType, user) {
   }
   if (colIdx === -1) return { headers: allHeaders.slice(0, 15), data: [], validColIdx: -1 };
 
+  /* PO Validity — a SECOND, independent expiry date (col M, "PO Validity").
+     The header loop above matches the FIRST column containing "valid" and
+     stops there (Agreement Valid Upto, col H) — PO Validity contains "valid"
+     too but was never reached, so a container whose PO was about to lapse
+     while its agreement still had months left showed as "Safe" instead of
+     due for renewal. Searched separately, by a name that can't collide with
+     the agreement column. */
+  let poValidIdx = -1;
+  for (let h = 0; h <= 14; h++) {
+    const hd = String(allHeaders[h] || '').trim().toLowerCase();
+    if (hd.indexOf('po') !== -1 && hd.indexOf('valid') !== -1) { poValidIdx = h; break; }
+  }
+
   /* USER-WISE VISIBILITY. `user` is req.user — the identity requireAuth
    * resolved from the bearer token, never a frontend-supplied name/email/id.
    * A scoped caller (see salePersonAccess.service.js) only ever gets rows
@@ -203,8 +216,21 @@ export async function getExpiryDataByFilter(filterType, user) {
 
     const expRaw = row[colIdx];
     const expDate = parseDate(expRaw); // Sheets API returns formatted strings, not Date objects — see format.js
+    const poExpDate = poValidIdx >= 0 ? parseDate(row[poValidIdx]) : null;
+
+    /* Renewal urgency is driven by whichever of the two dates is CLOSER —
+       a container due for renewal because its PO lapses in 5 days is just
+       as urgent as one whose agreement lapses in 5 days, and must show that
+       way even if the other date is months out. Whichever date is present
+       and sooner wins; a blank cell simply doesn't compete. */
+    const daysUntil = (d) => (d ? Math.ceil((d - today) / 86400000) : null);
+    const agrDays = daysUntil(expDate);
+    const poDays = daysUntil(poExpDate);
     let days = '';
-    if (expDate) days = Math.ceil((expDate - today) / 86400000);
+    if (agrDays !== null && poDays !== null) days = Math.min(agrDays, poDays);
+    else if (agrDays !== null) days = agrDays;
+    else if (poDays !== null) days = poDays;
+
     let band = '';
     if (typeof days === 'number') {
       if (days < 0) band = 'overdue';
@@ -562,44 +588,11 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
 
 /* ★★★ RENEWAL LOG — every renewal (Update Lease Period + Complete Document
    Stage) appends ONE row here. Creates the "Renewal Log" sheet + headers on
-   first use. Never throws — a logging failure must not block the real renewal. */
-const RL_CONTAINER = 1;
-
-async function _upsertRenewalRow(info) {
-  const incoming = {
-    1: info.container || '', 2: info.clientName || '', 3: info.poNo || '',
-    4: info.poFileUrl || '', 5: info.agreementUrl || '', 6: info.validTill || '',
-    8: info.oldPoNo || '', 9: info.oldPoFileUrl || '', 10: info.oldAgreementUrl || ''
-  };
-  const stamp = new Date().toISOString();
-  const wantKey = _normKey(info.container);
-
-  const { rows } = await getSheetData(RENEWAL_LOG_SHEET);
-  let rn = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (wantKey && _normKey(rows[i][RL_CONTAINER]) === wantKey) rn = i + 2;
-  }
-  const existing = rn === -1 ? [] : (rows[rn - 2] || []);
-
-  const incomingValid = safeStr(info.validTill).trim();
-  const currentValid = safeStr(existing[6]).trim();
-  const isNewCycle = rn === -1 || (incomingValid !== '' && incomingValid !== currentValid);
-
-  if (isNewCycle) {
-    const fresh = RENEWAL_LOG_HEADERS.map((_, i) => (i === 0 ? stamp : i === 7 ? (info.userEmail || '') : (incoming[i] || '')));
-    await appendRow(RENEWAL_LOG_SHEET, fresh);
-    return;
-  }
-
-  const merged = RENEWAL_LOG_HEADERS.map((_, i) => {
-    if (i === 0) return stamp;
-    if (i === 7) return info.userEmail || safeStr(existing[7]);
-    const next = incoming[i];
-    return next !== '' && next !== undefined ? next : safeStr(existing[i]);
-  });
-  await updateRange(RENEWAL_LOG_SHEET, `A${rn}:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}${rn}`, [merged]);
-}
-
+   first use. Never throws — a logging failure must not block the real renewal.
+   ALWAYS APPENDS — never looks up or overwrites a prior row for the same
+   container (explicit requirement 2026-08-25 — see the identical note on
+   verify.service.js's own copy of this function, which both write-paths
+   must agree with since they write the same sheet). */
 async function _logRenewal(info) {
   try {
     await insertSheetIfMissing(RENEWAL_LOG_SHEET, RENEWAL_LOG_HEADERS);
@@ -608,6 +601,11 @@ async function _logRenewal(info) {
       const missing = RENEWAL_LOG_HEADERS.slice(curHeaders.length);
       await updateRange(RENEWAL_LOG_SHEET, `${colLetter(curHeaders.length)}1:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}1`, [missing]);
     }
-    await _upsertRenewalRow(info);
+    const stamp = new Date().toISOString();
+    await appendRow(RENEWAL_LOG_SHEET, [
+      stamp, info.container || '', info.clientName || '', info.poNo || '',
+      info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
+      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
+    ]);
   } catch (e) { console.error('[RENEWAL-LOG]', e.message); }
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   PageHeader, Card, Button, StatusBadge, SearchBar, FilterBar, Pagination, DataGrid, StatCard, renderCellValue
 } from '../../components/ui/index.js';
@@ -65,6 +65,18 @@ export function LeaseExpiryPage() {
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState('');
+
+  /* Bulk selection, keyed by _idx — see the comment on `rows` above for why
+     container number can't be the key here (the same container can
+     legitimately appear more than once). Cleared whenever the underlying
+     list reloads for ANY reason (manual refresh, the cross-page
+     'deployed-sheet' auto-refresh, or a bulk action's own post-write
+     reload) — _idx is only stable within one load, so carrying a selection
+     across a reload risks it silently pointing at different rows once
+     positions shift. */
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState('');
+  useEffect(() => { setSelectedKeys(new Set()); }, [data]);
 
   const headers = data?.headers || [];
   // Container No. alone isn't a unique row identifier — the same container
@@ -147,6 +159,25 @@ export function LeaseExpiryPage() {
 
   const selected = selectedIdx != null ? filtered.find((it) => it._idx === selectedIdx) : null;
 
+  // Derived from `filtered`, not just the current page, so a selection made
+  // on page 1 survives navigating to page 2.
+  const selectedItems = useMemo(
+    () => filtered.filter((r) => selectedKeys.has(r._idx)),
+    [filtered, selectedKeys]
+  );
+  const toggleRow = (key) => setSelectedKeys((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const toggleAllOnPage = () => setSelectedKeys((prev) => {
+    const pageKeys = pageRows.map((r) => r._idx);
+    const allSelected = pageKeys.length > 0 && pageKeys.every((k) => prev.has(k));
+    const next = new Set(prev);
+    pageKeys.forEach((k) => (allSelected ? next.delete(k) : next.add(k)));
+    return next;
+  });
+
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
   const handleBandChange = (v) => { setBand(v); resetPage(); };
   const handleSalePersonChange = (v) => { setSalePerson(v); resetPage(); };
@@ -228,6 +259,65 @@ export function LeaseExpiryPage() {
     }
   };
 
+  /* Bulk versions of the two actions above — run in parallel (independent
+     writes to different rows), one write each, no shared form data to
+     collect first, so there's no modal: click, confirm the count, done. A
+     per-container failure is reported by container number rather than
+     failing the whole batch silently. */
+  const handleBulkAction = async (status) => {
+    if (!selectedItems.length) return;
+    const containers = selectedItems.map((it) => it.row?.[0]);
+    setBulkBusy(status);
+    setActionError('');
+    try {
+      const results = await Promise.allSettled(
+        containers.map((c) => actionExpiryRow(c, new Date().toISOString(), status))
+      );
+      const alreadyProcessed = results
+        .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
+        .filter(Boolean);
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
+        .filter(Boolean);
+      const notes = [];
+      if (alreadyProcessed.length) notes.push(`Already actioned by someone else: ${alreadyProcessed.join(', ')}.`);
+      if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
+      if (notes.length) setActionError(notes.join(' '));
+      await reload();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setBulkBusy('');
+    }
+  };
+
+  const handleBulkOffLease = async () => {
+    if (!selectedItems.length) return;
+    const containers = selectedItems.map((it) => it.row?.[0]);
+    setBulkBusy('Off-Lease');
+    setActionError('');
+    try {
+      const results = await Promise.allSettled(containers.map((c) => trackContainer(c)));
+      const alreadyExists = results
+        .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_EXISTS' ? containers[i] : null))
+        .filter(Boolean);
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
+        .filter(Boolean);
+      const notes = [];
+      if (alreadyExists.length) notes.push(`Already in Off-Lease tracking: ${alreadyExists.join(', ')}.`);
+      if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
+      if (notes.length) setActionError(notes.join(' '));
+      await reload();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setBulkBusy('');
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -276,6 +366,19 @@ export function LeaseExpiryPage() {
               />
             </div>
 
+            {canActExpiry && selectedItems.length > 0 && (
+              <div className={styles.bulkBar}>
+                <span className={styles.bulkCount}>{selectedItems.length} selected</span>
+                <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
+                <Button size="sm" variant="primary" loading={bulkBusy === 'Renewed'} disabled={!!bulkBusy} onClick={() => handleBulkAction('Renewed')}>
+                  Renew ({selectedItems.length})
+                </Button>
+                <Button size="sm" variant="secondary" loading={bulkBusy === 'Off-Lease'} disabled={!!bulkBusy} onClick={handleBulkOffLease}>
+                  Off-Lease ({selectedItems.length})
+                </Button>
+              </div>
+            )}
+
             <DataGrid
               className={styles.wrapTable}
               headers={[...tableHeaders, 'Ageing', 'Days Left', 'Renewal Status']}
@@ -284,6 +387,10 @@ export function LeaseExpiryPage() {
               loading={loading}
               error={error}
               onRetry={reload}
+              selectable={canActExpiry}
+              selectedKeys={selectedKeys}
+              onToggleRow={toggleRow}
+              onToggleAll={toggleAllOnPage}
               emptyMessage="No pending lease expiries"
               renderRow={(values, item) => [
                 ...tableColIdx.map((ci) => (

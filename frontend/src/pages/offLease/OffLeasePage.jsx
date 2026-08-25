@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   PageHeader, Card, Button, SearchBar, Pagination, DataGrid, LoadingState, ErrorState, EmptyState, renderCellValue
 } from '../../components/ui/index.js';
@@ -124,6 +124,13 @@ function ApprovalQueue() {
   const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
 
+  /* Bulk selection, keyed by _rowNum. Cleared on every reload — same
+     reasoning as Lease Expiry's bulk selection: a stale selection surviving
+     a reload risks pointing at rows that have moved or already cleared. */
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState('');
+  useEffect(() => { setSelectedKeys(new Set()); }, [data]);
+
   const headers = data?.headers || [];
   const rows = data?.data || [];
 
@@ -143,6 +150,23 @@ function ApprovalQueue() {
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filtered, 10);
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
 
+  const selectedItems = useMemo(
+    () => filtered.filter((r) => selectedKeys.has(r._rowNum)),
+    [filtered, selectedKeys]
+  );
+  const toggleRow = (key) => setSelectedKeys((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const toggleAllOnPage = () => setSelectedKeys((prev) => {
+    const pageKeys = pageRows.map((r) => r._rowNum);
+    const allSelected = pageKeys.length > 0 && pageKeys.every((k) => prev.has(k));
+    const next = new Set(prev);
+    pageKeys.forEach((k) => (allSelected ? next.delete(k) : next.add(k)));
+    return next;
+  });
+
   const decide = async (item, status) => {
     const key = `${item._rowNum}-${status}`;
     setBusyKey(key);
@@ -159,6 +183,33 @@ function ApprovalQueue() {
     }
   };
 
+  /* Bulk Approve/Reject — same shape as Lease Expiry's bulk actions: one
+     write per container, run in parallel, no shared form data so no modal. */
+  const decideBulk = async (status) => {
+    if (!selectedItems.length) return;
+    const containers = selectedItems.map((it) => it.row[0]);
+    setBulkBusy(status);
+    setActionError('');
+    try {
+      const results = await Promise.allSettled(containers.map((c) => decideApproval(c, status)));
+      const alreadyProcessed = results
+        .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
+        .filter(Boolean);
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
+        .filter(Boolean);
+      const notes = [];
+      if (alreadyProcessed.length) notes.push(`Already actioned by someone else: ${alreadyProcessed.join(', ')}.`);
+      if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
+      if (notes.length) setActionError(notes.join(' '));
+      await reload();
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setBulkBusy('');
+    }
+  };
+
   return (
     <Card title="Pending Approval" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}>
       <div className={styles.toolbar}>
@@ -167,12 +218,30 @@ function ApprovalQueue() {
 
       {actionError && <p className={styles.actionError}>{actionError}</p>}
 
+      {canActApproval && selectedItems.length > 0 && (
+        <div className={styles.bulkBar}>
+          <span className={styles.bulkCount}>{selectedItems.length} selected</span>
+          <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
+          <Button size="sm" variant="primary" loading={bulkBusy === 'Approved'} disabled={!!bulkBusy} onClick={() => decideBulk('Approved')}>
+            Approve ({selectedItems.length})
+          </Button>
+          <Button size="sm" variant="danger" loading={bulkBusy === 'Rejected'} disabled={!!bulkBusy} onClick={() => decideBulk('Rejected')}>
+            Reject ({selectedItems.length})
+          </Button>
+        </div>
+      )}
+
       <DataGrid
         headers={visibleHeaders}
         rows={pageRows}
         loading={loading}
         error={error}
         onRetry={reload}
+        selectable={canActApproval}
+        selectedKeys={selectedKeys}
+        onToggleRow={toggleRow}
+        onToggleAll={toggleAllOnPage}
+        rowKey={(r) => r._rowNum}
         emptyMessage="No off-lease intimations awaiting approval"
         renderRow={(values) => visibleColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>)}
         renderActions={canActApproval ? (item) => (
