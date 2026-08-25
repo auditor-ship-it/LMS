@@ -84,26 +84,8 @@ export async function getData(req, res) {
  * labels is worse than no badge.
  */
 export async function getStageCounts(req, res) {
-  let deliveredKeys;
-  try { deliveredKeys = await stage8Service.getDeliveredKeys(); } catch (e) { /* queues fall back */ }
-  const gfIndex = gateFormIndex();
-
-  const stages = offLeaseService.OL_ACTIVE_STAGE_NUMS;
-  const counts = {};
-  await Promise.all(stages.map(async (s) => {
-    try {
-      const d = await offLeaseService.getOffLeaseData(s, { deliveredKeys, gateFormIndex: gfIndex }, req.user);
-      counts[s] = d.data.length;
-    } catch (e) {
-      counts[s] = null;   // null = unknown, so the tab shows no badge at all
-    }
-  }));
-
-  try {
-    counts.approval = (await offLeaseService.getOffLeaseApprovalData(req.user)).data.length;
-  } catch (e) { counts.approval = null; }
-
-  res.json({ counts });
+  const { counts, approval } = await offLeaseService.getOffLeaseStageCounts(req.user);
+  res.json({ counts: { ...counts, approval } });
 }
 
 export async function getStageDetail(req, res) {
