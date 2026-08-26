@@ -40,14 +40,16 @@ import {
   insertSheetIfMissing,
   colLetter
 } from './googleSheets.service.js';
-import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow, getSheetDataFromMongo, getMongoRowsWithKeys } from './mongoSheetData.service.js';
+import { getCollection } from './mongo.service.js';
+import { enqueueSheetReplay } from './outbox.service.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
 import { safeStr, buildDisplayRow, parseDate, formatDateVal, dmyTime } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { checkActionPermission } from './permissions.service.js';
 import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { cacheGetOrLoad } from '../utils/memoryCache.js';
+import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
@@ -370,6 +372,31 @@ export async function completeDocumentStage(containerNo, callerEmail) {
   });
 }
 
+/**
+ * Mongo-first fast path for completeDocumentStage — same design as
+ * offlease.service.js's saveOffLeaseStageFast (see its header comment).
+ * Decides against Mongo (already the read source), patches the Mongo doc
+ * directly, then enqueues a replay of the ORIGINAL completeDocumentStage
+ * above to make the same change on the real Google Sheet in the background.
+ */
+export async function completeDocumentStageFast(containerNo, callerEmail) {
+  await checkActionPermission('document', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = docs.find((d) => d.row[0] == containerNo); // eslint-disable-line eqeqeq
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+  if ((!found.row[24] || String(found.row[24]).trim() === '') && (!found.row[25] || String(found.row[25]).trim() === '')) {
+    return 'MISSING_PO_OR_AGR';
+  }
+
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { 'row.21': '', 'row.22': '', updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+  await enqueueSheetReplay('expiry.completeDocumentStage', [containerNo, callerEmail], { actor: callerEmail });
+  return 'OK';
+}
+
 /* =============================================
    saveExpiryAction — LMS.js 1467-1489
 
@@ -407,6 +434,33 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
     await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
     return 'OK';
   });
+}
+
+/**
+ * Mongo-first fast path for saveExpiryAction — the Lease Expiry page's main
+ * Renew/Off-Lease decision button, and the exact action that used to hit the
+ * live-Sheets rate limit on this page. Same design as
+ * offlease.service.js's saveOffLeaseStageFast: decide + patch Mongo
+ * instantly, replay the ORIGINAL saveExpiryAction against the real sheet in
+ * the background (env.outboxPollMs later, not instantly).
+ */
+export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail) {
+  await checkActionPermission('expiry', callerEmail);
+  if (!rowId || String(rowId).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = docs.find((d) => String(d.row[0]) == rowId); // eslint-disable-line eqeqeq
+  if (!found) throw notFound(`Not found: ${rowId}`);
+  if (found.row[21] && String(found.row[21]).trim() !== '') return 'ALREADY_PROCESSED';
+
+  const dmy = dmyTime(new Date(timestamp));
+  await getCollection(SHEETS.DEPLOYED).updateOne(
+    { key: found.key },
+    { $set: { 'row.21': dmy, 'row.22': status || '', updatedAt: new Date() } }
+  );
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+  await enqueueSheetReplay('expiry.saveExpiryAction', [rowId, timestamp, status, callerEmail], { actor: callerEmail });
+  return 'OK';
 }
 
 /* =============================================

@@ -8,10 +8,13 @@
  * path (offlease first, then verify/approve/expiry/roles).
  */
 import { saveOffLeaseStage, saveOffLeaseApprovalAction } from '../services/offlease.service.js';
+import { saveExpiryAction, completeDocumentStage } from '../services/expiry.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
-  'offlease.saveOffLeaseApprovalAction': saveOffLeaseApprovalAction
+  'offlease.saveOffLeaseApprovalAction': saveOffLeaseApprovalAction,
+  'expiry.saveExpiryAction': saveExpiryAction,
+  'expiry.completeDocumentStage': completeDocumentStage
 };
 
 export function resolveReplay(kind) {

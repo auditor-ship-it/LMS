@@ -75,16 +75,18 @@ async function reconcileSheetByKey(sheetName, mapping, rows) {
   const col = getCollection(sheetName);
   const now = new Date();
 
-  const existingDocs = await col.find({ _id: { $ne: META_ID } }, { projection: { key: 1 } }).toArray();
+  const existingDocs = await col.find({ _id: { $ne: META_ID }, deletedAt: null }, { projection: { key: 1 } }).toArray();
   const existingKeys = new Set(existingDocs.map((d) => d.key));
 
   let imported = 0, updated = 0, skippedBlankKey = 0;
   const ops = [];
+  const currentKeys = new Set();
 
   for (const row of rows) {
     const rawKey = row[mapping.naturalKeyColumn];
     if (rawKey == null || String(rawKey).trim() === '') { skippedBlankKey++; continue; }
     const key = normalizeKey(sheetName, rawKey);
+    currentKeys.add(key);
 
     ops.push({
       updateOne: {
@@ -96,11 +98,35 @@ async function reconcileSheetByKey(sheetName, mapping, rows) {
     if (existingKeys.has(key)) updated++; else imported++;
   }
 
+  /* Soft-delete Mongo docs whose key no longer appears in the live sheet —
+   * a row removed directly from the spreadsheet must stop being visible to
+   * the app too. deletedAt (not a hard delete) matches the filter
+   * getSheetDataFromMongo already reads through (deletedAt: null) and keeps
+   * the doc recoverable if the removal was a mistake.
+   *
+   * BUG FOUND AND FIXED 2026-08-26: this function previously only ever
+   * upserted rows found in the CURRENT sheet read — nothing here ever
+   * noticed a key that used to exist and no longer does, so a manually
+   * deleted row became a permanent "ghost" Mongo doc that the app kept
+   * reading/showing forever once reads went Mongo-first (a removed lease
+   * still listed in Verify Lease, a removed team member keeping their
+   * permissions, etc.). The fullRefresh sheets (Deployed, Off-Lease
+   * Tracking, Operation, ...) never had this problem — reconcileSheetFullRefresh
+   * above wipes and rebuilds the whole collection every cycle, which
+   * naturally drops anything no longer in the sheet. */
+  const removedKeys = [...existingKeys].filter((k) => !currentKeys.has(k));
+  let removed = 0;
+  if (removedKeys.length) {
+    const res = await col.updateMany({ key: { $in: removedKeys }, deletedAt: null }, { $set: { deletedAt: now, updatedAt: now } });
+    removed = res.modifiedCount || 0;
+  }
+
   if (ops.length) await col.bulkWrite(ops, { ordered: false });
   logger.info(`[SYNC] Inserted: ${imported}`);
   logger.info(`[SYNC] Updated: ${updated}`);
   logger.info(`[SYNC] Skipped: ${skippedBlankKey}`);
-  return { sheetName, imported, updated, skippedBlankKey, totalRows: rows.length };
+  if (removed) logger.info(`[SYNC] Removed (deleted from sheet): ${removed}`);
+  return { sheetName, imported, updated, skippedBlankKey, removed, totalRows: rows.length };
 }
 
 export async function reconcileSheet(sheetName) {
