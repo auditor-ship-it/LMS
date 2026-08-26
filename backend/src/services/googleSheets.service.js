@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { touchSource } from '../utils/requestContext.js';
+import { getGlobalQuotaLock, tripGlobalQuotaLock } from '../utils/quotaLock.js';
 
 /** Every exported function below that actually calls the Sheets API goes
  *  through this first — the one place that makes "did this request touch
@@ -38,15 +39,36 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
  * Every read AND write in this file goes through this — a write that hits
  * a transient quota wall now self-heals instead of silently never reaching
  * the sheet (the exact "why isn't my entry in the sheet" failure mode).
+ *
+ * TWO pile-on guards, added 2026-08-26 after a burst of concurrent requests
+ * (several browser tabs' worth) each independently ran their own full
+ * 5-attempt/~15s retry cycle before any of them reported failure — meaning
+ * the burst that exhausted the quota kept hammering it for another 15+
+ * seconds afterward, escalating a brief spike into a full lockout:
+ *
+ *   1. Checked BEFORE every attempt, including the first: if some OTHER
+ *      concurrent call has already confirmed the quota is out (the global
+ *      lock is active), this one fails immediately with no live call at
+ *      all — no point making attempt N+1 against a wall attempt N-from-
+ *      another-request already hit moments ago.
+ *   2. Tripped the INSTANT this call itself first sees a quota error — not
+ *      after all 5 attempts exhaust — so every other concurrent request's
+ *      next guard-1 check sees it within milliseconds instead of ~15s later.
  */
 async function withQuotaRetry(label, fn) {
   let lastErr;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    const lock = getGlobalQuotaLock();
+    if (lock) {
+      throw lastErr || new Error(`Google Sheets API rate limit was recently hit (${label} skipped — already locked out).`);
+    }
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isQuotaError(err) || attempt === RETRY_ATTEMPTS) throw err;
+      if (!isQuotaError(err)) throw err;
+      tripGlobalQuotaLock();
+      if (attempt === RETRY_ATTEMPTS) throw err;
       const delay = RETRY_BASE_MS * 2 ** (attempt - 1) + Math.floor(Math.random() * 300);
       logger.warn(`[SHEETS] Quota hit on ${label} — retrying in ${delay}ms (attempt ${attempt}/${RETRY_ATTEMPTS})`);
       await sleep(delay);

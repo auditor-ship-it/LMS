@@ -17,8 +17,18 @@ import { useEffect, useRef } from 'react';
  * Pass `() => reload({ silent: true })` from useAsync, not `reload` itself —
  * a plain reload flips `loading` true on every tick, which flashes a
  * full-page skeleton every interval instead of updating quietly.
+ *
+ * Default 3 minutes, not 1 — every Off-Lease read is live (no cache, per
+ * the RAW architecture), and this fires from every mounted consumer
+ * (Dashboard, tab badges, whichever stage tab is open) independently, in
+ * every open browser tab. At 60s that stacked into repeated
+ * "Google Sheets API rate limit" lockouts for the WHOLE app, not just
+ * Off-Lease (confirmed 2026-08-26) — on top of getOffLeaseStageCounts
+ * separately being fixed the same day to stop reading the tracking sheet
+ * 7 times over on every single poll. 3 minutes is still far more responsive
+ * than "whoever happens to reload the page," at a fraction of the load.
  */
-export function usePolling(reload, intervalMs = 60000, enabled = true) {
+export function usePolling(reload, intervalMs = 180000, enabled = true) {
   const reloadRef = useRef(reload);
   reloadRef.current = reload;
 

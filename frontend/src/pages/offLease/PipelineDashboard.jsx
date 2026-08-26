@@ -32,7 +32,7 @@ const VIEWS = [
 export function PipelineDashboard({ onOpenTab }) {
   const { data, loading, error, reload } = useAsync(fetchOffLeaseDashboard, []);
   // Same background-eligibility catch as StagePageBase — see usePolling's doc comment.
-  usePolling(() => reload({ silent: true }), 60000);
+  usePolling(() => reload({ silent: true }));
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
   // The record whose full stage history is open, or null.

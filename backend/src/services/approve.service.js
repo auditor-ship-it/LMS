@@ -29,8 +29,9 @@ import { safeStr, buildDisplayRow } from '../utils/format.js';
 import { normKey, splitContainers } from '../utils/normalize.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
-import { cacheGet, cachePut } from '../utils/memoryCache.js';
+import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
 import { _findOlColumnMulti } from './offlease.service.js';
+import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { parseStamp } from './offleaseSla.service.js';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -88,9 +89,9 @@ const OL_CYCLE_CACHE_KEY = 'approve_offlease_cycle_v1';
 /** Container -> the off-lease events recorded against it, each with the client
  *  it was leased to and when the cycle closed. */
 export async function _offLeaseCycleIndex() {
-  const hit = cacheGet(OL_CYCLE_CACHE_KEY);
-  if (hit) return hit;
-
+  // cacheGetOrLoad: called from getApproveData (Approve Lease page load,
+  // the hourly auto-approval cron, AND My Task) — a real stampede candidate.
+  return cacheGetOrLoad(OL_CYCLE_CACHE_KEY, 300, async () => {
   const byContainer = new Map();
   const add = (container, code, name, stamp) => {
     const key = normKey(container);
@@ -105,7 +106,9 @@ export async function _offLeaseCycleIndex() {
   };
 
   try {
-    const { headers, rows } = await getSheetData(SHEETS.OFF_LEASE_TRACKING);
+    // Index-building read, no write derives a row number from it — safe
+    // for the Mongo mirror.
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.OFF_LEASE_TRACKING);
     const cCode = _findOlColumnMulti(headers, ['client code']);
     const cName = _findOlColumnMulti(headers, ['client name']);
     const cDate = _findOlColumnMulti(headers, ['ol intimation date', 'intimation date']);
@@ -122,7 +125,7 @@ export async function _offLeaseCycleIndex() {
   }
 
   try {
-    const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
     /* 'Customer Name' here, not 'Client Name' — this sheet names the column
        differently from the other two, and matching on /client/ alone picks up
        'Client Code' instead and compares a code against a name. */
@@ -140,8 +143,8 @@ export async function _offLeaseCycleIndex() {
     console.error('[APPROVE-CYCLE] deployed read failed:', e?.message || e);
   }
 
-  cachePut(OL_CYCLE_CACHE_KEY, byContainer, 300); // 5 min, same as _expiryOrderNoMap
   return byContainer;
+  }); // single-flight, 5 min — same TTL as _expiryOrderNoMap
 }
 
 /**
@@ -167,7 +170,27 @@ export function _cycleClosedAt(cycleIndex, container, clientCode, clientName) {
   return latest;
 }
 
+const APPROVE_DATA_CACHE_KEY = 'approve_data_v1';
+const APPROVE_DATA_TTL_SECS = 30;
+
+/**
+ * doWrite=true (only the hourly runAutoApproval cron) always runs live and
+ * uncached — it decides what to write and must see the current sheet, and
+ * its own write invalidates the cache for every read-only caller after it.
+ * doWrite=false/undefined (the Approve Lease page, My Task) is cached with
+ * stampede protection + graceful degradation — added 2026-08-26, same
+ * pattern as getExpiryDataByFilter/getVerifyData that day.
+ */
 export async function getApproveData(doWrite) {
+  if (doWrite) {
+    const result = await _getApproveDataCore(true);
+    cacheRemove(APPROVE_DATA_CACHE_KEY); // the write above changed what a cached read would show
+    return result;
+  }
+  return cacheGetOrLoad(APPROVE_DATA_CACHE_KEY, APPROVE_DATA_TTL_SECS, () => _getApproveDataCore(false), { degradeOnError: true });
+}
+
+async function _getApproveDataCore(doWrite) {
   const { headers: rawHeaders, rows: rawRows } = await getSheetData(SHEETS.OPERATION);
   if (!rawRows.length) return { headers: [], data: [], catColIdx: -1 };
 
@@ -344,7 +367,8 @@ function decidedEntryFields(row) {
  * the audit-trail fields above. Read-only, no sheet lock needed.
  */
 export async function getApprovalHistory() {
-  const { rows: rawRows } = await getSheetData(SHEETS.OPERATION);
+  // Read-only audit view, no write follows — safe for the Mongo mirror.
+  const { rows: rawRows } = await getSheetDataFromMongo(SHEETS.OPERATION);
   if (!rawRows.length) return { data: [] };
 
   const allRows = rawRows.map((r) => padWidth(r, 31));
@@ -396,7 +420,7 @@ export async function revertAutoApproved() {
         reverted++;
       }
     }
-    if (updates.length) await batchUpdateValues(updates);
+    if (updates.length) { await batchUpdateValues(updates); cacheRemove(APPROVE_DATA_CACHE_KEY); }
     return `Reverted ${reverted} auto-approved row(s) -> back to Pending (manual approval).`;
   });
 }
@@ -418,6 +442,7 @@ export async function saveActionData(containerNo, actionType, timestamp, status,
 
     if (actionType === 'approve') {
       await updateRange(SHEETS.OPERATION, `AC${targetRow}:AE${targetRow}`, [[dmyTime(new Date(timestamp)), status, userEmail || '']]);
+      cacheRemove(APPROVE_DATA_CACHE_KEY);
     }
     return 'OK';
   });
@@ -451,6 +476,7 @@ export async function saveApproveLeaseByContainer(containerNo, timestamp, status
     if (rn === -1) return 'ALREADY_PROCESSED'; // every matching row is already approved
 
     await updateRange(SHEETS.OPERATION, `AC${rn}:AE${rn}`, [[dmyTime(new Date(timestamp)), status || '', userEmail || '']]);
+    cacheRemove(APPROVE_DATA_CACHE_KEY);
     return 'OK';
   });
 }
@@ -466,34 +492,35 @@ const EXPIRY_ORDER_SOURCES = [SHEETS.OPERATION, SHEETS.NEW_LEASE]; // priority o
 const EXPIRY_ORDMAP_CACHE_KEY = 'expiry_ordmap_v1';
 
 export async function _expiryOrderNoMap() {
-  const hit = cacheGet(EXPIRY_ORDMAP_CACHE_KEY);
-  if (hit) return hit;
+  // cacheGetOrLoad, same key as expiry.service.js's own copy of this
+  // function — the two share one cache entry AND one in-flight guard
+  // (memoryCache.js's store/inFlight maps are module-level, so this and the
+  // other copy coalesce together even though they're separate functions).
+  return cacheGetOrLoad(EXPIRY_ORDMAP_CACHE_KEY, 300, async () => {
+    const map = {};
+    for (const sourceName of EXPIRY_ORDER_SOURCES) {
+      try {
+        const { headers, rows } = await getSheetData(sourceName);
+        if (!rows.length) continue;
 
-  const map = {};
-  for (const sourceName of EXPIRY_ORDER_SOURCES) {
-    try {
-      const { headers, rows } = await getSheetData(sourceName);
-      if (!rows.length) continue;
-
-      let ordCol = 3; // fallback: col D
-      for (let h = 0; h < headers.length; h++) {
-        const hd = String(headers[h] || '').trim().toLowerCase();
-        if (hd.includes('order') && hd.includes('no')) { ordCol = h; break; }
-      }
-
-      for (const r of rows) {
-        const o = safeStr(r[ordCol]).trim();
-        if (!o) continue;
-        for (const p of splitContainers(r[0])) {
-          const k = normKey(p);
-          if (k && !map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+        let ordCol = 3; // fallback: col D
+        for (let h = 0; h < headers.length; h++) {
+          const hd = String(headers[h] || '').trim().toLowerCase();
+          if (hd.includes('order') && hd.includes('no')) { ordCol = h; break; }
         }
-      }
-    } catch (e) { /* never break the expiry screen */ }
-  }
 
-  cachePut(EXPIRY_ORDMAP_CACHE_KEY, map, 300); // 5-minute cache, matches original
-  return map;
+        for (const r of rows) {
+          const o = safeStr(r[ordCol]).trim();
+          if (!o) continue;
+          for (const p of splitContainers(r[0])) {
+            const k = normKey(p);
+            if (k && !map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+          }
+        }
+      } catch (e) { /* never break the expiry screen */ }
+    }
+    return map;
+  });
 }
 
 /* Off-Lease stage counts used to live here (_olStageCounts) — replaced

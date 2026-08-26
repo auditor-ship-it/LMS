@@ -13,13 +13,13 @@
  * instead of routing through the dashboard aggregate.
  */
 import { SHEETS } from '../config/sheets.config.js';
-import { cacheGet, cachePut, cacheRemove } from '../utils/memoryCache.js';
+import { cacheRemove, cacheGetOrLoad } from '../utils/memoryCache.js';
 import { AppError } from '../utils/AppError.js';
 import { getApproveData } from './approve.service.js';
 import { getExpiryDataByFilter } from './expiry.service.js';
 import { getVerifyData } from './verify.service.js';
 import { getOffLeaseStageCounts } from './offlease.service.js';
-import { getSheetData } from './googleSheets.service.js';
+import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { salePersonScopeFor, scopeCacheKey } from './salePersonAccess.service.js';
 
 const MYTASKS_CACHE_KEY = 'mytasks_v1';
@@ -72,66 +72,72 @@ const MY_TASK_KEY_META = {
  * that mirror them must show the SAME scoped number the page itself would,
  * or the sidebar badge and the page it links to would disagree.
  *
- * Because these two fields now vary by caller, the 60s cache is keyed by
+ * Because these two fields now vary by caller, the 90s cache is keyed by
  * scope (one of 5 values: the 4 mapped names, or 'all') instead of a single
  * global key — otherwise the first request of the minute would freeze its
- * scope's numbers into what every other caller sees for the next 60s.
+ * scope's numbers into what every other caller sees for the next 90s.
  */
 export async function getMyTasks(user, force) {
   const scope = salePersonScopeFor(user);
   const cacheKey = `${MYTASKS_CACHE_KEY}:${scopeCacheKey(scope)}`;
   if (force) { cacheRemove(cacheKey); cacheRemove('dash_v1'); } // force fresh counts
-  else { const hit = cacheGet(cacheKey); if (hit) return hit; }
 
-  const out = {
-    pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
-    expiring7: 0, expired: 0, renewPending: 0,
-    olStage1: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
-    /* Which cards the caller should see, or null for "show everything" (the
-     * pre-existing, still-default behaviour for anyone not in this map).
-     *
-     * A Sale-Person-scoped login (salePersonScopeFor — Gauri/Kedar/Sagar/
-     * Sapna today) owns leases, not a workflow desk: "Pending Verify
-     * (Christopher)" or an Off-Lease stage card is someone else's job and was
-     * confusing noise on their own My Task page, so they only get the three
-     * cards that are actually theirs — the same three counts
-     * salePersonAccess.service.js already scopes above.
-     *
-     * Deliberately NOT extended to the pre-existing desk-role entries in
-     * MY_TASK_BY_EMAIL_BACKEND (Pushpa/Christopher/Shivani/Kshirod) — that map
-     * was already used elsewhere (getEmployeeTasks) but never by this page,
-     * so restricting it here now would be a first-time behaviour change for
-     * four people who did not ask for it. Scoped narrowly to the identical
-     * axis already shipped for Lease Expiry / Renew & Document. */
-    visibleKeys: scope ? ['expiring7', 'expired', 'renewPending'] : null
-  };
+  // cacheGetOrLoad, not a manual get-then-fetch: My Task is this app's
+  // landing page, so several browser tabs/users opening it in the same
+  // moment used to mean several full, independent copies of everything
+  // below (which itself calls getVerifyData/getApproveData/
+  // getExpiryDataByFilter x2/getOffLeaseStageCounts — five-plus live Sheets
+  // reads) all running at once instead of sharing one.
+  return cacheGetOrLoad(cacheKey, 90, async () => {
+    const out = {
+      pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
+      expiring7: 0, expired: 0, renewPending: 0,
+      olStage1: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
+      /* Which cards the caller should see, or null for "show everything" (the
+       * pre-existing, still-default behaviour for anyone not in this map).
+       *
+       * A Sale-Person-scoped login (salePersonScopeFor — Gauri/Kedar/Sagar/
+       * Sapna today) owns leases, not a workflow desk: "Pending Verify
+       * (Christopher)" or an Off-Lease stage card is someone else's job and was
+       * confusing noise on their own My Task page, so they only get the three
+       * cards that are actually theirs — the same three counts
+       * salePersonAccess.service.js already scopes above.
+       *
+       * Deliberately NOT extended to the pre-existing desk-role entries in
+       * MY_TASK_BY_EMAIL_BACKEND (Pushpa/Christopher/Shivani/Kshirod) — that map
+       * was already used elsewhere (getEmployeeTasks) but never by this page,
+       * so restricting it here now would be a first-time behaviour change for
+       * four people who did not ask for it. Scoped narrowly to the identical
+       * axis already shipped for Lease Expiry / Renew & Document. */
+      visibleKeys: scope ? ['expiring7', 'expired', 'renewPending'] : null
+    };
 
-  try { out.pendingVerify = ((await getVerifyData()).data || []).length; } catch (e) { /* noop */ }
-  try { out.pendingApprovals = ((await getApproveData()).data || []).length; } catch (e) { /* noop */ }
+    try { out.pendingVerify = ((await getVerifyData()).data || []).length; } catch (e) { /* noop */ }
+    try { out.pendingApprovals = ((await getApproveData()).data || []).length; } catch (e) { /* noop */ }
 
-  /* Same "pending" list Lease Expiry's own page bands client-side —
-     mirror that banding here so the tile counts always agree with it. */
-  try {
-    const pending = (await getExpiryDataByFilter('pending', user)).data || [];
-    out.expiring7 = pending.filter((r) => r.band === 'critical').length;
-    out.expired = pending.filter((r) => r.band === 'overdue').length;
-  } catch (e) { /* noop */ }
+    /* Same "pending" list Lease Expiry's own page bands client-side —
+       mirror that banding here so the tile counts always agree with it. */
+    try {
+      const pending = (await getExpiryDataByFilter('pending', user)).data || [];
+      out.expiring7 = pending.filter((r) => r.band === 'critical').length;
+      out.expired = pending.filter((r) => r.band === 'overdue').length;
+    } catch (e) { /* noop */ }
 
-  /* Count from the EXACT same source as the Renew -> Documents tab ("Awaiting
-     Completion"), so the Renew Pending card always matches that list. */
-  try { out.renewPending = ((await getExpiryDataByFilter('documents', user)).data || []).length; } catch (e) { /* noop */ }
+    /* Count from the EXACT same source as the Renew -> Documents tab ("Awaiting
+       Completion"), so the Renew Pending card always matches that list. */
+    try { out.renewPending = ((await getExpiryDataByFilter('documents', user)).data || []).length; } catch (e) { /* noop */ }
 
-  /* olStageN keys map 1:1 to INTERNAL stage numbers — see the mapping comment
-     on MY_TASK_KEY_META above. Stages 2 and 4 are retired (no active queue,
-     never in OL_ACTIVE_STAGE_NUMS) and simply stay at the 0 default above. */
-  try {
-    const { counts: olc, approval } = await getOffLeaseStageCounts();
-    out.offleaseApproval = approval ?? 0;
-    for (const n of [1, 3, 5, 6, 7, 8]) out[`olStage${n}`] = olc[n] ?? 0;
-  } catch (e) { /* noop */ }
+    /* olStageN keys map 1:1 to INTERNAL stage numbers — see the mapping comment
+       on MY_TASK_KEY_META above. Stages 2 and 4 are retired (no active queue,
+       never in OL_ACTIVE_STAGE_NUMS) and simply stay at the 0 default above. */
+    try {
+      const { counts: olc, approval } = await getOffLeaseStageCounts();
+      out.offleaseApproval = approval ?? 0;
+      for (const n of [1, 3, 5, 6, 7, 8]) out[`olStage${n}`] = olc[n] ?? 0;
+    } catch (e) { /* noop */ }
 
-  cachePut(cacheKey, out, 60); // 60s cache -> repeat opens are instant
-  return out;
+    return out;
+  }); // single-flight: concurrent opens in the same 90s window share one fetch
 }
 
 /* ==================== PER-EMPLOYEE TASKS ====================
@@ -142,14 +148,15 @@ export async function getMyTasks(user, force) {
    assigned=false. */
 
 /** Resolve an employee CODE (USER sheet col B) -> that person's pending-task
- *  counts. Returns null if the code is unknown. force=true bypasses the 60s
+ *  counts. Returns null if the code is unknown. force=true bypasses the 90s
  *  task cache. */
 export async function getEmployeeTasks(employeeCode, force) {
   const code = String(employeeCode == null ? '' : employeeCode).trim();
   if (!code) throw new AppError('employeeCode is required');
 
   // --- resolve code -> name + email via the USER sheet (A=name B=id C=pass D=email) ---
-  const { rows } = await getSheetData(SHEETS.USER, undefined, 'A1:D');
+  // Read-only lookup, no write follows — safe for the Mongo mirror.
+  const { rows } = await getSheetDataFromMongo(SHEETS.USER);
   let name = '', email = '';
   for (const r of rows) {
     if (String(r[1]).trim() === code) {

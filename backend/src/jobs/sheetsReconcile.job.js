@@ -160,11 +160,17 @@ export async function runSheetsReconciliation() {
         logger.error(`[SYNC ERROR] Failed to fetch sheet ${sheetName}`);
         logger.error(`[SYNC ERROR] Reason: ${err?.message || err}`);
       }
-      // A small gap between sheets — 9 back-to-back full-sheet reads can burn
+      // A gap between sheets — 9 back-to-back full-sheet reads can burn
       // through the "requests per minute" cap on their own, even with nothing
       // else contending for it (confirmed 2026-08-08: this exact cycle hit the
-      // wall on sheet 8 of 9). Skip the wait after the last sheet.
-      if (i < sheetNames.length - 1) await sleep(1500);
+      // wall on sheet 8 of 9; confirmed AGAIN 2026-08-26 that 1.5s wasn't
+      // enough — this job alone, plus the FMS refresh two minutes later in
+      // the same cycle, was tripping the GLOBAL quota lockout roughly every
+      // 5 minutes, all day, independent of any real user traffic). Widened
+      // to 4s: spreads these 9 reads over ~32s instead of ~12s, so fewer of
+      // them land inside any single 60-second lookback window. Skip the
+      // wait after the last sheet.
+      if (i < sheetNames.length - 1) await sleep(4000);
     }
     logger.info(`[SYNC] Sync cycle completed in ${((Date.now() - cycleStart) / 1000).toFixed(1)}s`);
     return results;

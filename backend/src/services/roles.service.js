@@ -22,8 +22,9 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { PERMISSION_KEYS, SIDEBAR_KEYS, ROLES_ADMIN_EMAILS } from '../config/permissions.config.js';
 import { safeStr } from '../utils/format.js';
-import { cacheGet, cachePut, cacheRemove } from '../utils/memoryCache.js';
+import { cacheRemove, cacheGetOrLoad } from '../utils/memoryCache.js';
 import { accessDenied } from '../utils/AppError.js';
+import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 
 /**
  * SHEETS-FIRST (reverted 2026-08-21). Every read/write in this file goes
@@ -130,7 +131,7 @@ export async function ensureRolesSeeded() {
 
 const TEAM_CACHE_KEY = 'access_team_v2';
 const SIDEBAR_CACHE_KEY = 'access_sidebar_v2';
-const ROLES_CACHE_TTL = 300; // 5 min, matches original
+const ROLES_CACHE_TTL = 450; // 7.5 min — widened 2026-08-26 from the original 5 min for a bit more headroom
 
 export function clearRolesCache() {
   cacheRemove(TEAM_CACHE_KEY);
@@ -139,20 +140,22 @@ export function clearRolesCache() {
 
 /** email(lowercased) -> { name, allAccess, perms:{key:bool} } */
 export async function loadTeamPermTable() {
-  const hit = cacheGet(TEAM_CACHE_KEY);
-  if (hit) return hit;
-  await ensureRolesSeeded();
-  const { rows } = await getSheetData(TEAM_SHEET);
-  const out = {};
-  for (const row of rows) {
-    const email = safeStr(row[0]).trim().toLowerCase();
-    if (!email) continue;
-    const perms = {};
-    PERMISSION_KEYS.forEach((p, k) => { perms[p.key] = row[3 + k] === true; });
-    out[email] = { name: safeStr(row[1]), allAccess: row[2] === true, perms };
-  }
-  cachePut(TEAM_CACHE_KEY, out, ROLES_CACHE_TTL);
-  return out;
+  return cacheGetOrLoad(TEAM_CACHE_KEY, ROLES_CACHE_TTL, async () => {
+    await ensureRolesSeeded();
+    // Read-only permission-table load, no write derives a row number from
+    // it — saveEmailPermission always re-resolves its own row live via
+    // findRowIndexByEmail. Safe for the Mongo mirror.
+    const { rows } = await getSheetDataFromMongo(TEAM_SHEET);
+    const out = {};
+    for (const row of rows) {
+      const email = safeStr(row[0]).trim().toLowerCase();
+      if (!email) continue;
+      const perms = {};
+      PERMISSION_KEYS.forEach((p, k) => { perms[p.key] = row[3 + k] === true; });
+      out[email] = { name: safeStr(row[1]), allAccess: row[2] === true, perms };
+    }
+    return out;
+  });
 }
 
 export async function isKnownTeamAccount(email) {
@@ -164,20 +167,19 @@ export async function isKnownTeamAccount(email) {
 
 /** email(lowercased) -> { sidebarKey: bool } */
 export async function loadSidebarTable() {
-  const hit = cacheGet(SIDEBAR_CACHE_KEY);
-  if (hit) return hit;
-  await ensureRolesSeeded();
-  const { rows } = await getSheetData(SIDEBAR_SHEET);
-  const out = {};
-  for (const row of rows) {
-    const email = safeStr(row[0]).trim().toLowerCase();
-    if (!email) continue;
-    const vis = {};
-    SIDEBAR_KEYS.forEach((s, k) => { vis[s.key] = row[1 + k] === true; });
-    out[email] = vis;
-  }
-  cachePut(SIDEBAR_CACHE_KEY, out, ROLES_CACHE_TTL);
-  return out;
+  return cacheGetOrLoad(SIDEBAR_CACHE_KEY, ROLES_CACHE_TTL, async () => {
+    await ensureRolesSeeded();
+    const { rows } = await getSheetDataFromMongo(SIDEBAR_SHEET);
+    const out = {};
+    for (const row of rows) {
+      const email = safeStr(row[0]).trim().toLowerCase();
+      if (!email) continue;
+      const vis = {};
+      SIDEBAR_KEYS.forEach((s, k) => { vis[s.key] = row[1 + k] === true; });
+      out[email] = vis;
+    }
+    return out;
+  });
 }
 
 /** ADDITIVE: OR'd with the hardcoded ACTION_PERMISSIONS in permissions.service.js. */

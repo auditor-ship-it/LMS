@@ -40,8 +40,23 @@ import { safeStr, formatDateVal, buildDisplayRow } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
-import { patchMongoMirrorRow } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { normalizeKey } from '../config/mongoSheetMapping.js';
+import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
+
+/* getVerifyData cache — added 2026-08-26. Verify Lease was previously live
+   on every call (an explicit, deliberate choice: manual spreadsheet edits
+   must be visible instantly, not after a stale cache) — kept true for this
+   app's OWN writes below (every one of them busts this immediately, so a
+   save is still reflected on the very next read, same as before), but a
+   short TTL now covers everything else: several tabs/users opening Verify
+   Lease (or My Task, which also calls getVerifyData) in the same few
+   seconds used to mean that many independent live reads of the same two
+   sheets. 20s is short enough that an OUTSIDE-the-app manual edit is still
+   visible almost immediately, not the 90s+ staleness that caused the
+   original RAW-everything decision. */
+const VERIFY_CACHE_KEY = 'verify_data_v1';
+const VERIFY_CACHE_TTL_SECS = 20;
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dmyTime(d) {
@@ -275,7 +290,11 @@ export function _padNewLeaseHeader(colStartCount, upToCount) {
 }
 
 export async function getVerifyData() {
-  const { headers: rawHeaders, rows: rawRows } = await getSheetData(SHEETS.NEW_LEASE);
+  return cacheGetOrLoad(VERIFY_CACHE_KEY, VERIFY_CACHE_TTL_SECS, async () => {
+  // Read-only display list — every write below (saveVerifyAction etc.)
+  // re-reads NEW_LEASE LIVE and re-resolves its target row by container
+  // number fresh, so this Mongo-served copy never feeds a write.
+  const { headers: rawHeaders, rows: rawRows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE);
   if (!rawRows.length) return { headers: [], data: [] };
 
   /* Ensure the sheet has (at least, logically) 36 header columns, same
@@ -310,15 +329,14 @@ export async function getVerifyData() {
 
   /* Build lookup from "New lease reff": col B=Client Code, col N=Agreement
      Date, col O=Agreement PDF, keyed by Order No (col D).
-     NOTE: a live read here on every Verify Lease page load was previously
-     identified as a contributor to shared-project Sheets quota errors
-     (2026-08-07) and moved to the Mongo mirror for that reason. Reverted to
-     live 2026-08-21 at the user's explicit request (manual sheet edits must
-     be visible instantly app-wide) — if quota pressure resurfaces on this
-     path specifically, this is the first place to look. */
+     Back on the Mongo mirror (2026-08-26) — this was the original fix
+     (2026-08-07) for exactly this read being a quota contributor on every
+     Verify Lease load; the 2026-08-21 revert to live Sheets reintroduced
+     that same pressure app-wide, so restored. Pure lookup-map read, no
+     write ever derives a row number from it. */
   const agrMap = {};
   try {
-    const refData = await getSheetData(SHEETS.NEW_LEASE_REFF);
+    const refData = await getSheetDataFromMongo(SHEETS.NEW_LEASE_REFF);
     if (refData && refData.rows.length) {
       for (const raw of refData.rows) {
         const r = padWidth(raw, 15);
@@ -372,6 +390,7 @@ export async function getVerifyData() {
     });
   }
   return { headers: displayHeaders, data: finalData };
+  });
 }
 
 export async function saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail) {
@@ -396,6 +415,7 @@ export async function saveVerifyAction(containerNo, timestamp, status, billingTy
     ];
     await batchUpdateValues(updates);
     await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    cacheRemove(VERIFY_CACHE_KEY); // this row just changed — next read must not serve the pre-save cache
     return 'OK';
   });
 }
@@ -424,6 +444,7 @@ export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEm
     const updates = [{ range: `'${SHEETS.NEW_LEASE}'!AE${targetRow}`, values: [[next]] }];
     await batchUpdateValues(updates);
     await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    cacheRemove(VERIFY_CACHE_KEY);
     return 'OK';
   });
 }
@@ -474,6 +495,7 @@ export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEma
     const cur = safeStr(srcRow[30]);
     const next = cur && cur.trim() !== '' ? `${cur}\n${newEntry}` : newEntry;
     await updateCell(SHEETS.NEW_LEASE, rn, 30, next);
+    cacheRemove(VERIFY_CACHE_KEY);
 
     return 'OK';
   });
@@ -494,6 +516,7 @@ export async function saveVerifyDocument(containerNo, docType, url, userEmail) {
 
     const col0 = docType === 'po' ? 31 : 32; // AF=31, AG=32 (0-based)
     await updateCell(SHEETS.NEW_LEASE, targetRow, col0, url || '');
+    cacheRemove(VERIFY_CACHE_KEY);
     return 'OK';
   });
 }
