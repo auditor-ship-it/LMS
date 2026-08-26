@@ -48,13 +48,13 @@ export async function uploadDocument(req, res) {
 /** POST /api/expiry/documents/complete — completeDocumentStage (LMS.js 1441) */
 export async function completeDocumentStage(req, res) {
   const { containerNo } = req.body;
-  res.json({ result: await expiryService.completeDocumentStage(containerNo, req.user.email) });
+  res.json({ result: await expiryService.completeDocumentStageFast(containerNo, req.user.email) });
 }
 
 /** POST /api/expiry/action — saveExpiryAction (LMS.js 1467) */
 export async function saveAction(req, res) {
   const { rowId, timestamp, status } = req.body;
-  res.json({ result: await expiryService.saveExpiryAction(rowId, timestamp, status, req.user.email) });
+  res.json({ result: await expiryService.saveExpiryActionFast(rowId, timestamp, status, req.user.email) });
 }
 
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
