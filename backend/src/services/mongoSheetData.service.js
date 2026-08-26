@@ -1,14 +1,88 @@
 import { getCollection } from './mongo.service.js';
 import { logger } from '../utils/logger.js';
 
+const META_ID = '__meta__';
+
 /**
- * SHEETS-FIRST (reverted 2026-08-21) — this file's getSheetDataFromMongo
- * (a drop-in getSheetData(sheetName) replacement reading the Mongo backup
- * mirror instead of live Sheets) was removed once every read call site in
- * the app went back to live Sheets. patchMongoMirrorRow below is the one
- * function still in active use: it keeps the Mongo backup in step with
- * each Sheets-first write, right after it happens.
+ * MONGO-FIRST READS (restored 2026-08-26) — the live-Sheets-for-every-read
+ * architecture (SHEETS-FIRST, 2026-08-21) turned out to make the app
+ * unusably fragile against the shared project-wide Sheets quota: every page
+ * load, poll, and open tab meant a live read, and any burst of traffic
+ * (several tabs, several users, the background reconcile job) tripped the
+ * "Google Sheets API rate limit" circuit breaker for everyone, repeatedly,
+ * confirmed by the user across Off-Lease, My Task, Approve Lease and Lease
+ * Expiry the same day. Reverting to reading the Mongo mirror for
+ * display/list reads removes those pages from the live quota entirely.
+ *
+ * Only call sites already proven safe (no write derives a row NUMBER from
+ * this read — see each call site's own comment, and
+ * offlease.service.js's copyApprovedData for the one place that must NOT
+ * use this) were switched. Writes still land on Sheets directly and patch
+ * the mirror immediately after (patchMongoMirrorRow / inline getCollection
+ * updates below), so the app's own actions still show up on the very next
+ * read; only edits made directly in the raw spreadsheet, outside the app,
+ * wait for the next scheduled reconcile cycle to appear.
+ *
+ * Drop-in replacement for googleSheets.service.js's getSheetData(sheetName),
+ * reading from the Mongo mirror instead of the live spreadsheet. Returns the
+ * exact same { headers, rows, values } shape so existing index-based
+ * business logic (row[0], row[26], ...) needs zero changes — only the
+ * import at the top of a service file changes.
+ *
+ * Each doc in the collection is either the one `_id: '__meta__'` header doc
+ * ({ headers }) or a row doc ({ key, row, deletedAt? }) written by
+ * jobs/sheetsReconcile.job.js (Sheets -> Mongo) or a write-side mirror patch
+ * (patchMongoMirrorRow / inline getCollection updates). Soft-deleted rows
+ * (deletedAt set) are excluded, same as if the row had actually been
+ * removed from the sheet.
+ *
+ * `key: { $exists: true }` — every doc our own reconcile job writes always
+ * gets a `key` (a real business key for by-key sheets, a synthetic `row_N`
+ * for fullRefresh sheets). Docs with no `key` at all are foreign to this
+ * pipeline and excluded as a defensive backstop.
  */
+/**
+ * Same rows as getSheetDataFromMongo, but keeping each row's Mongo `key`
+ * alongside it — needed by the Mongo-first write path (offlease.service.js's
+ * *Fast functions etc.) to target the exact doc to patch. Sorted by the
+ * numeric suffix of `row_N` keys where present, so a container with more
+ * than one row (Off-Lease Tracking's container numbers are not unique) is
+ * scanned in the same order a live sheet read would see them, rather than
+ * whatever order Mongo's own find() happens to return — that order isn't
+ * guaranteed to match sheet position and picking the wrong duplicate would
+ * patch the wrong row's data. Not a guarantee (an external edit since the
+ * last reconcile can still reorder the real sheet) — just a best-effort
+ * match; the authoritative background replay always re-resolves the row
+ * itself from a fresh live read and corrects anything this got wrong.
+ */
+export async function getMongoRowsWithKeys(sheetName) {
+  const col = getCollection(sheetName);
+  const docs = await col.find({ _id: { $ne: META_ID }, deletedAt: null, key: { $exists: true } }).toArray();
+  return docs
+    .map((d) => ({ key: d.key, row: d.row || [] }))
+    .sort((a, b) => {
+      const na = parseInt(String(a.key).replace(/^row_/, ''), 10);
+      const nb = parseInt(String(b.key).replace(/^row_/, ''), 10);
+      const fa = Number.isFinite(na) ? na : Number.MAX_SAFE_INTEGER;
+      const fb = Number.isFinite(nb) ? nb : Number.MAX_SAFE_INTEGER;
+      return fa - fb;
+    });
+}
+
+export async function getSheetDataFromMongo(sheetName) {
+  const start = process.hrtime.bigint();
+  const col = getCollection(sheetName);
+  const [metaDoc, docs] = await Promise.all([
+    col.findOne({ _id: META_ID }),
+    col.find({ _id: { $ne: META_ID }, deletedAt: null, key: { $exists: true } }).toArray()
+  ]);
+  const headers = metaDoc?.headers || [];
+  const rows = docs.map((d) => d.row || []);
+  const values = headers.length ? [headers, ...rows] : rows;
+  const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+  logger.debug(`[DB] Collection: ${sheetName} | Operation: find (full read) | Returned: ${rows.length} documents | Duration: ${durationMs.toFixed(1)}ms`);
+  return { headers, rows, values };
+}
 
 function _colIndexFromLetter(letter) {
   let idx = 0;

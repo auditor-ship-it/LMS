@@ -82,11 +82,14 @@ import { checkActionPermission } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getCollection } from './mongo.service.js';
+import { getSheetDataFromMongo, getMongoRowsWithKeys } from './mongoSheetData.service.js';
+import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
 import { getDeliveredKeys } from './stage8.service.js';
+import { cacheGetOrLoad } from '../utils/memoryCache.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
@@ -1138,7 +1141,7 @@ export async function getOffLeaseEntryStamp(containerNo) {
   const want = normKey(containerNo);
   if (!want) return '';
   try {
-    const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
+    const { headers, rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
     const updCol = _findOlColumnMulti(headers, ['update']);
     const stsCol = _findOlColumnMulti(headers, ['status']);
     if (updCol < 0) return '';
@@ -1202,7 +1205,7 @@ export async function getOffLeaseClientNamesForContainer(containerNo) {
   if (!want) return [];
   const names = new Set();
   try {
-    const { rows } = await getSheetData(OL_SHEET);
+    const { rows } = await getSheetDataFromMongo(OL_SHEET);
     for (const row of rows) {
       if (normKey(row[0]) !== want) continue;
       const cn = safeStr(row[5]).trim();
@@ -1211,7 +1214,7 @@ export async function getOffLeaseClientNamesForContainer(containerNo) {
   } catch (e) { console.error('[OL-ACCESS] tracking scan:', e?.message || e); }
   if (names.size) return [...names];
   try {
-    const { rows } = await getSheetData(SHEETS.DEPLOYED);
+    const { rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
     for (const row of rows) {
       if (normKey(row[0]) !== want) continue;
       const cn = safeStr(row[1]).trim();
@@ -1244,7 +1247,16 @@ export async function getOffLeaseData(stage, opts = {}, user) {
   // Display-only list read, no embedded write in this function — safe to
   // serve from the Mongo mirror (Phase 1b), and therefore no
   // _ensureOffLeaseSheet(): see the note in getOffLeaseDashboardData.
-  const { headers, rows } = await getSheetData(OL_SHEET);
+  //
+  // opts.sheetData: an already-fetched {headers, rows}, so a caller reading
+  // every stage's count in one go (getOffLeaseStageCounts) reads the sheet
+  // ONCE instead of once per stage — 6 stages read independently, on every
+  // 60s poll, from however many browser tabs have the page open, was
+  // confirmed 2026-08-26 as the actual cause of repeated
+  // "Google Sheets API rate limit" lockouts across the whole app, not just
+  // Off-Lease. Every other caller is unaffected: they simply don't pass it,
+  // and this reads live as before.
+  const { headers, rows } = opts.sheetData || await getSheetDataFromMongo(OL_SHEET);
   const info = OL_STAGE_INFO[stage];
   if (!rows.length || !info) return { headers: [], data: [], stage };
 
@@ -1408,11 +1420,15 @@ export async function getOffLeaseStageCounts(user) {
   let deliveredKeys;
   try { deliveredKeys = await getDeliveredKeys(); } catch (e) { deliveredKeys = undefined; }
   const gfIndex = getGateFormIndexSync();
+  // ONE read for all 6 stages + the approval count — see getOffLeaseData's
+  // opts.sheetData doc comment for why this used to be 7 separate live
+  // reads of the identical sheet on every call.
+  const sheetData = await getSheetDataFromMongo(OL_SHEET);
 
   const counts = {};
   await Promise.all(OL_ACTIVE_STAGE_NUMS.map(async (s) => {
     try {
-      const d = await getOffLeaseData(s, { deliveredKeys, gateFormIndex: gfIndex }, user);
+      const d = await getOffLeaseData(s, { deliveredKeys, gateFormIndex: gfIndex, sheetData }, user);
       counts[s] = d.data.length;
     } catch (e) {
       counts[s] = null;   // null = unknown, so the caller shows no badge at all
@@ -1420,7 +1436,7 @@ export async function getOffLeaseStageCounts(user) {
   }));
 
   let approval = null;
-  try { approval = (await getOffLeaseApprovalData(user)).data.length; } catch (e) { /* leave null */ }
+  try { approval = (await getOffLeaseApprovalData(user, sheetData)).data.length; } catch (e) { /* leave null */ }
 
   return { counts, approval };
 }
@@ -1452,7 +1468,7 @@ export async function attachStageTat(result, stage) {
      rendered a dash on every row. */
   const entryByContainer = new Map();
   {
-    const { headers: dh, rows: dr } = await getSheetData(SHEETS.DEPLOYED);
+    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
     const updCol = _findOlColumnMulti(dh, ['update']);
     const stsCol = _findOlColumnMulti(dh, ['status']);
     if (updCol >= 0) {
@@ -1464,7 +1480,7 @@ export async function attachStageTat(result, stage) {
     }
   }
 
-  const { rows } = await getSheetData(OL_SHEET);
+  const { rows } = await getSheetDataFromMongo(OL_SHEET);
 
   for (const item of result.data) {
     const row = rows[item._rowNum - 2] || [];
@@ -1704,6 +1720,79 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
   });
 }
 
+/**
+ * Mongo-first fast path for saveOffLeaseStage — the entry point the
+ * controller calls now. Decides against Mongo (already the read source)
+ * and patches the Mongo doc directly so every reader sees the change
+ * instantly, then enqueues a replay of the ORIGINAL saveOffLeaseStage above
+ * to make the same change on the real Google Sheet in the background
+ * (env.outboxPollMs later — a few seconds, not instantly). See
+ * outbox.service.js's header comment for the full design and the trade-off
+ * this was an explicit, informed choice to accept.
+ *
+ * Stage 1 is the one exception and stays fully live/synchronous: it assigns
+ * the Lease ID from a live Sheets counter (_peekNextLeaseIdNum) to guarantee
+ * no duplicate is ever handed out, and the frontend needs that real ID back
+ * in the response (`OK:LEASE00xx`), not a placeholder. Stage 1 is also a
+ * one-time action per container, not something clicked rapidly in sequence
+ * the way Stages 2 onward are — so it's the one case where the ~1-2s live
+ * round trip is the right trade, not a cost worth avoiding.
+ */
+export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail) {
+  const stageNum = parseInt(stage, 10);
+  await checkActionPermission(`offlease${stageNum}`, userEmail);
+
+  if (stageNum === 1) return saveOffLeaseStage(containerNo, stage, data, userEmail);
+
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  const info = OL_STAGE_INFO[stage];
+  if (!info) throw new AppError('Invalid stage');
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  const curStatus = found.row[info.statusCol];
+  if (curStatus && String(curStatus).trim() !== '') return 'ALREADY_PROCESSED';
+
+  // Same technician-cost derivation as the live path — pure arithmetic on
+  // the caller's own payload, not a Sheets call, so duplicating it here
+  // carries none of the drift risk the rest of this design avoids.
+  const payload = { ...(data || {}) };
+  if (stageNum === 3) {
+    const hoursRaw = payload[`col_${OL_TECHNICIAN_HOURS_COL}`];
+    const hours = Number(String(hoursRaw ?? '').trim());
+    payload[`col_${OL_TECHNICIAN_COST_COL}`] = (hoursRaw != null && String(hoursRaw).trim() !== '' && !Number.isNaN(hours))
+      ? hours * OL_TECHNICIAN_RATE_PER_HOUR
+      : '';
+  }
+
+  const patch = {};
+  for (const key of Object.keys(payload)) {
+    if (key.indexOf('col_') !== 0) continue;
+    const colIdx = parseInt(key.replace('col_', ''), 10);
+    const val = payload[key];
+    if (val === '' || val === undefined || val === null) continue;
+    const colName = OL_HEADERS[colIdx] || '';
+    if (colName.toLowerCase().indexOf('date') !== -1 && typeof val === 'string' && val.length > 0) {
+      const dt = parseFormDate(val);
+      patch[`row.${colIdx}`] = dt ? safeStr(dt) : val;
+    } else {
+      patch[`row.${colIdx}`] = val;
+    }
+  }
+  const stamp = dmyTime(new Date());
+  patch[`row.${info.statusCol}`] = 'Completed';
+  patch[`row.${info.statusCol - 2}`] = stamp;
+  patch[`row.${info.statusCol - 1}`] = userEmail || '';
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  await enqueueSheetReplay('offlease.saveOffLeaseStage', [containerNo, stage, data, userEmail], { actor: userEmail });
+
+  return 'OK';
+}
+
 /** `row` = the pre-write base row (cols A-F never change in a stage-4 save,
  *  so the caller's already-fetched row is safe to reuse instead of a re-read). */
 async function _sendOffLeaseQuotationEmail(rn, data, row) {
@@ -1753,7 +1842,7 @@ async function _sendOffLeaseQuotationEmail(rn, data, row) {
 ============================================= */
 async function _fillBlanksFromDeployed(res, want) {
   try {
-    const { rows } = await getSheetData(SHEETS.DEPLOYED, undefined, 'A1:P');
+    const { rows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
     for (const row of rows) {
       if (normKey(row[0]) !== want) continue;
       const fill = (key, val) => {
@@ -1801,7 +1890,7 @@ async function _findBillingForContainer(want, wantClient) {
   const empty = { records: [], count: 0, totalBilling: 0 };
   const client = safeStr(wantClient).trim().toLowerCase();
   try {
-    const { rows } = await getSheetData(SHEETS.BILLING_SALES);
+    const { rows } = await getSheetDataFromMongo(SHEETS.BILLING_SALES);
     const records = [];
     for (const r of rows) {
       if (normKey(r[BS_CONTAINER]) !== want) continue;
@@ -1850,7 +1939,7 @@ export async function getInvoiceAttachments(invoiceNos) {
   if (!want.size) return out;
 
   try {
-    const { rows } = await getSheetData(SHEETS.BILLING_SALES);
+    const { rows } = await getSheetDataFromMongo(SHEETS.BILLING_SALES);
     for (const r of rows) {
       const key = normInvoiceNo(r[BS_INVOICE_NO]);
       if (!key || !want.has(key) || out[key]) continue;
@@ -1958,14 +2047,29 @@ function _completedThisMonth(stage8) {
  * the frontend doesn't need 31 individual getOffLeaseContainerDetail calls.
  * Display-only, safe to read from the Mongo mirror.
  */
+const OL_DASHBOARD_CACHE_KEY = 'offlease_dashboard_raw_v1';
+const OL_DASHBOARD_TTL_SECS = 20;
+
 export async function getOffLeaseDashboardData(user) {
   /* No _ensureOffLeaseSheet() here. It exists to create the tab and widen the
      header row before a WRITE; this function only reads, and reads from the
      Mongo mirror. Calling it made a Mongo-backed page depend on a live
      spreadsheets.get — and because `sheetEnsured` is per-process, every
      backend restart paid it again. With the read quota exhausted that turned
-     into the circuit breaker refusing the whole dashboard. */
-  const { headers, rows } = await getSheetData(OL_SHEET);
+     into the circuit breaker refusing the whole dashboard.
+
+     The raw sheet read is cached (20s, stampede-safe, degrades to the last
+     good read on a quota error) — added 2026-08-26. Scoped ONLY to this
+     dashboard, deliberately not to getOffLeaseData/getOffLeaseStageCounts
+     (the actual action queues staff Save/Approve from) — those must keep
+     showing a just-completed action instantly, the exact bug class fixed
+     earlier this session. This function is display/KPI-only, and the
+     per-user sale-person scoping below still runs fresh on every call
+     against the shared raw rows, so nothing scoped is cached across users. */
+  const { headers, rows, _stale, _staleSince } = await cacheGetOrLoad(OL_DASHBOARD_CACHE_KEY, OL_DASHBOARD_TTL_SECS, async () => {
+    const { headers: h, rows: r } = await getSheetDataFromMongo(OL_SHEET);
+    return { headers: h, rows: r };
+  }, { degradeOnError: true });
   const gate = await _offLeaseAccessGate(user);
   const gateFormIndex = getGateFormIndexSync();
   /* Cache/disk-only, same as the gate form index — cheap enough to always
@@ -2016,7 +2120,7 @@ export async function getOffLeaseDashboardData(user) {
     if (c.completed && _completedThisMonth(c.stages[7])) kpis.completedThisMonth++;
   }
 
-  return { kpis, items };
+  return { kpis, items, ...(_stale ? { _stale, _staleSince } : {}) };
 }
 
 /* =============================================
@@ -2043,7 +2147,7 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
      the sheet before a WRITE — on this path it only added a Sheets round trip
      to a read, and on an exhausted quota it failed the whole container detail.
      Same fix already applied to the dashboard and the stage lists. */
-  const { headers, rows } = await getSheetData(OL_SHEET);
+  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
   const gate = await _offLeaseAccessGate(user);
   /* Same Gate In / repair-skip bypass getOffLeaseData and
      getOffLeaseDashboardData use — see stage3Form.service.js and the doc
@@ -2104,7 +2208,7 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
 
   if (!row) {
     try {
-      const { rows: dRows } = await getSheetData(SHEETS.DEPLOYED);
+      const { rows: dRows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
       for (const d of dRows) {
         if (normKey(d[0]) !== want) continue;
         const clientName = safeStr(d[1]);
@@ -2376,10 +2480,12 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
 /* =============================================
    PENDING APPROVAL QUEUE (between Stage 1 and Stage 2)
 ============================================= */
-export async function getOffLeaseApprovalData(user) {
+export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
   await _ensureOffLeaseSheet();
   // Display-only list read — safe to serve from the Mongo mirror (Phase 1b).
-  const { headers, rows } = await getSheetData(OL_SHEET);
+  // preFetchedSheetData: see getOffLeaseData's opts.sheetData doc comment —
+  // same "read once, share across every stage + approval count" fix.
+  const { headers, rows } = preFetchedSheetData || await getSheetDataFromMongo(OL_SHEET);
   if (!rows.length) return { headers: [], data: [], count: 0 };
 
   const gate = await _offLeaseAccessGate(user);
@@ -2466,6 +2572,52 @@ export async function saveOffLeaseApprovalAction(containerNo, status, userEmail)
 
     return 'OK';
   });
+}
+
+/**
+ * Mongo-first fast path for saveOffLeaseApprovalAction — same design as
+ * saveOffLeaseStageFast above. Deliberately does NOT perform the Master
+ * workbook sync (_syncOffLeaseRowToMaster) — that's a second live-Sheets
+ * side effect on top of OL_SHEET itself, left entirely to the background
+ * replay of the original function, which still runs it for real within one
+ * outbox poll interval.
+ */
+export async function saveOffLeaseApprovalActionFast(containerNo, status, userEmail) {
+  await checkActionPermission('offleaseapproval', userEmail);
+
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const { headers } = await getSheetDataFromMongo(OL_SHEET);
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  const timestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+  const userCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+  const remarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+
+  if (statusCol < 0 || timestampCol < 0 || userCol < 0) {
+    throw new AppError('Approval columns not found in sheet. Please check headers.');
+  }
+
+  const curStatus = found.row[statusCol];
+  if (curStatus && String(curStatus).trim().toLowerCase() !== '') return 'ALREADY_PROCESSED';
+
+  const patch = {
+    [`row.${statusCol}`]: status || '',
+    [`row.${timestampCol}`]: dmyTime(new Date()),
+    [`row.${userCol}`]: userEmail || ''
+  };
+  if (status && status.toLowerCase() === 'rejected' && remarkCol >= 0) {
+    patch[`row.${remarkCol}`] = `Rejected on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+  }
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail], { actor: userEmail });
+
+  return 'OK';
 }
 
 /** INSTANT single-row sync: one OL Tracking row -> Master Sheet (a SEPARATE
@@ -2596,7 +2748,7 @@ export async function copyApprovedData() {
      membership check (never a row-number write target) — safe to serve from
      the Mongo mirror, halving this hourly job's live Sheets read footprint. */
   const seen = {};
-  const { rows: existingRows } = await getSheetData(SHEETS.DEPLOYED);
+  const { rows: existingRows } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
   for (const r of existingRows) {
     const ec = r[0];
     if (!ec || String(ec).trim() === '') continue;

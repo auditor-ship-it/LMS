@@ -155,7 +155,7 @@ export async function empSession(token) {
 
 export async function empLogout(token) {
   if (token) {
-    try { await empHeartbeat(token); } catch (e) { /* finalize minutes-on-site best-effort */ }
+    try { await empHeartbeat(token, true); } catch (e) { /* finalize minutes-on-site best-effort */ }
     try {
       const doc = await getCollection(SESSION_COLLECTION).findOne({ _id: token });
       if (doc) await authLogEvent('logout', doc);
@@ -180,11 +180,22 @@ async function authStartSession(token, emp) {
     // currently renders that endpoint's response.
     const now = dmyTime(new Date());
     const { rowNum } = await appendRow(SHEETS.AUTH_SESSION_LOG, [emp.empId, emp.name, emp.email, now, now, 0]);
-    if (rowNum) await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { srow: rowNum } }).catch(() => {});
+    // loginAt cached here so empHeartbeat never needs to re-read it from
+    // Sheets — see that function's doc comment for why this mattered.
+    if (rowNum) await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { srow: rowNum, loginAt: now, lastSheetSync: 0 } }).catch(() => {});
   } catch (e) { /* never break login */ }
 }
 
-export async function empHeartbeat(token) {
+/* Heartbeat throttle for the Sheets write below — the frontend pings this
+   every 60s per open, logged-in tab (AuthContext.jsx) purely to keep the
+   session alive and update "last seen"/duration. Confirmed 2026-08-26 as
+   the single largest contributor to the app's Sheets quota pressure: 3 live
+   calls (1 read + 2 writes) x every open tab x every 60 seconds, all day,
+   completely independent of which page anyone was even looking at — dwarfing
+   even the background cron jobs fixed earlier the same day. */
+const HEARTBEAT_SHEET_SYNC_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function empHeartbeat(token, force = false) {
   try {
     if (!token) return false;
     const doc = await getCollection(SESSION_COLLECTION).findOne({ _id: token });
@@ -192,19 +203,25 @@ export async function empHeartbeat(token) {
     const row = doc.srow;
     if (!(row > 1)) return false;
 
-    const { getRange } = await import('./googleSheets.service.js');
-    const loginAtCell = await getRange(SHEETS.AUTH_SESSION_LOG, `D${row}:D${row}`);
-    const loginAtStr = loginAtCell?.[0]?.[0];
-    // parseDmyTime for the current dd/MM/yyyy HH:mm:ss format this column is
-    // written in; new Date(...) as a fallback for a row still holding the
-    // older raw-ISO value from before that format switched (2026-08-20).
-    const loginAt = loginAtStr ? (parseDmyTime(loginAtStr) || new Date(loginAtStr)) : null;
+    // Sliding session keepalive — cheap (Mongo, not Sheets), so this still
+    // happens on EVERY heartbeat regardless of the Sheets throttle below.
+    await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { expiresAt: _sessionExpiry() } }).catch(() => {});
+
+    const dueForSync = force || Date.now() - (doc.lastSheetSync || 0) >= HEARTBEAT_SHEET_SYNC_MS;
+    if (!dueForSync) return true;
+
+    // loginAt read from the session doc (cached at login, authStartSession)
+    // instead of a live getRange(AUTH_SESSION_LOG) on every call — the login
+    // time never changes, so re-reading it from Sheets each time was a pure
+    // waste. parseDmyTime for the current dd/MM/yyyy HH:mm:ss format;
+    // new Date(...) as a fallback for a doc predating this field.
+    const loginAt = doc.loginAt ? (parseDmyTime(doc.loginAt) || new Date(doc.loginAt)) : null;
     const now = new Date();
     const mins = loginAt && !isNaN(loginAt.getTime()) ? Math.max(0, Math.round((now - loginAt) / 60000)) : 0;
 
     await updateCell(SHEETS.AUTH_SESSION_LOG, row, 4, dmyTime(now));
     await updateCell(SHEETS.AUTH_SESSION_LOG, row, 5, mins);
-    await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { expiresAt: _sessionExpiry() } }).catch(() => {}); // keep session alive
+    await getCollection(SESSION_COLLECTION).updateOne({ _id: token }, { $set: { lastSheetSync: Date.now() } }).catch(() => {});
     return true;
   } catch (e) { return false; }
 }

@@ -74,7 +74,7 @@ export function StagePageBase({ stageNumber, embedded }) {
      on its own cron; this just re-reads it more often than "next page
      load" so the tab reflects it within a minute instead of whenever
      someone happens to navigate back here. */
-  usePolling(() => reload({ silent: true }), 60000);
+  usePolling(() => reload({ silent: true }));
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
   const [activeRow, setActiveRow] = useState(null);

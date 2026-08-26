@@ -74,7 +74,7 @@ export function OffLeasePage() {
   // Badges reflect a container becoming eligible in the background (an
   // external Gate-In form submission, an FMS update) without a manual
   // refresh — see usePolling's doc comment.
-  usePolling(() => reloadCounts({ silent: true }), 60000);
+  usePolling(() => reloadCounts({ silent: true }));
 
   return (
     <>
@@ -115,7 +115,7 @@ export function OffLeasePage() {
 
 function ApprovalQueue() {
   const { data, loading, error, reload } = useAsync(() => fetchApprovalQueue(), []);
-  usePolling(() => reload({ silent: true }), 60000);
+  usePolling(() => reload({ silent: true }));
   const { canAct } = usePermission();
   const canActApproval = canAct('offleaseapproval');
 

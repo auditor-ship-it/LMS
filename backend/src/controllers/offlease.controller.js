@@ -119,7 +119,7 @@ export async function saveStage(req, res) {
   const stage = parseInt(req.params.stage, 10);
   // Permission for this stage (offlease1..offlease8) is checked inside the
   // service, since it's derived from the :stage route param at request time.
-  const message = await offLeaseService.saveOffLeaseStage(req.params.containerNo, stage, req.body || {}, req.user.email);
+  const message = await offLeaseService.saveOffLeaseStageFast(req.params.containerNo, stage, req.body || {}, req.user.email);
   res.json({ message });
 }
 
@@ -136,7 +136,7 @@ export async function getApprovalData(req, res) {
 export async function saveApprovalAction(req, res) {
   const { status } = req.body;
   // Permission ('offleaseapproval') is checked inside the service.
-  const message = await offLeaseService.saveOffLeaseApprovalAction(req.params.containerNo, status, req.user.email);
+  const message = await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email);
   res.json({ message });
 }
 

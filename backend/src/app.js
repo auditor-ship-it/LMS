@@ -72,10 +72,11 @@ export function createApp() {
     uptimeSeconds: Math.round(process.uptime())
   }));
 
-  // Resolves req.user (if a valid session token is present) for every request,
-  // then serves/populates the per-user response cache + global quota-lockout
-  // guard below — see responseCache.middleware.js. Each route's own
-  // requireAuth still rejects genuinely unauthenticated requests.
+  // Resolves req.user (if a valid session token is present) for every
+  // request. responseCache below no longer gates on req.user or the request
+  // path — see its own header comment — it just watches every JSON response
+  // for a quota error it should record. Each route's own requireAuth still
+  // rejects genuinely unauthenticated requests.
   app.use(optionalAuth);
   app.use(responseCache);
 

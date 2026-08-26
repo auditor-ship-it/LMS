@@ -8,11 +8,9 @@
  * belong in this backend; Deployed Summary itself only ever reads
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
-import { getSheetData } from './googleSheets.service.js';
-import { SHEETS } from '../config/sheets.config.js';
 import { safeStr, parseDate } from '../utils/format.js';
 import { normKey } from '../utils/normalize.js';
-import { _expiryOrderNoMap } from './expiry.service.js';
+import { _expiryOrderNoMap, _deployedRawValues } from './expiry.service.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -24,7 +22,11 @@ export function normalizeContainerType(rawType) {
 }
 
 export async function getDeployedSummaryData() {
-  const { rows } = await getSheetData(SHEETS.DEPLOYED);
+  // Shared cached read (expiry.service.js's _deployedRawValues) — Lease
+  // Expiry, Deployed Summary and Deployed Detail all read this same sheet;
+  // added 2026-08-26 so opening any of them doesn't cost its own live read.
+  const { values, _stale, _staleSince } = await _deployedRawValues();
+  const rows = values.slice(1);
   if (!rows.length) return { months: [], types: [], sizes: [], typeSizes: {}, rows: [] };
 
   const containers = [];
@@ -141,7 +143,10 @@ export async function getDeployedSummaryData() {
     });
   }
 
-  return { months: months.map((m) => m.label), types, sizes, typeSizes, rows: summaryRows };
+  return {
+    months: months.map((m) => m.label), types, sizes, typeSizes, rows: summaryRows,
+    ...(_stale ? { _stale, _staleSince } : {})
+  };
 }
 
 export async function getDeployedDetailData(monthLabel, category, typeFilter, sizeFilter) {
@@ -153,7 +158,8 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   const monthStart = new Date(year, monthNum, 1), monthEnd = new Date(year, monthNum + 1, 1);
   const ms = monthStart.getTime(), me = monthEnd.getTime();
 
-  const { rows } = await getSheetData(SHEETS.DEPLOYED);
+  const { values } = await _deployedRawValues();
+  const rows = values.slice(1);
   if (!rows.length) return { containers: [] };
 
   // SHEETS.DEPLOYED doesn't carry Order No directly — join it the same way

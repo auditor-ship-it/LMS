@@ -40,14 +40,14 @@ import {
   insertSheetIfMissing,
   colLetter
 } from './googleSheets.service.js';
-import { patchMongoMirrorRow } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
 import { safeStr, buildDisplayRow, parseDate, formatDateVal, dmyTime } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { checkActionPermission } from './permissions.service.js';
 import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { cacheGet, cachePut } from '../utils/memoryCache.js';
+import { cacheGetOrLoad } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
@@ -87,36 +87,62 @@ const EXPIRY_ORDMAP_CACHE_KEY = 'expiry_ordmap_v1';
 const EXPIRY_ORDMAP_TTL_SECS = 300;
 
 export async function _expiryOrderNoMap() {
-  const hit = cacheGet(EXPIRY_ORDMAP_CACHE_KEY);
-  if (hit) return JSON.parse(hit);
-
-  const map = {};
-  for (const sheetName of EXPIRY_ORDER_SOURCES) {
-    try {
-      const { headers, rows } = await getSheetData(sheetName);
-      if (!rows.length) continue;
-      let ordCol = 3; // fallback: col D
-      for (let h = 0; h < headers.length; h++) {
-        const hd = String(headers[h] || '').trim().toLowerCase();
-        if (hd.indexOf('order') !== -1 && hd.indexOf('no') !== -1) { ordCol = h; break; }
-      }
-      for (const row of rows) {
-        const o = safeStr(row[ordCol]).trim();
-        if (!o) continue;
-        const parts = _splitContainers(row[0]);
-        for (const part of parts) {
-          const k = _normKey(part);
-          if (k && !map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+  // cacheGetOrLoad: this reads TWO sheets and is called on every Lease
+  // Expiry page load — several tabs/users opening it in the same moment
+  // used to mean that many independent copies of both reads.
+  return cacheGetOrLoad(EXPIRY_ORDMAP_CACHE_KEY, EXPIRY_ORDMAP_TTL_SECS, async () => {
+    const map = {};
+    for (const sheetName of EXPIRY_ORDER_SOURCES) {
+      try {
+        // Read-only map-building, no write ever derives a row number from
+        // this read — safe to serve from the Mongo mirror.
+        const { headers, rows } = await getSheetDataFromMongo(sheetName);
+        if (!rows.length) continue;
+        let ordCol = 3; // fallback: col D
+        for (let h = 0; h < headers.length; h++) {
+          const hd = String(headers[h] || '').trim().toLowerCase();
+          if (hd.indexOf('order') !== -1 && hd.indexOf('no') !== -1) { ordCol = h; break; }
         }
-      }
-    } catch (e) { /* never break the expiry screen */ }
-  }
-  try { cachePut(EXPIRY_ORDMAP_CACHE_KEY, JSON.stringify(map), EXPIRY_ORDMAP_TTL_SECS); } catch (e) { /* best-effort cache */ }
-  return map;
+        for (const row of rows) {
+          const o = safeStr(row[ordCol]).trim();
+          if (!o) continue;
+          const parts = _splitContainers(row[0]);
+          for (const part of parts) {
+            const k = _normKey(part);
+            if (k && !map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+          }
+        }
+      } catch (e) { /* never break the expiry screen */ }
+    }
+    return map;
+  });
+}
+
+const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
+const DEPLOYED_RAW_TTL_SECS = 30;
+
+/** The Deployed sheet's raw values, shared across every filterType and
+ *  every caller — added 2026-08-26. My Task calls this function twice in
+ *  one load ('pending' then 'documents'), each of which used to
+ *  independently re-read the same sheet; callers filter/scope on top of
+ *  this shared raw data, so caching it here costs nothing in correctness
+ *  (nothing user-specific lives in the cache — scoping still happens fresh,
+ *  per call, below) while cutting real duplicate reads. degradeOnError:
+ *  a quota hit serves the last successful read instead of a hard failure —
+ *  this is Lease Expiry's core data, worth a stale screen over a broken one. */
+export async function _deployedRawValues() {
+  return cacheGetOrLoad(DEPLOYED_RAW_CACHE_KEY, DEPLOYED_RAW_TTL_SECS, async () => {
+    // Read-only display source (Lease Expiry / Deployed Summary / Detail /
+    // My Task) — the write paths below (saveExpiryAction, completeDocStage,
+    // completeDocumentStage) always re-read this sheet LIVE and re-resolve
+    // their target row fresh, so this cached/Mongo copy never feeds a write.
+    const { values } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    return { values };
+  }, { degradeOnError: true });
 }
 
 export async function getExpiryDataByFilter(filterType, user) {
-  const { values } = await getSheetData(SHEETS.DEPLOYED);
+  const { values, _stale, _staleSince } = await _deployedRawValues();
   if (values.length < 2) return { headers: [], data: [], validColIdx: -1 };
 
   const allHeaders = padRow(values[0], 26);
@@ -265,7 +291,10 @@ export async function getExpiryDataByFilter(filterType, user) {
 
   /* ★ every column from index 1 shifted right by one, so the "Valid Upto"
      highlight index must shift too. */
-  return { headers: displayHeaders, data: finalData, validColIdx: (colIdx >= 1 ? colIdx + 1 : colIdx) };
+  return {
+    headers: displayHeaders, data: finalData, validColIdx: (colIdx >= 1 ? colIdx + 1 : colIdx),
+    ...(_stale ? { _stale, _staleSince } : {})
+  };
 }
 
 /* =============================================

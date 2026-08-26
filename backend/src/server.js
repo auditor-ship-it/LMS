@@ -1,6 +1,7 @@
 import { env } from './config/env.js';
 import { createApp } from './app.js';
 import { registerCronJobs, registerSheetsSync } from './jobs/index.js';
+import { startOutboxWorker } from './jobs/outboxWorker.js';
 import { connectMongo } from './config/db.js';
 import { logger } from './utils/logger.js';
 
@@ -45,4 +46,10 @@ app.listen(env.port, env.host, () => {
   } else {
     logger.info('[SERVER] Sheets<->Mongo sync disabled (set ENABLE_SHEETS_SYNC=true in .env to enable it)');
   }
+
+  // Mongo-first writes (2026-08-26): drains _sync_outbox, replaying each
+  // fast-path write against the real Google Sheet in the background. Runs
+  // independent of ENABLE_CRON/ENABLE_SHEETS_SYNC — this is the write half
+  // of the app's own data path, not a periodic housekeeping job.
+  startOutboxWorker();
 });
