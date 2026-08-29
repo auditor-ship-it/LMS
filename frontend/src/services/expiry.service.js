@@ -3,8 +3,8 @@ import { getExpiryData, saveExpiryAction, refreshSalePersons } from '../api/expi
 export async function fetchExpiryList() {
   return getExpiryData('pending');
 }
-export async function actionExpiryRow(rowId, timestamp, status) {
-  return saveExpiryAction(rowId, timestamp, status);
+export async function actionExpiryRow(rowId, timestamp, status, rowNum) {
+  return saveExpiryAction(rowId, timestamp, status, rowNum);
 }
 
 /** Pull the latest company -> salesperson assignments from the Sales CRM.

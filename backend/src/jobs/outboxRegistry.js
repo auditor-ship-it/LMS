@@ -7,12 +7,14 @@
  * Filled in domain by domain as each write action gets a Mongo-first fast
  * path (offlease first, then verify/approve/expiry/roles).
  */
-import { saveOffLeaseStage, saveOffLeaseApprovalAction } from '../services/offlease.service.js';
+import { saveOffLeaseStage, saveOffLeaseApprovalAction, saveOffLeaseMoveToStage, saveOffLeaseSendBack } from '../services/offlease.service.js';
 import { saveExpiryAction, completeDocumentStage } from '../services/expiry.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
   'offlease.saveOffLeaseApprovalAction': saveOffLeaseApprovalAction,
+  'offlease.saveOffLeaseMoveToStage': saveOffLeaseMoveToStage,
+  'offlease.saveOffLeaseSendBack': saveOffLeaseSendBack,
   'expiry.saveExpiryAction': saveExpiryAction,
   'expiry.completeDocumentStage': completeDocumentStage
 };

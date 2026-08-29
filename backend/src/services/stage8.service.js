@@ -1,29 +1,44 @@
 /**
- * STAGE-8 MOVEMENT LOOKUP (external FMS workbook)
+ * STAGE-8/9/10 MOVEMENT LOOKUP (external FMS workbook)
  *
  * Stage 2 of the off-lease module is a read-only view: it lists the containers
  * pending transportation and enriches each one with the matching Offlease
- * movement recorded in the FMS "STAGE-8" tab. Nothing here writes.
+ * movement recorded in the FMS "STAGE-8"/"STAGE-9"/"STAGE-10" tabs. Nothing
+ * here writes.
  *
  * Only Movement Type = Offlease is considered. STAGE-8 holds every movement
  * the business makes — Sale, Lease, Inward, Internal Movement, Trading, Spare
- * and blanks — and 90 of its 1,138 rows are Offlease.
+ * and blanks — and roughly 90 of its 1,100+ rows are Offlease.
  *
- * QUOTA: this is a live read of a 1,138-row external sheet, and the project
- * already exhausts the Sheets per-minute read quota. It is cached, and Stage 2
- * is the only caller.
+ * MONGO-MIRRORED (2026-08-28) — this used to be a live read of a large
+ * external sheet on every cache-miss, with its own 30-min in-memory TTL and
+ * a disk-persisted "last good" fallback for when the shared Sheets quota was
+ * exhausted (which, on this project, was routinely). Explicit request: mirror
+ * these three tabs into Mongo the same way every sheet in the main
+ * lease-management spreadsheet already is (see mongoSheetData.service.js's
+ * header note), so this file never touches live Sheets at all — reads always
+ * come from Mongo, kept in sync by the same jobs/sheetsReconcile.job.js cron
+ * that already handles the other 9 sheets (see mongoSheetMapping.js's
+ * FMS_STAGE8/9/10 entries, which carry their own `ssId` since this is a
+ * completely different spreadsheet from the main one). A change made
+ * directly in the FMS workbook is visible here within one reconcile cycle
+ * (~5 min), same freshness guarantee as everything else — not instant, but
+ * never a quota failure either.
+ *
+ * This also means the old "undefined = could not read, quota exhausted" UI
+ * state this module used to produce (see fmsState in StageDetailModal.jsx)
+ * should no longer trigger in practice — a Mongo read failure is a genuine
+ * infrastructure problem, not a routine, expected occurrence the way a
+ * shared-project Sheets quota hit was.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { getSheetData, getRange } from './googleSheets.service.js';
-import { EXTERNAL_SPREADSHEETS } from '../config/sheets.config.js';
+import { getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
-import { cacheGet, cachePut } from '../utils/memoryCache.js';
+import { parseStamp } from './offleaseSla.service.js';
 
-/** The FMS workbook is already configured for its Consolidate tab; STAGE-8
- *  lives in the same spreadsheet, so the ID is reused rather than re-declared. */
-const S8_SSID = EXTERNAL_SPREADSHEETS.CONSOLIDATE.ssId;
-const S8_TAB = 'STAGE-8';
+const S8_TAB = SHEETS.FMS_STAGE8;
+const S9_TAB = SHEETS.FMS_STAGE9;
+const S10_TAB = SHEETS.FMS_STAGE10;
 
 /* Fixed column positions, confirmed against the live sheet's header row. */
 const S8 = {
@@ -38,32 +53,12 @@ const S8 = {
    NOTE: STAGE-9 has NO status column. The nearest thing to "where has this
    got to" is the transport detail itself — loading date, vehicle, LR number —
    plus its Timestamp, which is used as Last Updated. */
-const S9_TAB = 'STAGE-9';
 const S9 = {
   TIMESTAMP: 2, DO_NUMBER: 16, LOADING_DATE: 17, VEHICLE: 18, LR_NO: 19, DEST_CITY: 22,
   MOVEMENT_TYPE: 29, CONTAINER: 31, CLIENT: 36, TRANSPORTER: 8
 };
 
 const OFFLEASE = 'offlease';
-/* Keys are versioned: the cached objects ARE the shape this module returns, so
-   changing that shape must not let a live process keep serving the old one for
-   another five minutes. Bump the suffix whenever the mapped fields change. */
-const CACHE_KEY = 'offlease:stage8-movements:v7';
-const S9_CACHE_KEY = 'offlease:stage9-movements:v8';
-/* This is the CEILING on staleness, not the only path to freshness:
-   refreshFmsCaches() (below) is run every 5 minutes by jobs/index.js (reverted
-   from 1 minute 2026-08-20 — that cadence was blowing through the Sheets API's
-   per-minute read quota, see jobs/index.js's header comment), so in practice a
-   change in the FMS workbook is visible within 5 minutes without anyone
-   opening Stage 2. This TTL only matters if that job is disabled or falls
-   behind — a stale-but-present value beats a failed read on a quota that is
-   currently exhausted.
-
-   In SECONDS: cachePut takes a TTL in seconds and multiplies by 1000 itself.
-   This was written `30 * 60 * 1000`, which asked for 1.8 million seconds
-   (~21 days) — STAGE-8/9/10 were read once per process and then frozen, so no
-   FMS change reached Stage 2 until the server restarted. */
-const CACHE_TTL_SECONDS = 30 * 60;
 
 /** Container numbers are compared on alphanumerics, case-insensitively. */
 const normContainer = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -121,35 +116,6 @@ export function clientMatches(a, b) {
   return editDistance(x, y, shortest >= 8 ? 2 : 1) <= (shortest >= 8 ? 2 : 1);
 }
 
-/**
- * The whole sheet row as [header, value] pairs, using the tab's own header
- * text. Empty cells are dropped — these tabs are wide (32 and 78 columns) and
- * most are blank on any given row, so listing them would bury the few that
- * carry anything.
- */
-/* "Delivery Order" (column G) is a link in the sheet, but values.get returns
-   only its display text, "View DO". The URL lives in the cell's formula, so
-   that ONE column is re-read with FORMULA rendering — a narrow read, because
-   under FORMULA every date would come back as a serial number. */
-const S8_DO_COL_A1 = 'G2:G';
-const HYPERLINK_RE = /^\s*=\s*HYPERLINK\(\s*"([^"]+)"/i;
-
-/** Row index -> URL, for rows whose Delivery Order cell is a hyperlink. */
-async function readDeliveryOrderLinks() {
-  try {
-    const cells = await getRange(S8_TAB, S8_DO_COL_A1, S8_SSID, 'FORMULA');
-    return cells.map((c) => {
-      const m = HYPERLINK_RE.exec(safeStr(c?.[0]));
-      return m ? m[1] : '';
-    });
-  } catch (e) {
-    /* The text still shows without it — a missing link is a degraded card,
-       not a broken one. */
-    console.error('[STAGE-8] delivery-order links unavailable:', e?.message || e);
-    return [];
-  }
-}
-
 /** _APPROVER_1..3 hold a whole JSON approval object — email, name, comments,
  *  taskId, timestamp, status, hasNext. Only the status is wanted; the rest is
  *  an unreadable wall of text that overflows the card. */
@@ -176,6 +142,12 @@ function approverStatus(value) {
   }
 }
 
+/**
+ * The whole sheet row as [header, value] pairs, using the tab's own header
+ * text. Empty cells are dropped — these tabs are wide (32 and 78 columns) and
+ * most are blank on any given row, so listing them would bury the few that
+ * carry anything.
+ */
 function allFields(headers, row) {
   const out = [];
   for (let i = 0; i < headers.length; i++) {
@@ -188,73 +160,13 @@ function allFields(headers, row) {
   return out;
 }
 
-/** Every Offlease row in STAGE-8, newest last as the sheet holds them. */
-/**
- * LAST GOOD RESULT, kept for the life of the process and never expired.
- *
- * The TTL cache decides when to REFRESH; this decides what to serve when that
- * refresh fails. On a quota-exhausted project a read fails often, and throwing
- * away a perfectly good copy of a sheet that changes a few times a day — only
- * to show the user an error — is the wrong trade every time. Stale movement
- * data is worth immeasurably more than no movement data.
- */
-const lastGood = new Map();
-
-/* ...and mirrored to disk, so it survives a restart.
- *
- * An in-memory copy is lost every time nodemon reloads, and on a quota-dead
- * project the next read fails — so the screen goes blank again and stays blank
- * until quota frees up, which may be hours. Persisting means these sheets need
- * to be read successfully ONCE, ever, and the data keeps showing regardless of
- * quota. Freshness still comes from the normal TTL refresh whenever a read
- * does succeed; this is purely the floor beneath it. */
-const DISK_DIR = path.join(process.cwd(), '.cache');
-
-function diskPath(key) {
-  return path.join(DISK_DIR, `${key.replace(/[^a-z0-9]+/gi, '_')}.json`);
-}
-
-function readDisk(key) {
-  try {
-    return JSON.parse(fs.readFileSync(diskPath(key), 'utf8'));
-  } catch {
-    return null;   // absent or unreadable is simply "no floor yet"
-  }
-}
-
-function writeDisk(key, data) {
-  try {
-    fs.mkdirSync(DISK_DIR, { recursive: true });
-    fs.writeFileSync(diskPath(key), JSON.stringify(data));
-  } catch (e) {
-    console.warn('[FMS-CACHE] could not persist', key, e?.message || e);
-  }
-}
-
-/** Last good copy: memory first, then disk. */
-function getLastGood(key) {
-  if (lastGood.has(key)) return lastGood.get(key);
-  const fromDisk = readDisk(key);
-  if (fromDisk) lastGood.set(key, fromDisk);
-  return fromDisk;
-}
-
-function setLastGood(key, data) {
-  lastGood.set(key, data);
-  writeDisk(key, data);
-}
-
-async function readOffleaseRows(force = false) {
-  const hit = !force && cacheGet(CACHE_KEY);
-  if (hit) return hit;
-
-  const [{ headers, rows }, doLinks] = await Promise.all([
-    getSheetData(S8_TAB, S8_SSID, 'A1:AZ'),
-    readDeliveryOrderLinks()
-  ]);
-  /* Both reads start at sheet row 2, so index i is the same row in each. */
-  const out = rows
-    .map((r, i) => (doLinks[i] ? Object.assign([...r], { [S8.DELIVERY_ORDER]: doLinks[i] }) : r))
+/** Every Offlease row in STAGE-8, newest last as the sheet holds them. The
+ *  "Delivery Order" hyperlink column is already resolved to its real URL by
+ *  the reconcile job (see sheetsReconcile.job.js's _enrichStage8DeliveryOrderLinks)
+ *  before it ever reaches Mongo, so no second live call is needed for it here. */
+async function readOffleaseRows() {
+  const { headers, rows } = await getSheetDataFromMongo(S8_TAB);
+  return rows
     .filter((r) => safeStr(r[S8.MOVEMENT_TYPE]).trim().toLowerCase() === OFFLEASE)
     .map((r) => ({
       containerNo: safeStr(r[S8.CONTAINER]).trim(),
@@ -269,10 +181,16 @@ async function readOffleaseRows(force = false) {
       fields: allFields(headers, r)
     }))
     .filter((r) => r.containerNo);   // a movement with no container cannot be matched
+}
 
-  cachePut(CACHE_KEY, out, CACHE_TTL_SECONDS);
-  setLastGood(CACHE_KEY, out);
-  return out;
+/**
+ * Every STAGE-8 row with Movement Type = Offlease (readOffleaseRows already
+ * filters to this — see above). Used by offlease.service.js's
+ * autoCreateOffLeaseFromFms to scan for containers not yet linked into
+ * Off-Lease Stage 2. Async now (Mongo-backed) — was sync/cache-only before.
+ */
+export async function getAllOffleaseMovementRows() {
+  return readOffleaseRows();
 }
 
 /* STAGE-10 is site delivery/unloading. It holds NO container number, so it is
@@ -284,41 +202,68 @@ async function readOffleaseRows(force = false) {
    Number ("1003020"), despite the column NAMES saying the opposite. Both are
    therefore offered as candidates and whichever matches wins; `matchedOn`
    records which, so this can be tightened once the data says. */
-const S10_TAB = 'STAGE-10';
 const S10 = { DO_NUMBER: 3 };
-const S10_CACHE_KEY = 'offlease:stage10-delivery:v2';
 
 /** DO numbers are written inconsistently ("QAS 549", "QAS-549", "qas549"), so
  *  they are compared on alphanumerics, upper-cased. */
 const normDo = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
 
-async function readStage10Rows(force = false) {
-  const hit = !force && cacheGet(S10_CACHE_KEY);
-  if (hit) return hit;
-
-  const { headers, rows } = await getSheetData(S10_TAB, S8_SSID, 'A1:BZ');
+async function readStage10Rows() {
+  const { headers, rows } = await getSheetDataFromMongo(S10_TAB);
   /* `keys` is EVERY cell in the row, normalised. The DO number is not reliably
      in the "DO Number" column — that column carries values like "QAS 549"
      while the number we join on (1003020) sits elsewhere in the row. Rather
      than guess which column, the whole row is searched. A DO number is a
      distinctive 7-digit value, so a false hit against some other cell is
      vanishingly unlikely, and matching nothing was the certain alternative. */
-  const out = rows
+  return rows
     .map((r) => ({
       doNumber: safeStr(r[S10.DO_NUMBER]).trim(),
       keys: r.map(normDo).filter(Boolean),
       fields: allFields(headers, r)
     }))
     .filter((r) => r.keys.length);
+}
 
-  cachePut(S10_CACHE_KEY, out, CACHE_TTL_SECONDS);
-  setLastGood(S10_CACHE_KEY, out);
-  return out;
+/**
+ * BUG FOUND AND FIXED 2026-08-27: a blank booking/DO cell is written as the
+ * literal text "NA" throughout these sheets, not left empty — normDo('NA')
+ * is a real, non-empty token ('NA'), so it used to survive the old
+ * `.filter(Boolean)` and get searched for as if it were a genuine DO number.
+ * Since STAGE-10 rows are matched by scanning EVERY cell in the row (see
+ * readStage10Rows — the true DO can sit in any column), and "NA" appears
+ * SOMEWHERE in most STAGE-10 rows (any other blank field), this spuriously
+ * matched the LAST such row in the whole sheet — a completely unrelated
+ * container's delivery data. Confirmed on CICU4881946 / August Assortments:
+ * its real DO is 1002932 (correct in STAGE-8 and STAGE-9), but its
+ * bookingOrderNo is blank ("NA"), so Site Delivery showed a different
+ * container's row whose only real connection was an unrelated "NA" cell —
+ * matchedOn: 'NA', not a real DO number at all.
+ *
+ * A real DO number is a distinctive several-digit code (1002932, 1003032,
+ * ... — 6+ characters in every example seen); MIN_DO_LEN excludes short
+ * placeholder tokens ("NA", "-", "NIL") generically, without needing an
+ * exhaustive blocklist of every placeholder spelling this data uses.
+ */
+const MIN_DO_LEN = 5;
+
+/** Last row whose own `field` (a clean, single-cell DO number — unlike
+ *  STAGE-10, which has none, hence matchByDo's whole-row scan) matches any
+ *  of the candidate keys. Used to chain STAGE-9 off STAGE-8's own DO. */
+function matchByDoField(rows, candidates, field) {
+  const wanted = (candidates || []).map(normDo).filter((w) => w.length >= MIN_DO_LEN);
+  if (!wanted.length) return null;
+  let found = null;
+  for (const r of rows) {
+    const v = normDo(r[field]);
+    if (v && wanted.includes(v)) found = r; // later rows are more recent
+  }
+  return found;
 }
 
 /** Last STAGE-10 row whose DO number matches any of the candidate keys. */
 function matchByDo(rows, candidates) {
-  const wanted = (candidates || []).map(normDo).filter(Boolean);
+  const wanted = (candidates || []).map(normDo).filter((w) => w.length >= MIN_DO_LEN);
   if (!wanted.length) return null;
   let found = null;
   for (const r of rows) {
@@ -330,12 +275,9 @@ function matchByDo(rows, candidates) {
 }
 
 /** Every Offlease row in STAGE-9 — the transport-execution detail. */
-async function readStage9OffleaseRows(force = false) {
-  const hit = !force && cacheGet(S9_CACHE_KEY);
-  if (hit) return hit;
-
-  const { headers, rows } = await getSheetData(S9_TAB, S8_SSID, 'A1:BZ');
-  const out = rows
+async function readStage9OffleaseRows() {
+  const { headers, rows } = await getSheetDataFromMongo(S9_TAB);
+  return rows
     .filter((r) => safeStr(r[S9.MOVEMENT_TYPE]).trim().toLowerCase() === OFFLEASE)
     .map((r) => ({
       containerNo: safeStr(r[S9.CONTAINER]).trim(),
@@ -353,22 +295,76 @@ async function readStage9OffleaseRows(force = false) {
       fields: allFields(headers, r)
     }))
     .filter((r) => r.containerNo);
-
-  cachePut(S9_CACHE_KEY, out, CACHE_TTL_SECONDS);
-  setLastGood(S9_CACHE_KEY, out);
-  return out;
 }
 
-/** Last row for this container, ignoring client. See the note in
- *  getFmsForContainer on why client name is not a usable key here. */
-function matchByContainer(rows, containerNo) {
+/**
+ * Last row for this container. See the note in getFmsForContainer on why
+ * client name ALONE is not a usable key across these sheets — used here
+ * only as a tie-breaker, never as the primary filter.
+ *
+ * `sinceMs` + `dateField`: a container is reused across different clients
+ * over its lifetime (the same "off-lease" workflow keeps reusing box
+ * numbers — see e.g. TRIU6681671, GESU9440432 elsewhere in this codebase),
+ * so this sheet can hold a row from a PREVIOUS, already-closed off-lease
+ * cycle for the same container. Matching by container alone with no time
+ * boundary picked up whichever row happened to be last in the sheet —
+ * confirmed 2026-08-27 on MYRU4513729: the CURRENT cycle (client "Gujarat
+ * Co-operative Milk...") showed a January STAGE-8/9 record that actually
+ * belonged to an EARLIER, unrelated cycle for client "Inderdeep Infra..." —
+ * wrong client shown, and Stage 2 (Transportation) auto-completed itself
+ * from that stale data even though the current cycle's own transport leg
+ * hadn't happened yet.
+ *
+ * When `sinceMs` is given: only rows on/after it (the current cycle's own
+ * Stage 1 completion) are considered. Within that window, a row whose
+ * client fuzzy-matches `clientName` (clientMatches — tolerant of spacing/
+ * punctuation, but not of a true site alias) is preferred as an extra
+ * safety check; otherwise the last in-window row is used. No in-window row
+ * at all returns null — "nothing recorded yet for this cycle" is correct
+ * and better than showing a stale one.
+ *
+ * `sinceMs == null` (boundary not known, e.g. Stage 1 timestamp missing or
+ * unparsed) falls back to the original "last row overall" behaviour, so a
+ * lookup failure never makes an existing working case regress.
+ */
+function matchByContainer(rows, containerNo, sinceMs, dateField = 'timestamp', clientName) {
   const key = normContainer(containerNo);
   if (!key) return null;
-  let found = null;
-  for (const r of rows) {
-    if (normContainer(r.containerNo) === key) found = r;   // later rows are more recent
+  const matches = rows.filter((r) => normContainer(r.containerNo) === key);
+  if (!matches.length) return null;
+  if (sinceMs == null) return matches[matches.length - 1];
+
+  const inCycle = matches.filter((r) => {
+    const ts = parseStamp(r[dateField]);
+    return ts && ts.getTime() >= sinceMs;
+  });
+
+  if (inCycle.length && clientName) {
+    const clientMatch = inCycle.filter((r) => clientMatches(r.clientName, clientName));
+    if (clientMatch.length) return clientMatch[clientMatch.length - 1];
   }
-  return found;
+  if (inCycle.length) return inCycle[inCycle.length - 1];
+
+  /* FIX 2026-08-27, found while verifying the cycle-boundary fix against
+     real data: this app's own Stage 1 completion timestamp and the external
+     FMS workbook's own event timestamps are two INDEPENDENT systems, not
+     guaranteed to agree on ordering. Confirmed on TRIU6681671 — its 63Ideas
+     Infolabs off-lease cycle's own Stage 1 shows complete 07/08/2026, but
+     that SAME client's STAGE-8/9 movement events are dated 03/07 and
+     07/07/2026, a month EARLIER. A strict "movement must be on/after Stage 1"
+     rule would wrongly hide this genuinely-correct data as "no record yet".
+     A client-name match (clientMatches — tolerant, but not of a true site
+     alias) is a strong enough independent signal to use as a rescue when the
+     date window finds nothing, since it's the exact same disambiguator that
+     already protects the container-only case elsewhere in this file. Still
+     null (not "last row overall") when no client name is available to check
+     — that fallback is what caused the original cross-cycle bug in the
+     first place. */
+  if (clientName) {
+    const clientMatch = matches.filter((r) => clientMatches(r.clientName, clientName));
+    if (clientMatch.length) return clientMatch[clientMatch.length - 1];
+  }
+  return null;
 }
 
 /** Last row matching container + client, or null. Shared by both tabs. */
@@ -398,64 +394,60 @@ export async function findOffleaseMovement(containerNo, clientName, rows) {
 
 /**
  * The FMS chain for ONE container — the same three lookups the Stage 2 grid
- * does, for the container-detail screen. Shares the cache and the stale
- * fallback, so opening a container costs no extra Sheets read.
+ * does, for the container-detail screen. Reads Mongo (fast, always
+ * available) rather than a live-Sheets cache, so this never fails on quota.
+ *
+ * `cycleStartMs`: the current off-lease cycle's own Stage 1 completion time
+ * (epoch ms), if known. See matchByContainer's doc comment for why this is
+ * required to avoid attaching a PREVIOUS, unrelated cycle's movement/
+ * transport data to the current one.
  */
-export async function getFmsForContainer(containerNo, clientName) {
-  /* CACHE AND DISK ONLY — this never triggers a live read.
-   *
-   * The container-detail endpoint already reads several sheets live; adding
-   * three more pushed it past the quota circuit breaker and took the whole
-   * modal down with it. The Stage 2 grid is what refreshes these sheets, and
-   * the snapshot it leaves on disk is what this reads. Worst case a container
-   * detail shows slightly older transport data — infinitely better than
-   * failing the page. */
-  const pick = (key) => cacheGet(key) || getLastGood(key);
+export async function getFmsForContainer(containerNo, clientName, cycleStartMs) {
+  const [rows8, rows9, rows10] = await Promise.all([
+    readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()
+  ]);
 
-  const rows8 = pick(CACHE_KEY);
-  const rows9 = pick(S9_CACHE_KEY);
-  const rows10 = pick(S10_CACHE_KEY);
+  /* CONTAINER first (see matchByContainer's doc comment for the full
+   * cycle-boundary + client-rescue logic) — client name alone is not a
+   * usable key across these sheets: STAGE-8 records GSOU6384240 under
+   * "Dr Reddy C JNPT" where the tracking sheet says "Dr Reddy's
+   * Laboratories Ltd CTO3" — the same customer under a site alias, which
+   * no normalisation or edit distance can bridge. */
+  const movement = matchByContainer(rows8, containerNo, cycleStartMs, 'timestamp', clientName);
 
-  /* CONTAINER ONLY, matching getDeliveredKeys.
-   *
-   * Client name is not a usable key across these sheets: STAGE-8 records
-   * GSOU6384240 under "Dr Reddy C JNPT" where the tracking sheet says
-   * "Dr Reddy's Laboratories Ltd CTO3" — the same customer under a site alias,
-   * which no normalisation or edit distance can bridge. A container number is
-   * globally unique and the rows are already filtered to Movement Type =
-   * Offlease, so the container alone identifies the record.
-   *
-   * This also removes a real inconsistency: progression used container-only
-   * while these cards used container + client, so a container could be
-   * released to Stage 3 while its own panel reported "No record". */
-  const movement = rows8 ? (matchByContainer(rows8, containerNo) || null) : undefined;
-  const transport = rows9 ? (matchByContainer(rows9, containerNo) || null) : undefined;
+  /* STAGE-9: chained off the MOVEMENT's own DO number once Stage 8 has
+   * identified the shipment, instead of independently re-matching
+   * container+client here too. Confirmed 2026-08-27/28 (GSOU6384240,
+   * CICU4881946) that when Stage 8 and Stage 9 are genuinely the same
+   * shipment, they always carry the identical DO — so once Stage 8 resolves,
+   * a DO lookup on Stage 9 is exact and unambiguous, with no alias risk left
+   * to fail on. Falls back to the old independent container+client match
+   * when Stage 8 itself didn't resolve or carries no usable DO. */
+  const moveDoKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo].filter(Boolean);
+  const chained = moveDoKeys.length ? matchByDoField(rows9, moveDoKeys, 'doNumber') : null;
+  const transport = chained || matchByContainer(rows9, containerNo, cycleStartMs, 'lastUpdated', clientName);
+
   const doKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo, transport?.doNumber].filter(Boolean);
-  const delivery = rows10 ? (matchByDo(rows10, doKeys) || null) : undefined;
+  const delivery = matchByDo(rows10, doKeys);
 
   return { movement, transport, delivery };
 }
 
 /**
- * "CONTAINER|client" keys for every container whose SITE DELIVERY is recorded
- * in STAGE-10 — the signal that its Stage 2 transport leg is finished and it
- * belongs in Stage 3 (Gate In).
- *
- * STAGE-10 carries no container number, so the chain is: STAGE-8 (or STAGE-9)
- * gives the container its DO number, and a STAGE-10 row against that DO means
- * delivered. Cache and disk only — this runs on every stage-list load and must
- * never trigger a live read.
+ * Container -> every delivery-qualifying event's timestamp (epoch ms) it has
+ * ever had. A Map of arrays, not a flat Set — see isDeliveredSince below for
+ * why a bare "has this container ever been delivered" is unsafe: a
+ * container reused across off-lease cycles (e.g. MYRU4513729 — see
+ * getFmsForContainer's doc comment for the full account, found 2026-08-27)
+ * would read as permanently "delivered" off ITS OLDEST cycle's event,
+ * wrongly bypassing Stage 2 for every LATER cycle too, even one whose own
+ * transport leg hadn't happened yet.
  */
 export async function getDeliveredKeys() {
-  const pick = (key) => cacheGet(key) || getLastGood(key);
-  const rows8 = pick(CACHE_KEY);
-  const rows9 = pick(S9_CACHE_KEY);
-  const rows10 = pick(S10_CACHE_KEY);
-  const keys = new Set();
-  /* ALL THREE tabs are required, so all three must have been read. Releasing
-     on a partial view would complete Stage 2 for a container whose missing leg
-     simply had not loaded. */
-  if (!rows8 || !rows9 || !rows10) return keys;
+  const [rows8, rows9, rows10] = await Promise.all([
+    readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()
+  ]);
+  const map = new Map();
 
   /* Keyed on CONTAINER ONLY, not container + client.
    *
@@ -470,132 +462,75 @@ export async function getDeliveredKeys() {
      booked, transported and delivered. Previously any one of 8 or 9 plus a
      STAGE-10 hit was enough, which released containers whose transport leg had
      not been recorded and let Stage 3 open too early. */
-  const in8 = new Set((rows8 || []).map((r) => normContainer(r.containerNo)).filter(Boolean));
-  const in9 = new Set((rows9 || []).map((r) => normContainer(r.containerNo)).filter(Boolean));
+  const in8 = new Set(rows8.map((r) => normContainer(r.containerNo)).filter(Boolean));
+  const in9 = new Set(rows9.map((r) => normContainer(r.containerNo)).filter(Boolean));
 
-  for (const src of [rows8, rows9]) {
+  /* STAGE-10 itself carries no date of its own (see readStage10Rows) — the
+     matching STAGE-8/STAGE-9 row's own timestamp is used as this delivery
+     event's date, which is sound: STAGE-10 only ever confirms a movement
+     that STAGE-8/9 already recorded, so that movement's own date is when
+     this delivery cycle happened. */
+  for (const [src, dateField] of [[rows8, 'timestamp'], [rows9, 'lastUpdated']]) {
     for (const r of src) {
       const k = normContainer(r.containerNo);
-      if (!k || keys.has(k)) continue;
+      if (!k) continue;
       if (!in8.has(k) || !in9.has(k)) continue;          // must be in BOTH 8 and 9
       const dos = [r.deliveryOrderNo, r.bookingOrderNo, r.doNumber].filter(Boolean);
       if (!dos.length) continue;
       if (!matchByDo(rows10, dos)) continue;              // ...and delivered in 10
-      keys.add(k);
+      const ts = parseStamp(r[dateField]);
+      if (!ts) continue;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(ts.getTime());
     }
   }
-  return keys;
+  return map;
 }
 
 /**
- * Appends STAGE-8 movement columns to a getOffLeaseData() result, in place.
- *
- * Rows with no matching Offlease movement keep the record but show blanks —
- * dropping them would hide containers that are genuinely pending transport
- * simply because FMS has not logged the movement yet.
- *
- * Best-effort: STAGE-8 is an external sheet on an exhausted quota, and Stage 2
- * must still list its containers if that read fails.
+ * Was this container delivered ON/AFTER `sinceMs` (its CURRENT off-lease
+ * cycle's own Stage 1 completion)? `sinceMs == null` (boundary not known)
+ * falls back to "ever delivered at all" — the original behaviour — so a
+ * missing boundary never makes an existing working case regress.
  */
-/**
- * Proactively re-reads STAGE-8, STAGE-9 and STAGE-10 and refreshes their
- * caches, regardless of whether the current TTL has expired.
- *
- * Without this, a row added to the FMS workbook only appears here once
- * someone happens to open Stage 2 (or a container lookup) AFTER the 30-minute
- * TTL has lapsed — until then it is invisible even though the source data is
- * already correct. Confirmed 2026-08-19: a STAGE-10 delivery entered at
- * 18:18 still showed "No record" in the Stage 2 card an hour later, because
- * nothing had triggered a re-read since the last cache fill.
- *
- * Run on a schedule (jobs/index.js, every 5 minutes) rather than on-demand,
- * so freshness does not depend on user traffic. The three reads are
- * independent — one failing (e.g. a transient quota hit) must not stop the
- * other two from refreshing, so they are awaited separately rather than with
- * Promise.all, and each already falls back to its own last-good/disk copy on
- * failure (see readOffleaseRows/readStage9OffleaseRows/readStage10Rows).
- */
-export async function refreshFmsCaches() {
-  const results = await Promise.allSettled([
-    readOffleaseRows(true),
-    readStage9OffleaseRows(true),
-    readStage10Rows(true)
-  ]);
-  const [s8, s9, s10] = results;
-  const summary = {
-    stage8: s8.status === 'fulfilled' ? s8.value.length : null,
-    stage9: s9.status === 'fulfilled' ? s9.value.length : null,
-    stage10: s10.status === 'fulfilled' ? s10.value.length : null
-  };
-  for (const [tab, r] of [['STAGE-8', s8], ['STAGE-9', s9], ['STAGE-10', s10]]) {
-    if (r.status === 'rejected') console.error(`[FMS-SYNC] ${tab} refresh failed:`, r.reason?.message || r.reason);
-  }
-  return summary;
+export function isDeliveredSince(deliveredMap, containerKey, sinceMs) {
+  const arr = deliveredMap?.get ? deliveredMap.get(containerKey) : null;
+  if (!arr || !arr.length) return false;
+  if (sinceMs == null) return true;
+  return arr.some((t) => t >= sinceMs);
 }
 
+/**
+ * Appends STAGE-8/9/10 movement columns to a getOffLeaseData() result, in
+ * place. Rows with no matching Offlease movement keep the record but show
+ * blanks — dropping them would hide containers that are genuinely pending
+ * transport simply because FMS has not logged the movement yet.
+ */
 export async function enrichWithStage8Movements(result) {
-  /* Attached as OBJECTS on each row, not appended as grid columns. Ten extra
-     columns made the table unreadable and most of them are blank for any row
-     FMS has not logged yet — they belong in the record's own view, which is
-     where a reader goes for detail. */
-  /* allSettled, not all: the two tabs are independent, and on an exhausted
-     quota one read routinely fails while the other succeeds. Promise.all threw
-     both away, so a STAGE-9 timeout silently cost the user their STAGE-8 data
-     as well. */
-  const [r8, r9, r10] = await Promise.allSettled([
+  const [rows8, rows9, rows10] = await Promise.all([
     readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()
   ]);
-
-  /* On failure fall back to the last good copy. Only when there has never been
-     one does the caller get nothing — which on a fresh process means the very
-     first read has to land, but every read after that is protected. */
-  const settle = (res, key, tab) => {
-    if (res.status === 'fulfilled') return { rows: res.value, stale: false };
-    console.error(`[${tab}]`, res.reason?.message || res.reason);
-    const kept = getLastGood(key);
-    if (kept) {
-      console.warn(`[${tab}] read failed — serving last good copy (${kept.length} rows)`);
-      return { rows: kept, stale: true };
-    }
-    return { rows: null, stale: false };
-  };
-
-  const s8 = settle(r8, CACHE_KEY, S8_TAB);
-  const s9 = settle(r9, S9_CACHE_KEY, S9_TAB);
-  const s10 = settle(r10, S10_CACHE_KEY, S10_TAB);
-  const rows8 = s8.rows;
-  const rows9 = s9.rows;
-  const rows10 = s10.rows;
 
   for (const item of result.data || []) {
     const container = item.row?.[0];
     const client = item.row?.[4];
-    /* null means "looked, found nothing"; undefined means "could not look".
-       The UI shows a different message for each — reporting a failed lookup as
-       "no record found" told the user their data did not exist when in fact it
-       had not been read. */
-    item.movement = rows8 ? (matchRow(rows8, container, client) || null) : undefined;
-    item.transport = rows9 ? (matchRow(rows9, container, client) || null) : undefined;
-    /* STAGE-10 hangs off the STAGE-8 row's DO number, so it can only be
-       reached for containers that matched STAGE-8 in the first place. */
-    /* Every DO-ish number we know for this container, from either tab. The
-       three sheets do not agree on which one they carry, so all are offered
-       and whichever hits wins. */
+    item.movement = matchRow(rows8, container, client);
+    item.transport = matchRow(rows9, container, client);
+    /* STAGE-10 hangs off the STAGE-8/9 row's DO number, so it can only be
+       reached for containers that matched one of those first. Every DO-ish
+       number we know for this container, from either tab, is offered as a
+       candidate — the three sheets do not agree on which one they carry. */
     const doKeys = [
       item.movement?.deliveryOrderNo,
       item.movement?.bookingOrderNo,
       item.transport?.doNumber
     ].filter(Boolean);
-    item.delivery = rows10 ? (matchByDo(rows10, doKeys) || null) : undefined;
+    item.delivery = matchByDo(rows10, doKeys);
   }
 
   result.movementSource = `${S8_TAB} + ${S9_TAB} (Movement Type = Offlease)`;
   result.movementMatched = (result.data || []).filter((i) => i.movement).length;
   result.transportMatched = (result.data || []).filter((i) => i.transport).length;
-  if (!rows8) result.movementError = r8.reason?.message || `Could not read ${S8_TAB}`;
-  if (!rows9) result.transportError = r9.reason?.message || `Could not read ${S9_TAB}`;
   result.deliveryMatched = (result.data || []).filter((i) => i.delivery).length;
-  if (!rows10) result.deliveryError = r10.reason?.message || `Could not read ${S10_TAB}`;
-  result.movementStale = s8.stale || s9.stale || s10.stale;
   return result;
 }

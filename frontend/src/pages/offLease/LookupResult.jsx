@@ -1,8 +1,8 @@
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import {
-  buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices,
-  HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD, slaText
+  buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices, buildEstimateTotals,
+  HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD, ESTIMATE_HEAD, slaText, money
 } from './lookupModel.js';
 import styles from './LookupResult.module.css';
 
@@ -33,6 +33,15 @@ export function LookupResult({ result }) {
   const currentStageNum = stages.find((s) => !s.done)?.stage;
   const approvalLower = String(approvalStatus || '').trim().toLowerCase();
   const filledStages = stages.filter((s) => s.done);
+
+  /* Repair estimate summary sits directly above the Stage 3 card — same
+     anchoring as the PDF/Excel export (lookupExport.js): the reader wants the
+     chargeable total before the point-by-point detail that justifies it, but
+     after whatever earlier stages are already filled in. Falls back to after
+     everything else when Stage 3 itself hasn't been completed yet, so the
+     estimate still shows up rather than vanishing. */
+  const estimateTotals = buildEstimateTotals(result);
+  const stage3Idx = filledStages.findIndex((s) => s.stage === 3);
 
   return (
     <div className={styles.wrap}>
@@ -84,49 +93,105 @@ export function LookupResult({ result }) {
             <>
               <h4 className={styles.sectionTitle}>Filled Stage Data</h4>
               <div className={styles.filledStack}>
-                {filledStages.map((s) => (
-                  <div key={s.stage} className={styles.filledCard}>
-                    <div className={styles.filledHeader}>
-                      <span className={styles.filledBadge}>{s.displayStage ? `Stage ${s.displayStage}` : 'Retired'}</span>
-                      <span className={styles.filledTitle}>{s.label}</span>
-                      <span className={styles.filledStatus}>{s.skipped ? 'Skipped' : 'Completed'}</span>
-                      <span className={styles.filledMeta}>
-                        {formatActionTimestamp(s.timestamp)}{s.user ? ` · ${s.user}` : ''}
-                      </span>
-                    </div>
-                    {/* Skipped means nothing actually happened at this stage —
-                        the fields underneath it (repair verdict, remarks,
-                        photos) describe the Gate-In event that routed AROUND
-                        it, not an inspection that occurred here, so showing
-                        them under "Skipped" reads as a completed checklist
-                        that never happened. The status badge alone is the
-                        whole story. */}
-                    {!s.skipped && s.fields.length > 0 && (
-                      <div className={styles.filledGrid}>
-                        {s.fields.map((f) => (
-                          <div key={f.label} className={styles.item}>
-                            <span className={styles.label}>{f.label}</span>
-                            <span className={styles.value}>{renderCellValue(f.value)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {!s.skipped && s.inspection?.length > 0 && (
-                      <ChecklistTable title="Container Inspection Checklist" columnLabel="Instruction Point" points={s.inspection} />
-                    )}
-                    {!s.skipped && s.machine?.length > 0 && (
-                      <ChecklistTable title="Machine Check" columnLabel="Machine Point" points={s.machine} />
-                    )}
-                    {!s.skipped && s.fields.length === 0 && !s.inspection?.length && !s.machine?.length && (
-                      <p className={styles.filledEmpty}>No fields recorded for this stage.</p>
-                    )}
-                  </div>
-                ))}
+                {filledStages.flatMap((s, i) => {
+                  const nodes = [];
+                  if (estimateTotals && i === stage3Idx) {
+                    nodes.push(<EstimateSummaryTable key="estimate-summary" totals={estimateTotals} />);
+                  }
+                  nodes.push(<FilledStageCard key={s.stage} stage={s} />);
+                  return nodes;
+                })}
+                {estimateTotals && stage3Idx === -1 && <EstimateSummaryTable key="estimate-summary" totals={estimateTotals} />}
               </div>
             </>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function FilledStageCard({ stage: s }) {
+  return (
+    <div className={styles.filledCard}>
+      <div className={styles.filledHeader}>
+        <span className={styles.filledBadge}>{s.displayStage ? `Stage ${s.displayStage}` : 'Retired'}</span>
+        <span className={styles.filledTitle}>{s.label}</span>
+        <span className={styles.filledStatus}>{s.skipped ? 'Skipped' : 'Completed'}</span>
+        <span className={styles.filledMeta}>
+          {formatActionTimestamp(s.timestamp)}{s.user ? ` · ${s.user}` : ''}
+        </span>
+      </div>
+      {/* Skipped means nothing actually happened at this stage — the fields
+          underneath it (repair verdict, remarks, photos) describe the
+          Gate-In event that routed AROUND it, not an inspection that
+          occurred here, so showing them under "Skipped" reads as a
+          completed checklist that never happened. The status badge alone is
+          the whole story. */}
+      {!s.skipped && s.fields.length > 0 && (
+        <div className={styles.filledGrid}>
+          {s.fields.map((f) => (
+            <div key={f.label} className={styles.item}>
+              <span className={styles.label}>{f.label}</span>
+              <span className={styles.value}>{renderCellValue(f.value)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {!s.skipped && s.inspection?.length > 0 && (
+        <ChecklistTable title="Container Inspection Checklist" columnLabel="Instruction Point" points={s.inspection} />
+      )}
+      {!s.skipped && s.machine?.length > 0 && (
+        <ChecklistTable title="Machine Check" columnLabel="Machine Point" points={s.machine} />
+      )}
+      {!s.skipped && s.fields.length === 0 && !s.inspection?.length && !s.machine?.length && (
+        <p className={styles.filledEmpty}>No fields recorded for this stage.</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * On-screen equivalent of the PDF/Excel export's Repair Estimate Summary
+ * (lookupModel.js's buildEstimateTotals) — every chargeable inspection/
+ * machine-check point plus technician labour, so the total is backed by its
+ * own breakdown instead of just being asserted. Condition uses the same
+ * Good/Damage pill styling as ChecklistTable below, for the same reason.
+ */
+function EstimateSummaryTable({ totals }) {
+  return (
+    <div className={styles.filledCard}>
+      <div className={styles.filledHeader}>
+        <span className={styles.filledTitle}>Repair Estimate Summary</span>
+      </div>
+      <div className={styles.histWrap}>
+        <table className={styles.histTable}>
+          <thead>
+            <tr>{ESTIMATE_HEAD.map((h, i) => <th key={h} className={i === ESTIMATE_HEAD.length - 1 ? styles.tRight : ''}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {totals.lines.map((l, i) => {
+              const st = String(l.status).toLowerCase();
+              const tone = st === 'damage' ? styles.inspDamage : st === 'good' ? styles.inspGood : null;
+              return (
+                <tr key={i}>
+                  <td>{l.section}</td>
+                  <td>{l.item}</td>
+                  <td>{tone ? <span className={tone}>{l.status}</span> : (l.status || '—')}</td>
+                  <td>{l.remark || '—'}</td>
+                  <td className={styles.tRight}>₹{money(l.amount)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className={styles.invTotalRow}>
+              <td colSpan={4}>Total Estimate</td>
+              <td className={styles.tRight}>₹{money(totals.total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   );
 }

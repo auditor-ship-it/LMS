@@ -20,12 +20,47 @@
  * transit to Sheets — with no such writes left to protect, they were removed
  * along with writeThrough.service.js and jobs/outboxWorker.js.
  */
-import { getSheetData } from '../services/googleSheets.service.js';
+import { getSheetData, getRange } from '../services/googleSheets.service.js';
 import { getCollection, withTransaction } from '../services/mongo.service.js';
 import { MONGO_SHEET_MAPPING, normalizeKey } from '../config/mongoSheetMapping.js';
+import { SHEETS } from '../config/sheets.config.js';
+import { safeStr } from '../utils/format.js';
 import { logger } from '../utils/logger.js';
 
 const META_ID = '__meta__';
+
+/* STAGE-8's "Delivery Order" column (G) is a hyperlink in the live sheet;
+ * values.get only ever returns its display text ("View DO"), never the
+ * underlying URL — the URL lives in the cell's HYPERLINK() formula, which
+ * needs a separate FORMULA-rendered read to recover. Done once here, at
+ * reconcile time, and baked into the mirrored row — this is exactly the
+ * enrichment stage8.service.js used to do on every live read (readDeliveryOrderLinks);
+ * moving it here means the app itself never needs a second live call for it.
+ * Best-effort: a failure just means this one column keeps its plain "View DO"
+ * text in Mongo — degraded, not broken. */
+const HYPERLINK_RE = /^\s*=\s*HYPERLINK\(\s*"([^"]+)"/i;
+const S8_DELIVERY_ORDER_COL = 6; // 0-based — matches stage8.service.js's S8.DELIVERY_ORDER
+
+async function _enrichStage8DeliveryOrderLinks(rows, ssId) {
+  try {
+    const cells = await getRange(SHEETS.FMS_STAGE8, 'G2:G', ssId, 'FORMULA');
+    return rows.map((row, i) => {
+      const m = HYPERLINK_RE.exec(safeStr(cells[i]?.[0]));
+      return m ? Object.assign([...row], { [S8_DELIVERY_ORDER_COL]: m[1] }) : row;
+    });
+  } catch (e) {
+    logger.error('[SYNC] STAGE-8 delivery-order link enrichment failed (non-fatal, plain text kept):', e?.message || e);
+    return rows;
+  }
+}
+
+/* Per-sheet post-processing hooks, keyed by sheet name — run on the raw rows
+ * right after the fetch, before anything is written to Mongo. Only STAGE-8
+ * needs one today; kept as a map (not a special-case if) so a future sheet
+ * needing the same treatment is a one-line addition. */
+const POST_FETCH_HOOKS = {
+  [SHEETS.FMS_STAGE8]: _enrichStage8DeliveryOrderLinks
+};
 
 /** No reliable natural key exists for this sheet (verified — see
  *  mongoSheetMapping.js) and it has no write-through path in this pass, so
@@ -134,8 +169,16 @@ export async function reconcileSheet(sheetName) {
   if (!mapping || (mapping.naturalKeyColumn == null && !mapping.fullRefresh)) return { sheetName, skipped: true };
 
   logger.info(`[SYNC] Fetching sheet: ${sheetName}`);
-  const { headers, rows } = await getSheetData(sheetName);
+  // mapping.ssId: undefined for every sheet in the main lease-management
+  // spreadsheet (getSheetData defaults to env.googleSheetId); set for
+  // sheets living in a different workbook entirely (the external FMS
+  // workbook's STAGE-8/9/10 — see mongoSheetMapping.js's entries).
+  let { headers, rows } = await getSheetData(sheetName, mapping.ssId);
   logger.info(`[SYNC] Read ${rows.length} rows`);
+
+  const postFetch = POST_FETCH_HOOKS[sheetName];
+  if (postFetch && rows.length) rows = await postFetch(rows, mapping.ssId);
+
   const col = getCollection(sheetName);
   const now = new Date();
 

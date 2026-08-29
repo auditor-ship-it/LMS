@@ -1,5 +1,6 @@
 import { getCollection } from './mongo.service.js';
 import { logger } from '../utils/logger.js';
+import { cacheGetOrLoad } from '../utils/memoryCache.js';
 
 const META_ID = '__meta__';
 
@@ -69,19 +70,43 @@ export async function getMongoRowsWithKeys(sheetName) {
     });
 }
 
+/* PERFORMANCE FIX 2026-08-28: this was completely uncached — every single
+ * call did its own full-collection Mongo scan, no matter how many times the
+ * SAME sheet was read within one request or across near-simultaneous
+ * requests. Fine for a single call site, but this function is now called
+ * from dozens of places across the app (today's whole Mongo-first read
+ * migration), and some real request paths call it for the SAME large sheet
+ * more than once — getOffLeaseContainerDetail alone triggers 4-5 of these,
+ * including Operation sheet (1233 docs), which confirmed at ~4.3s for ONE
+ * read alone. The combined, uncached total pushed some requests past 15-20s,
+ * which the frontend then showed as a generic "quota exhausted" failure —
+ * a performance regression, not an actual Sheets/quota problem.
+ *
+ * Short TTL (8s), no explicit write-side busting: this is a broad,
+ * general-purpose cache for the many lower-stakes/diagnostic/report call
+ * sites that don't already have their own dedicated cache. Call sites where
+ * "write, then read, must show it instantly" actually matters already have
+ * — and keep — their own purpose-built cache with explicit busting
+ * (_deployedRawValues, getApproveData, getOffLeaseDashboardData, ...); nothing
+ * about those changes. 8s bounds the staleness this adds to everything else
+ * to something far smaller than the multi-second delay it removes. */
+const MONGO_RAW_CACHE_TTL_SECS = 8;
+
 export async function getSheetDataFromMongo(sheetName) {
-  const start = process.hrtime.bigint();
-  const col = getCollection(sheetName);
-  const [metaDoc, docs] = await Promise.all([
-    col.findOne({ _id: META_ID }),
-    col.find({ _id: { $ne: META_ID }, deletedAt: null, key: { $exists: true } }).toArray()
-  ]);
-  const headers = metaDoc?.headers || [];
-  const rows = docs.map((d) => d.row || []);
-  const values = headers.length ? [headers, ...rows] : rows;
-  const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-  logger.debug(`[DB] Collection: ${sheetName} | Operation: find (full read) | Returned: ${rows.length} documents | Duration: ${durationMs.toFixed(1)}ms`);
-  return { headers, rows, values };
+  return cacheGetOrLoad(`mongo_raw_v1:${sheetName}`, MONGO_RAW_CACHE_TTL_SECS, async () => {
+    const start = process.hrtime.bigint();
+    const col = getCollection(sheetName);
+    const [metaDoc, docs] = await Promise.all([
+      col.findOne({ _id: META_ID }),
+      col.find({ _id: { $ne: META_ID }, deletedAt: null, key: { $exists: true } }).toArray()
+    ]);
+    const headers = metaDoc?.headers || [];
+    const rows = docs.map((d) => d.row || []);
+    const values = headers.length ? [headers, ...rows] : rows;
+    const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+    logger.debug(`[DB] Collection: ${sheetName} | Operation: find (full read) | Returned: ${rows.length} documents | Duration: ${durationMs.toFixed(1)}ms`);
+    return { headers, rows, values };
+  });
 }
 
 function _colIndexFromLetter(letter) {

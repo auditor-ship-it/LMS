@@ -31,6 +31,14 @@ router.delete('/:containerNo/remarks/:remarkId', asyncHandler(offLeaseController
 router.get('/:containerNo/stage/:stage', asyncHandler(offLeaseController.getStageDetail));
 router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveStage));
 
+/* Stage 2 (Transportation) "Move To Stage" / Send Back — manual alternate-
+   disposition move. Declared here, not under /:containerNo/stage/:stage,
+   since neither is a normal stage-column save (see saveOffLeaseMoveToStage's
+   doc comment in offlease.service.js). */
+router.post('/:containerNo/move-to-stage', asyncHandler(offLeaseController.saveMoveToStage));
+router.post('/:containerNo/send-back', asyncHandler(offLeaseController.saveSendBack));
+router.get('/:containerNo/move-history', asyncHandler(offLeaseController.getMoveHistoryForContainer));
+
 /* Pending Approval queue (between Stage 1 and Stage 2) */
 router.get('/approval', asyncHandler(offLeaseController.getApprovalData));
 router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprovalAction));
@@ -46,6 +54,8 @@ router.post('/tracking', asyncHandler(offLeaseController.addToTracking));
 /* Admin-only: one-time maintenance / repair tools + diagnostics
    (ROLES_ADMIN_EMAILS gate enforced inside each controller via assertRolesAdmin) */
 router.post('/admin/copy-approved-data', asyncHandler(offLeaseController.runCopyApprovedData));
+router.get('/admin/fms-auto-create/preview', asyncHandler(offLeaseController.previewAutoCreateFromFms));
+router.post('/admin/fms-auto-create/run', asyncHandler(offLeaseController.runAutoCreateFromFms));
 router.get('/admin/dump-headers', asyncHandler(offLeaseController.dumpHeaders));
 router.post('/admin/restore-header-row', asyncHandler(offLeaseController.restoreHeaderRow));
 router.post('/admin/fix-email-collision', asyncHandler(offLeaseController.fixEmailCollision));

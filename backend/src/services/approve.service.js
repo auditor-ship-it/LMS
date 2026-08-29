@@ -431,14 +431,27 @@ export async function saveActionData(containerNo, actionType, timestamp, status,
     const { rows } = await getSheetData(SHEETS.OPERATION, undefined, 'A1:AD');
     if (!rows.length) throw new AppError('No data rows');
 
+    // Same "scan past already-approved duplicates" fix as
+    // saveApproveLeaseByContainer just below — this endpoint has no live
+    // frontend caller today (confirmed 2026-08-29), but stopping at the
+    // first container match had the identical bug: Operation sheet is
+    // fullRefresh precisely because a container legitimately repeats across
+    // rows (see mongoSheetMapping.js's doc comment), so a container with an
+    // already-approved row ahead of its real pending one would have hit
+    // ALREADY_PROCESSED against the wrong row and never reached the one
+    // that actually needed a decision.
     let targetRow = -1;
+    let foundAny = false;
     for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { // eslint-disable-line eqeqeq
-        if (actionType === 'approve' && rows[i][29] && String(rows[i][29]).trim().toLowerCase() === 'approved') return 'ALREADY_PROCESSED';
-        targetRow = i + 2; break;
-      }
+      if (String(rows[i][0]) != containerNo) continue; // eslint-disable-line eqeqeq
+      foundAny = true;
+      const alreadyApproved = rows[i][29] && String(rows[i][29]).trim().toLowerCase() === 'approved';
+      if (actionType === 'approve' && alreadyApproved) continue;
+      targetRow = i + 2;
+      break;
     }
-    if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
+    if (!foundAny) throw new AppError(`Not found: ${containerNo}`);
+    if (targetRow === -1) return 'ALREADY_PROCESSED'; // every matching row is already approved
 
     if (actionType === 'approve') {
       await updateRange(SHEETS.OPERATION, `AC${targetRow}:AE${targetRow}`, [[dmyTime(new Date(timestamp)), status, userEmail || '']]);
@@ -500,7 +513,10 @@ export async function _expiryOrderNoMap() {
     const map = {};
     for (const sourceName of EXPIRY_ORDER_SOURCES) {
       try {
-        const { headers, rows } = await getSheetData(sourceName);
+        // Read-only map-building, no write follows — missed in the earlier
+        // pass since expiry.service.js's copy of this same function was
+        // fixed but this one wasn't. Safe for the Mongo mirror.
+        const { headers, rows } = await getSheetDataFromMongo(sourceName);
         if (!rows.length) continue;
 
         let ordCol = 3; // fallback: col D

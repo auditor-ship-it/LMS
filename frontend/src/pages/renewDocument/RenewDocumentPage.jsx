@@ -136,7 +136,8 @@ export function RenewDocumentPage() {
     setRenewItem({
       containerNo: item.row?.[0],
       currentValidUpto: validColIdx >= 0 ? item.row?.[validColIdx] : '',
-      deployedDate: deployedIdx >= 0 ? item.row?.[deployedIdx] : ''
+      deployedDate: deployedIdx >= 0 ? item.row?.[deployedIdx] : '',
+      rowNum: item._rowNum
     });
   };
 
@@ -145,9 +146,12 @@ export function RenewDocumentPage() {
     setRenewBusy(true);
     setRenewError('');
     try {
+      // renewItem.rowNum: this exact Deployed row, not just the container
+      // number — see renewWithAgreement's doc comment for why that matters.
       await submitRenewal({
         containerNo: renewItem.containerNo,
-        newDateString: payload.newDate
+        newDateString: payload.newDate,
+        rowNum: renewItem.rowNum
       });
       setRenewItem(null);
       setSelectedContainer(null);
@@ -164,7 +168,7 @@ export function RenewDocumentPage() {
     }
   };
 
-  const openDoc = (item) => { setDocError(''); setDocItem({ containerNo: item.row?.[0] }); };
+  const openDoc = (item) => { setDocError(''); setDocItem({ containerNo: item.row?.[0], rowNum: item._rowNum }); };
 
   const handleDocSubmit = async (payload) => {
     if (!docItem) return;
@@ -179,6 +183,8 @@ export function RenewDocumentPage() {
         payload.poFile ? uploadStageFile(payload.poFile) : ''
       ]);
 
+      // docItem.rowNum: this exact Deployed row — see completeRenewalDocStage's
+      // doc comment for why container number alone isn't safe here.
       const result = await submitDocumentCompletion({
         containerNo: docItem.containerNo,
         renewedDate: payload.renewedDate,
@@ -189,7 +195,8 @@ export function RenewDocumentPage() {
         poNo: payload.poNo,
         poFileUrl,
         billingCycle: payload.billingCycle,
-        poValidity: payload.poValidity
+        poValidity: payload.poValidity,
+        rowNum: docItem.rowNum
       });
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else if (result === 'MISSING_PO') setDocError('A PO number/file URL is required first.');
@@ -218,7 +225,7 @@ export function RenewDocumentPage() {
     setBulkError('');
     try {
       const results = await Promise.allSettled(selectedItems.map((it) =>
-        submitRenewal({ containerNo: it.row?.[0], newDateString: payload.newDate })));
+        submitRenewal({ containerNo: it.row?.[0], newDateString: payload.newDate, rowNum: it._rowNum })));
       const failed = results
         .map((r, i) => (r.status === 'rejected' ? selectedItems[i].row?.[0] : null))
         .filter(Boolean);
@@ -261,7 +268,8 @@ export function RenewDocumentPage() {
           poNo: payload.poNo,
           poFileUrl,
           billingCycle: payload.billingCycle,
-          poValidity: payload.poValidity
+          poValidity: payload.poValidity,
+          rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
           throw new Error(result);

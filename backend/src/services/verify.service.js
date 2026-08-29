@@ -41,7 +41,6 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
 import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
-import { normalizeKey } from '../config/mongoSheetMapping.js';
 import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
 
 /* getVerifyData cache — added 2026-08-26. Verify Lease was previously live
@@ -70,11 +69,11 @@ function padWidth(arr, width) {
 
 /* ===================== VERIFY DOCUMENT UPLOAD ===================== */
 
-export async function uploadAndSaveVerifyDocument(base64Data, mimeType, fileName, containerNo, docType, userEmail) {
+export async function uploadAndSaveVerifyDocument(base64Data, mimeType, fileName, containerNo, docType, userEmail, knownRow) {
   let url = '';
   try {
     url = await uploadToDrive(base64Data, mimeType, fileName);
-    await saveVerifyDocument(containerNo, docType, url, userEmail);
+    await saveVerifyDocument(containerNo, docType, url, userEmail, knownRow);
     return { success: true, url };
   } catch (e) {
     if (url) {
@@ -89,7 +88,27 @@ export async function uploadAndSaveVerifyDocument(base64Data, mimeType, fileName
 
 /* ===================== LEASE PERIOD / RENEWAL ===================== */
 
-export async function updateLeasePeriod(containerNo, newDateString, userEmail) {
+/** `knownRow` (1-based Deployed sheet row): addresses that EXACT row
+ *  directly instead of searching — Container No is not unique on Deployed
+ *  (see mongoSheetMapping.js's fullRefresh note on that sheet; same bug
+ *  class fixed 2026-08-29 in offlease.service.js's addToOffLeaseTracking
+ *  and expiry.service.js's own Deployed writers). Falls back to first-match
+ *  when omitted. */
+function _resolveDeployedRow(containerNo, rows, knownRow) {
+  if (knownRow != null) {
+    const row = rows[knownRow - 2];
+    if (!row || String(row[0]) != containerNo) { // eslint-disable-line eqeqeq
+      throw new AppError(`Deployed sheet row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return knownRow;
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]) == containerNo) return i + 2; // eslint-disable-line eqeqeq
+  }
+  return -1;
+}
+
+export async function updateLeasePeriod(containerNo, newDateString, userEmail, knownRow) {
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     if (!newDateString) throw new AppError('Date is required');
@@ -97,10 +116,7 @@ export async function updateLeasePeriod(containerNo, newDateString, userEmail) {
     const { rows } = await getSheetData(SHEETS.DEPLOYED, undefined, 'A1:Z');
     if (!rows.length) throw new AppError('No data rows');
 
-    let targetRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const parts = String(newDateString).split('-');
@@ -132,7 +148,7 @@ const HIST_HEADERS = ['Renewal History Dates', 'Renewal History Old Valid Upto',
  * Renew a lease WITH an agreement file, keeping full renewal history.
  * See LMS.js lines 580-676 for the full behavioral spec (doc comment there).
  */
-export async function renewLeaseWithAgreement(containerNo, newDateString, agreementUrl, userEmail) {
+export async function renewLeaseWithAgreement(containerNo, newDateString, agreementUrl, userEmail, knownRow) {
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     if (!newDateString) throw new AppError('Date is required');
@@ -166,10 +182,7 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
       await updateRange(SHEETS.DEPLOYED, `${startCol}1:${endCol}1`, [toAppend]);
     }
 
-    let targetRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
     const srcRow = rows[targetRow - 2];
 
@@ -393,16 +406,48 @@ export async function getVerifyData() {
   });
 }
 
-export async function saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail) {
+/**
+ * `knownRow` (1-based sheet row): when given, addresses that EXACT row
+ * directly instead of searching — verified against `containerNo` first, so
+ * a stale/out-of-range reference still fails loudly rather than silently
+ * writing under the wrong row. Falls back to the old first-match search
+ * when omitted.
+ *
+ * Container No is NOT unique on New Lease — 14 of 73 containers currently
+ * have 2-3 rows each (see mongoSheetMapping.js's doc comment on why). Every
+ * write below used to search for "the first row matching this container",
+ * which silently grabs whichever row happens to sort first — confirmed
+ * 2026-08-29 on TRIU6632949: clicking Approve on its "Bengaluru Co.op. Milk
+ * Union Ltd.(BAMUL)" record (the SECOND row) actually wrote Approved /
+ * Billing Type / Invoice Type onto its FIRST row instead — a different,
+ * already-approved lease for "63IDEAS INFOLABS PRIVATE LIMITED" — silently
+ * overwriting that row's own (blank) billing/invoice fields with values
+ * that belonged to a completely different client. getVerifyData's list
+ * already resolves and returns each row's own `_rowNum`; every caller that
+ * has a specific record open (which is every caller — this app only ever
+ * shows one record's action buttons at a time) should pass it through.
+ */
+function _resolveNewLeaseRow(containerNo, rows, knownRow) {
+  if (knownRow != null) {
+    const row = rows[knownRow - 2];
+    if (!row || String(row[0]) != containerNo) { // eslint-disable-line eqeqeq
+      throw new AppError(`New Lease row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return knownRow;
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]) == containerNo) return i + 2; // eslint-disable-line eqeqeq
+  }
+  return -1;
+}
+
+export async function saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail, knownRow) {
   return withSheetLock(SHEETS.NEW_LEASE, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     const link = invoiceType === 'Link to Container' ? (linkContainer || '') : '';
 
     const { rows } = await getSheetData(SHEETS.NEW_LEASE);
-    let targetRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const targetRow = _resolveNewLeaseRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const updates = [
@@ -414,22 +459,22 @@ export async function saveVerifyAction(containerNo, timestamp, status, billingTy
       { range: `'${SHEETS.NEW_LEASE}'!AJ${targetRow}`, values: [[link]] }
     ];
     await batchUpdateValues(updates);
-    await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    // Position-keyed (row_<i>), NOT normalizeKey(containerNo) — New Lease is
+    // fullRefresh now, see mongoSheetMapping.js's doc comment on why a
+    // container-number key silently collided for any reused container.
+    await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates);
     cacheRemove(VERIFY_CACHE_KEY); // this row just changed — next read must not serve the pre-save cache
     return 'OK';
   });
 }
 
-export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEmail, issue) {
+export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEmail, issue, knownRow) {
   return withSheetLock(SHEETS.NEW_LEASE, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     if (!remarks || String(remarks).trim() === '') throw new AppError('Remarks required');
 
     const { rows } = await getSheetData(SHEETS.NEW_LEASE);
-    let targetRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const targetRow = _resolveNewLeaseRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
 
     // dmyTime, not safeStr — safeStr's `val instanceof Date` branch formats a
@@ -443,7 +488,8 @@ export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEm
 
     const updates = [{ range: `'${SHEETS.NEW_LEASE}'!AE${targetRow}`, values: [[next]] }];
     await batchUpdateValues(updates);
-    await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    // Position-keyed — see saveVerifyAction's identical note above.
+    await patchMongoMirrorRow(SHEETS.NEW_LEASE, targetRow, updates);
     cacheRemove(VERIFY_CACHE_KEY);
     return 'OK';
   });
@@ -458,7 +504,7 @@ export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEm
 // through this endpoint, regardless of what the caller sends.
 const EDITABLE_COL_MAX = 25; // matches displayIndices' highest non-detail index used on the Verify screen
 
-export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEmail) {
+export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEmail, knownRow) {
   return withSheetLock(SHEETS.NEW_LEASE, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     if (!fieldUpdates || typeof fieldUpdates !== 'object' || !Object.keys(fieldUpdates).length) {
@@ -466,10 +512,7 @@ export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEma
     }
 
     const { headers, rows } = await getSheetData(SHEETS.NEW_LEASE);
-    let rn = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { rn = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const rn = _resolveNewLeaseRow(containerNo, rows, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const updates = [];
@@ -483,7 +526,8 @@ export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEma
     if (!updates.length) throw new AppError('No editable fields in update');
 
     await batchUpdateValues(updates);
-    await patchMongoMirrorRow(SHEETS.NEW_LEASE, rn, updates, { key: normalizeKey(SHEETS.NEW_LEASE, containerNo) });
+    // Position-keyed — see saveVerifyAction's identical note above.
+    await patchMongoMirrorRow(SHEETS.NEW_LEASE, rn, updates);
 
     // Audit trail entry in the same follow-up log the Verify detail page's
     // Follow-up Log reads — written in the legacy 3-part (no-issue) shape so
@@ -501,17 +545,14 @@ export async function updateVerifyLeaseFields(containerNo, fieldUpdates, userEma
   });
 }
 
-export async function saveVerifyDocument(containerNo, docType, url, userEmail) {
+export async function saveVerifyDocument(containerNo, docType, url, userEmail, knownRow) {
   return withSheetLock(SHEETS.NEW_LEASE, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
     const { rows } = await getSheetData(SHEETS.NEW_LEASE, undefined, 'A1:A');
     if (!rows.length) throw new AppError('No data rows');
 
-    let targetRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const targetRow = _resolveNewLeaseRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const col0 = docType === 'po' ? 31 : 32; // AF=31, AG=32 (0-based)

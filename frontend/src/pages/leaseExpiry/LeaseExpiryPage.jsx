@@ -210,7 +210,9 @@ export function LeaseExpiryPage() {
     setBusyKey(key);
     setActionError('');
     try {
-      const result = await actionExpiryRow(containerNo, new Date().toISOString(), status);
+      // item._rowNum: this exact Deployed row, not just the container number
+      // — see saveExpiryAction's doc comment for why that distinction matters.
+      const result = await actionExpiryRow(containerNo, new Date().toISOString(), status, item._rowNum);
       if (result === 'ALREADY_PROCESSED') {
         setActionError(`${containerNo} was already actioned by someone else.`);
       }
@@ -246,7 +248,9 @@ export function LeaseExpiryPage() {
     setBusyKey(key);
     setActionError('');
     try {
-      const result = await trackContainer(containerNo);
+      // item._rowNum: this exact Deployed row, not just the container number
+      // — see trackContainer's doc comment for why that distinction matters.
+      const result = await trackContainer(containerNo, item._rowNum);
       if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
       setSelectedIdx(null);
       // Write, then read — see runAction's identical note above.
@@ -271,7 +275,7 @@ export function LeaseExpiryPage() {
     setActionError('');
     try {
       const results = await Promise.allSettled(
-        containers.map((c) => actionExpiryRow(c, new Date().toISOString(), status))
+        selectedItems.map((it) => actionExpiryRow(it.row?.[0], new Date().toISOString(), status, it._rowNum))
       );
       const alreadyProcessed = results
         .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
@@ -298,7 +302,8 @@ export function LeaseExpiryPage() {
     setBulkBusy('Off-Lease');
     setActionError('');
     try {
-      const results = await Promise.allSettled(containers.map((c) => trackContainer(c)));
+      // it._rowNum: see runOffLease's identical note above.
+      const results = await Promise.allSettled(selectedItems.map((it) => trackContainer(it.row?.[0], it._rowNum)));
       const alreadyExists = results
         .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_EXISTS' ? containers[i] : null))
         .filter(Boolean);

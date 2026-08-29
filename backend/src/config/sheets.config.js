@@ -33,10 +33,24 @@ export const SHEETS = {
      Created on first use by stage9.service.js — it is not one of the tabs the
      port inherited, so it may not exist in the live spreadsheet yet. */
   STAGE9_MOVEMENT: 'Stage 9 Movement',
+  /* External FMS workbook tabs (EXTERNAL_SPREADSHEETS.CONSOLIDATE below) —
+   * NOT this app's own "Stage 9 Movement" log above (different sheet,
+   * different workbook, unrelated names). Mirrored into Mongo 2026-08-28 —
+   * see mongoSheetMapping.js's entries for these three and
+   * stage8.service.js, which reads them exclusively from that mirror now. */
+  FMS_STAGE8: 'STAGE-8',
+  FMS_STAGE9: 'STAGE-9',
+  FMS_STAGE10: 'STAGE-10',
   /* Dashboard live-comment thread, append-only, one row per remark. Separate
      from the stage remark columns, which belong to a stage and freeze when it
      completes. Created on first use by offleaseRemarks.service.js. */
   OFF_LEASE_REMARKS: 'Off-Lease Remarks',
+  /* Stage 2 "Move To Stage" / "Send Back" audit trail, append-only, one row
+     per event (MOVED or SENT_BACK) — never overwritten, so a record's full
+     movement history survives a Send Back even though the live Off-Lease
+     Tracking row's own move-state columns get cleared on one. Created on
+     first use by offleaseMoveHistory.service.js. */
+  OFF_LEASE_MOVE_HISTORY: 'Off-Lease Move History',
 
   // Public API framework — hidden bookkeeping tabs
   API_KEYS: '__api_keys',

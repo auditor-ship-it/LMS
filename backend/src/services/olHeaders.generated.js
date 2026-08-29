@@ -14,6 +14,27 @@
  * deletions. Indices 257..288 are a duplicated tail that _ensureOffLeaseSheet()
  * appended when the sheet was briefly narrower than this array; they carry no
  * data and nothing maps to them.
+ *
+ * Index 289 ("Source DO No") is a DELIBERATE, hand-added exception to the
+ * "generated, do not hand-edit" rule above — added 2026-08-28 by the app
+ * itself, not captured from an existing live column. It's the app's own new
+ * bookkeeping field (see OL_SOURCE_DO_COL in offlease.service.js), written
+ * once when a row is created automatically from a Stage 8 FMS "Offlease"
+ * movement record, so a later sync can tell "already linked" from "new" by
+ * DO number without re-scanning the whole external sheet. _ensureOffLeaseSheet()
+ * widens the live sheet's header row to match this array already, so this
+ * column gets created there automatically — no manual sheet edit needed. If
+ * this file is ever regenerated from the live header row, keep this entry.
+ *
+ * Indices 290..297 ("Move To Stage ...") are the same kind of deliberate,
+ * hand-added exception — added 2026-08-28 for the Stage 2 "Move To Stage" /
+ * "Send Back" action (see OL_MOVE_REASON_COL etc. in offlease.service.js).
+ * Recorded on the row itself rather than reusing the Transportation stage's
+ * own status column (99, "Other Charges [Loading/Crane/Labor]" — a real
+ * financial field, not a status flag). These 8 columns hold only the
+ * CURRENT live move state and are cleared on Send Back; the permanent
+ * audit trail lives in a separate append-only sheet — see
+ * offleaseMoveHistory.service.js.
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -88,5 +109,8 @@ export const OL_HEADERS = [
   "Cabin Fan Available", "Cabin LED Available", "Cabin 5 Amp Switch Available", "Cabin Window Available",
   "Cabin 15A Switch Available", "Cabin Bulkhead Available", "Cabin AC Point Available", "Cabin MCB Available",
   "Cabin Manager Table Available", "Cabin Table Available", "Cabin Overhead Storage Available", "Cabin Chair Available",
-  "Cabin Partition Available",
+  "Cabin Partition Available", "Source DO No",
+  "Move To Stage Reason", "Move To Stage New Client Name", "Move To Stage Remarks", "Move To Stage By", "Move To Stage Timestamp",
+  "Move To Stage Comment / Type", "Move To Stage Date", "Move To Stage Jump Target", "Move To Stage Client Scope",
+  "Move To Stage Arrival Date",
 ];

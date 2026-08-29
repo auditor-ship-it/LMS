@@ -9,8 +9,8 @@ export async function approveVerify(containerNo, payload) {
 export async function addVerifyFollowUp(containerNo, payload) {
   return saveVerifyFollowUp(containerNo, payload);
 }
-export async function submitAgreementEdit(containerNo, updates) {
-  return editVerifyLease(containerNo, updates);
+export async function submitAgreementEdit(containerNo, updates, rowNum) {
+  return editVerifyLease(containerNo, updates, rowNum);
 }
 export async function uploadAgreementDocument(payload) {
   return uploadVerifyDocument(payload);

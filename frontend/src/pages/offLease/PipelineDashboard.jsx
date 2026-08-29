@@ -53,7 +53,15 @@ export function PipelineDashboard({ onOpenTab }) {
 
     if (stageFilter === 'approval') out = out.filter((it) => it.stageClass === 'approval');
     else if (stageFilter === 'done') out = out.filter((it) => it.stageClass === 'done');
-    else if (stageFilter != null) out = out.filter((it) => it.currentStageNum === stageFilter);
+    /* pendingStages, not currentStageNum: a container can genuinely be
+       pending in more than one stage's queue at once (see pendingStages'
+       doc comment on the backend), and the KPI card's own count is a real
+       queue length, not a count of items whose single currentStageNum
+       happens to match. Filtering on currentStageNum alone let a card read
+       "1" while its own click-through showed 0 records — the one container
+       behind that count was pending here too, just not as its "primary"
+       stage. */
+    else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
 
     if (!term) return out;
     return out.filter((it) =>

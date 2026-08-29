@@ -12,3 +12,24 @@ export const saveStage = (containerNo, stage, data) =>
 
 /** GET /api/offlease/next-lease-id — preview only, used on Stage 1. */
 export const getNextLeaseId = () => apiClient.get('/offlease/next-lease-id').then((r) => r.data.leaseId);
+
+/** POST /api/offlease/:containerNo/move-to-stage — Stage 2 (Transportation)
+ *  manual alternate-disposition move. `reason` is 'Client to Client' or
+ *  'Other'. Both need `date` + `moveToStage` (a display stage number: 3, 4
+ *  or 5). Client to Client needs `newClientName` (`clientScope` and
+ *  `arrivalDate` optional); Other needs `commentType`. `remarks` is common
+ *  to both. */
+export const saveMoveToStage = (containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/move-to-stage`, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage })
+    .then((r) => r.data.message);
+
+/** POST /api/offlease/:containerNo/send-back — reverses an active Move To
+ *  Stage jump, returning the record to Stage 2. */
+export const saveSendBack = (containerNo) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/send-back`).then((r) => r.data.message);
+
+/** GET /api/offlease/:containerNo/move-history — full Move To Stage / Send
+ *  Back audit trail for one record, newest first. */
+export const getMoveHistory = (containerNo, leaseId) =>
+  apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/move-history`, leaseId ? { params: { leaseId } } : undefined)
+    .then((r) => r.data.history || []);
