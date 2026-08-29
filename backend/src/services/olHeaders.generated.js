@@ -113,4 +113,5 @@ export const OL_HEADERS = [
   "Move To Stage Reason", "Move To Stage New Client Name", "Move To Stage Remarks", "Move To Stage By", "Move To Stage Timestamp",
   "Move To Stage Comment / Type", "Move To Stage Date", "Move To Stage Jump Target", "Move To Stage Client Scope",
   "Move To Stage Arrival Date",
+  "Hold Timestamp", "Hold By", "Hold Remarks",
 ];

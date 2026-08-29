@@ -3,9 +3,16 @@ import { apiClient } from '../shared/auth/index.js';
 /** GET /api/offlease/approval — Pending Approval queue (between Stage 1 and Stage 2). */
 export const getOffLeaseApprovalData = () => apiClient.get('/offlease/approval').then((r) => r.data);
 
-/** POST /api/offlease/:containerNo/approval — status: 'Approved' | 'Rejected'. */
-export const saveOffLeaseApprovalAction = (containerNo, status) =>
-  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval`, { status }).then((r) => r.data.message);
+/** POST /api/offlease/:containerNo/approval — status: 'Approved' | 'Rejected'.
+ *  `remarks` (RejectModal) is only ever meaningful when status is 'Rejected'. */
+export const saveOffLeaseApprovalAction = (containerNo, status, remarks) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval`, { status, remarks }).then((r) => r.data.message);
+
+/** POST /api/offlease/:containerNo/reject/send-back — reverses a Rejected
+ *  decision, returning the record to Stage 1's own pending queue (Stage 1's
+ *  Reject tab). */
+export const sendRejectedToStage1 = (containerNo) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/reject/send-back`).then((r) => r.data.message);
 
 /** GET /api/offlease/:containerNo/outstanding — Tally outstanding, proxied
  *  through our backend so the Accounts & Collection credentials stay server-side. */

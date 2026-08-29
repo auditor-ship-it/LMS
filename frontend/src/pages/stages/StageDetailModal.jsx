@@ -995,16 +995,15 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * (STAGE-8/9/10) at all: a direct client-to-client transfer, or some other
  * movement type with nothing for the FMS panel above to ever match.
  *
- * Both reasons record a Date and a direct Move To Stage destination (Stage
- * 3/4/5), and the record appears there immediately, skipping whatever
- * normally sits in between — see saveOffLeaseMoveToStage's doc comment on
- * the backend. That destination stage then offers Send Back (SendBackPanel
- * below) to undo it.
+ * All three reasons record a Lifting Date and a direct Move To Stage
+ * destination (Stage 3/4/5), and the record appears there immediately,
+ * skipping whatever normally sits in between — see saveOffLeaseMoveToStage's
+ * doc comment on the backend. That destination stage then offers Send Back
+ * (SendBackPanel below) to undo it.
  *
- * Reason = "Client to Client" additionally captures a New Client Name and an
- * optional Arrival Date. Reason = "Client Scope" additionally captures a
- * free-text Scope. Reason = "Other" additionally captures a free-text
- * Comment / Type.
+ * Reason = "Client to Client" additionally captures a New Client Name.
+ * Reason = "Client Scope" additionally captures a free-text Scope. Reason =
+ * "Other" additionally captures a free-text Comment / Type.
  *
  * Self-contained: this never reads STAGE-8/9/10 or Transportation data —
  * only the container number it's given and its own fields.
@@ -1013,7 +1012,6 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
   const [reason, setReason] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [clientScope, setClientScope] = useState('');
-  const [arrivalDate, setArrivalDate] = useState('');
   const [commentType, setCommentType] = useState('');
   const [remarks, setRemarks] = useState('');
   const [date, setDate] = useState('');
@@ -1034,9 +1032,8 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
           Reason: {alreadyMoved.reason}
           {alreadyMoved.newClientName ? ` — New Client: ${alreadyMoved.newClientName}` : ''}
           {alreadyMoved.clientScope ? ` (${alreadyMoved.clientScope})` : ''}
-          {alreadyMoved.arrivalDate ? ` · Arrived ${alreadyMoved.arrivalDate}` : ''}
           {alreadyMoved.commentType ? ` — ${alreadyMoved.commentType}` : ''}
-          {alreadyMoved.date ? ` · ${alreadyMoved.date}` : ''}
+          {alreadyMoved.date ? ` · Lifting ${alreadyMoved.date}` : ''}
           {alreadyMoved.remarks ? ` · ${alreadyMoved.remarks}` : ''}
           {target ? ` · Moved to ${target.label}` : ''}
         </p>
@@ -1059,13 +1056,11 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
       const name = newClientName.trim();
       if (!name) { setError('New Client Name is required.'); return; }
       payload.newClientName = name;
-      payload.arrivalDate = arrivalDate;
       successLabel = `Client to Client (${name}) — moved directly to ${destLabel}`;
     } else if (reason === 'Client Scope') {
       const scope = clientScope.trim();
       if (!scope) { setError('Scope is required.'); return; }
       payload.clientScope = scope;
-      payload.arrivalDate = arrivalDate;
       successLabel = `Client Scope (${scope}) — moved directly to ${destLabel}`;
     } else {
       const ct = commentType.trim();
@@ -1108,36 +1103,20 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
           disabled={busy || !canMove}
         />
         {reason === 'Client to Client' && (
-          <>
-            <Field
-              field={{ key: 'newClientName', label: 'New Client Name', type: 'text', required: true }}
-              value={newClientName}
-              onChange={setNewClientName}
-              disabled={busy || !canMove}
-            />
-            <Field
-              field={{ key: 'arrivalDate', label: 'Arrival Date', type: 'date' }}
-              value={arrivalDate}
-              onChange={setArrivalDate}
-              disabled={busy || !canMove}
-            />
-          </>
+          <Field
+            field={{ key: 'newClientName', label: 'New Client Name', type: 'text', required: true }}
+            value={newClientName}
+            onChange={setNewClientName}
+            disabled={busy || !canMove}
+          />
         )}
         {reason === 'Client Scope' && (
-          <>
-            <Field
-              field={{ key: 'clientScope', label: 'Scope', type: 'text', required: true }}
-              value={clientScope}
-              onChange={setClientScope}
-              disabled={busy || !canMove}
-            />
-            <Field
-              field={{ key: 'arrivalDate', label: 'Arrival Date', type: 'date' }}
-              value={arrivalDate}
-              onChange={setArrivalDate}
-              disabled={busy || !canMove}
-            />
-          </>
+          <Field
+            field={{ key: 'clientScope', label: 'Scope', type: 'text', required: true }}
+            value={clientScope}
+            onChange={setClientScope}
+            disabled={busy || !canMove}
+          />
         )}
         {reason === 'Other' && (
           <Field
@@ -1156,7 +1135,7 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
               disabled={busy || !canMove}
             />
             <Field
-              field={{ key: 'moveDate', label: 'Date', type: 'date', required: true }}
+              field={{ key: 'moveDate', label: 'Lifting Date', type: 'date', required: true }}
               value={date}
               onChange={setDate}
               disabled={busy || !canMove}
