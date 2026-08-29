@@ -1,11 +1,12 @@
 import * as offLeaseService from '../services/offlease.service.js';
 import * as stage9Service from '../services/stage9.service.js';
 import * as remarksService from '../services/offleaseRemarks.service.js';
+import { getMoveHistory } from '../services/offleaseMoveHistory.service.js';
 import * as stage8Service from '../services/stage8.service.js';
 import * as stage3FormService from '../services/stage3Form.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
-import { notFound } from '../utils/AppError.js';
+import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
 
 /* ---- Core 8-stage pipeline ---- */
@@ -127,6 +128,34 @@ export async function nextLeaseId(req, res) {
   res.json({ leaseId: await offLeaseService.getNextLeaseId() });
 }
 
+/** Stage 2 (Transportation) "Move To Stage" — the manual alternate-
+ *  disposition move for containers that never go through the FMS-tracked
+ *  transport chain. `reason` is 'Client to Client' or 'Other'; the rest of
+ *  the body depends on which — see _prepareMoveToStage in offlease.service.js.
+ *  Permission ('offlease6') is checked inside the service, same as saveStage
+ *  above. */
+export async function saveMoveToStage(req, res) {
+  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseMoveToStageFast(
+    req.params.containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }, req.user.email
+  );
+  res.json({ message });
+}
+
+/** Reverses an active "Move To Stage" jump, sending the record back to
+ *  Stage 2. Permission (against the stage being sent back FROM) is checked
+ *  inside the service. */
+export async function saveSendBack(req, res) {
+  const message = await offLeaseService.saveOffLeaseSendBackFast(req.params.containerNo, req.user.email);
+  res.json({ message });
+}
+
+/** Full Move To Stage / Send Back audit trail for one record, newest first. */
+export async function getMoveHistoryForContainer(req, res) {
+  const history = await getMoveHistory(req.params.containerNo, req.query.leaseId || '');
+  res.json({ history });
+}
+
 /* ---- Pending Approval queue ---- */
 
 export async function getApprovalData(req, res) {
@@ -203,7 +232,20 @@ export async function getContainerDetail(req, res) {
     /* The FMS chain (STAGE-8 movement, STAGE-9 transport, STAGE-10 site
        delivery) — the same data the Stage 2 grid shows, so the container's
        full history includes its transportation, not just the off-lease
-       stages. Best-effort like the rest. */
+       stages. Best-effort like the rest.
+
+       No cycle-start bound (REVERTED 2026-08-28, same day it was added):
+       briefly passed this container's own Stage 1 completion time so
+       getFmsForContainer would ignore an older, unrelated cycle's FMS rows
+       for the same reused container number. Reverted — confirmed against
+       real data (SZLU9446439, SZLU9915829, GESU9563904, CXRU1037294,
+       CAIU5404270 and others) that this app's own Stage 1 timestamp
+       routinely completes AFTER the external FMS system's own event
+       timestamps (paperwork catching up to physical reality), not before —
+       so the bound hid real, correct movement/transport/delivery data on
+       more containers than the one cross-cycle case it was protecting
+       against. See getFmsForContainer's own doc comment for the full
+       history of this back-and-forth. */
     try {
       detail.fms = await stage8Service.getFmsForContainer(req.params.containerNo, detail.clientName);
     } catch (e) {
@@ -348,8 +390,8 @@ export async function deleteRemark(req, res) {
 /* ---- Tracking-sheet bootstrap ---- */
 
 export async function addToTracking(req, res) {
-  const { containerNo } = req.body;
-  const message = await offLeaseService.addToOffLeaseTracking(containerNo);
+  const { containerNo, deployedRow } = req.body;
+  const message = await offLeaseService.addToOffLeaseTracking(containerNo, deployedRow);
   res.json({ message });
 }
 
@@ -370,6 +412,27 @@ export async function getMovements(req, res) {
 export async function saveMovement(req, res) {
   // Permission ('offlease9') is checked inside the service, as for the stages.
   res.json(await stage9Service.saveStage9Movement(req.body || {}, req.user.email));
+}
+
+/* ---- Admin-only: FMS Stage 8 auto-create (2026-08-28) ---- */
+
+/** GET — always a dry run, regardless of query params. Report-only, makes no
+ *  writes. This is the endpoint to hit repeatedly while reviewing what the
+ *  feature would do against real data. */
+export async function previewAutoCreateFromFms(req, res) {
+  assertRolesAdmin(req.user.email);
+  res.json(await offLeaseService.autoCreateOffLeaseFromFms({ dryRun: true }));
+}
+
+/** POST — real writes. Requires the exact confirmation body
+ *  `{ "confirm": "CREATE" }` so this can never be triggered by an
+ *  accidental GET, a bookmarked URL, or a retried request. */
+export async function runAutoCreateFromFms(req, res) {
+  assertRolesAdmin(req.user.email);
+  if (req.body?.confirm !== 'CREATE') {
+    throw new AppError('Refusing to run live: POST body must be exactly { "confirm": "CREATE" }.');
+  }
+  res.json(await offLeaseService.autoCreateOffLeaseFromFms({ dryRun: false }));
 }
 
 /* ---- Admin-only: one-time maintenance / repair tools + diagnostics ---- */

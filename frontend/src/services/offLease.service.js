@@ -14,8 +14,8 @@ export async function decideApproval(containerNo, status) {
 export async function lookupContainer(containerNo, leaseId) {
   return getOffLeaseContainerDetail(containerNo, leaseId);
 }
-export async function trackContainer(containerNo) {
-  return addToOffLeaseTracking(containerNo);
+export async function trackContainer(containerNo, deployedRow) {
+  return addToOffLeaseTracking(containerNo, deployedRow);
 }
 export async function fetchOffLeaseDashboard() {
   return getOffLeaseDashboardData();

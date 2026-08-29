@@ -211,7 +211,8 @@ export async function getExpiryDataByFilter(filterType, user) {
   const ordMap = await _expiryOrderNoMap(); // ★ Order No joined by container
 
   const finalData = [];
-  for (const row of allRows) {
+  for (let ri = 0; ri < allRows.length; ri++) {
+    const row = allRows[ri];
     if (!row[0] || String(row[0]).trim() === '') continue;
     const vVal = row[21], wVal = row[22];
 
@@ -279,7 +280,13 @@ export async function getExpiryDataByFilter(filterType, user) {
       displayRow.push(safeStr(vVal));
       displayRow.push(safeStr(wVal));
     }
-    const item = { row: displayRow, daysLeft: days, band, actionDate: safeStr(vVal), actionStatus: safeStr(wVal) };
+    /* +2: allRows is values.slice(1) (header stripped), so index 0 is sheet
+       row 2. Used by the Off-Lease action to address this EXACT Deployed
+       row — see _lookupDeployedForOffLease's doc comment on the backend for
+       why a container-number-only lookup there isn't safe (a returned
+       lease's old row stays on the sheet, not deleted, so a container can
+       have more than one row and a plain search can grab the wrong one). */
+    const item = { row: displayRow, daysLeft: days, band, actionDate: safeStr(vVal), actionStatus: safeStr(wVal), _rowNum: ri + 2 };
     if (filterType === 'documents') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);
@@ -299,13 +306,54 @@ export async function getExpiryDataByFilter(filterType, user) {
   };
 }
 
+/**
+ * `knownRow` (1-based Deployed sheet row): when given, addresses that EXACT
+ * row directly instead of searching — Container No is NOT unique on
+ * Deployed (a container re-leased after an earlier cycle keeps its old row
+ * — see mongoSheetMapping.js's fullRefresh note on this sheet), so a plain
+ * "first row matching this container" search can silently grab a stale,
+ * already-superseded row. Confirmed 2026-08-29: GRMU3707464 and TRIU6632949
+ * both carry multiple Deployed rows for different lease cycles; every
+ * Lease Expiry action below used to resolve by container number alone.
+ * Verified against `containerNo` first, so a stale/out-of-range reference
+ * still fails loudly rather than silently writing under the wrong row.
+ * Falls back to the old first-match search when omitted.
+ */
+function _resolveDeployedRow(containerNo, rows, knownRow) {
+  if (knownRow != null) {
+    const row = rows[knownRow - 2];
+    if (!row || String(row[0]) != containerNo) { // eslint-disable-line eqeqeq
+      throw new AppError(`Deployed sheet row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return knownRow;
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]) == containerNo) return i + 2; // eslint-disable-line eqeqeq
+  }
+  return -1;
+}
+
+/** Same as _resolveDeployedRow but against the Mongo-mirrored, position-keyed
+ *  (`row_<i>`) docs the Fast paths read — used by completeDocumentStageFast /
+ *  saveExpiryActionFast. */
+function _resolveDeployedMongoDoc(containerNo, docs, knownRow) {
+  if (knownRow != null) {
+    const doc = docs.find((d) => d.key === `row_${knownRow - 2}`);
+    if (!doc || String(doc.row[0]) != containerNo) { // eslint-disable-line eqeqeq
+      throw new AppError(`Deployed sheet row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return doc;
+  }
+  return docs.find((d) => String(d.row[0]) == containerNo); // eslint-disable-line eqeqeq
+}
+
 /* =============================================
    uploadAndSaveDeployedDocument — LMS.js 1408-1439
    (extractFileId(url) itself is NOT re-defined here — the shared,
    already-ported googleDrive.service.js version is used instead, per the
    porting instructions.)
 ============================================= */
-export async function uploadAndSaveDeployedDocument(base64Data, mimeType, fileName, containerNo, docType, callerEmail) {
+export async function uploadAndSaveDeployedDocument(base64Data, mimeType, fileName, containerNo, docType, callerEmail, knownRow) {
   await checkActionPermission('document', callerEmail);
   let url = '';
   try {
@@ -313,10 +361,7 @@ export async function uploadAndSaveDeployedDocument(base64Data, mimeType, fileNa
     const result = await withSheetLock(SHEETS.DEPLOYED, async () => {
       const rows = await getRange(SHEETS.DEPLOYED, 'A2:A');
       if (!rows.length) throw new AppError('No data rows');
-      let targetRow = -1;
-      for (let i = 0; i < rows.length; i++) {
-        if (rows[i][0] == containerNo) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-      }
+      const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
       if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
       const col0 = String(docType || '').trim().toLowerCase() === 'po' ? 24 : 25; // Y=24, Z=25 (0-based)
       await updateCell(SHEETS.DEPLOYED, targetRow, col0, url || '');
@@ -337,23 +382,17 @@ export async function uploadAndSaveDeployedDocument(base64Data, mimeType, fileNa
 /* =============================================
    completeDocumentStage — LMS.js 1441-1465
 ============================================= */
-export async function completeDocumentStage(containerNo, callerEmail) {
+export async function completeDocumentStage(containerNo, callerEmail, knownRow) {
   await checkActionPermission('document', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     const { rows } = await getSheetData(SHEETS.DEPLOYED, undefined, 'A2:Z');
     if (!rows.length) throw new AppError('No data rows');
 
-    let targetRow = -1, matched = null;
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i][0] == containerNo) { // eslint-disable-line eqeqeq
-        if (String(rows[i][22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
-        targetRow = i + 2;
-        matched = rows[i];
-        break;
-      }
-    }
+    const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
+    const matched = rows[targetRow - 2];
+    if (String(matched[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
     // Either a PO reference or a signed Agreement copy is enough to move
     // forward — not all containers renew on an Agreement basis, some are
     // PO-only, so requiring BOTH blocked a real, legitimate renewal path.
@@ -379,12 +418,12 @@ export async function completeDocumentStage(containerNo, callerEmail) {
  * directly, then enqueues a replay of the ORIGINAL completeDocumentStage
  * above to make the same change on the real Google Sheet in the background.
  */
-export async function completeDocumentStageFast(containerNo, callerEmail) {
+export async function completeDocumentStageFast(containerNo, callerEmail, knownRow) {
   await checkActionPermission('document', callerEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
-  const found = docs.find((d) => d.row[0] == containerNo); // eslint-disable-line eqeqeq
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
   if (!found) throw notFound(`Not found: ${containerNo}`);
   if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
   if ((!found.row[24] || String(found.row[24]).trim() === '') && (!found.row[25] || String(found.row[25]).trim() === '')) {
@@ -393,7 +432,12 @@ export async function completeDocumentStageFast(containerNo, callerEmail) {
 
   await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { 'row.21': '', 'row.22': '', updatedAt: new Date() } });
   cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
-  await enqueueSheetReplay('expiry.completeDocumentStage', [containerNo, callerEmail], { actor: callerEmail });
+  // Pass the RESOLVED row through to the replay (derived from found.key when
+  // knownRow wasn't given), not containerNo alone — so the live write a few
+  // seconds later targets the exact same row this Fast patch just did, even
+  // if a re-search by container number could land differently by then.
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.completeDocumentStage', [containerNo, callerEmail, resolvedRow], { actor: callerEmail });
   return 'OK';
 }
 
@@ -407,7 +451,7 @@ export async function completeDocumentStageFast(containerNo, callerEmail) {
    mirror is kept in step as a backup copy via patchMongoMirrorRow, updated
    from the SAME {range,values} array already sent to Sheets so it can't
    drift, but nothing in the app depends on Mongo containing the truth. */
-export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
+export async function saveExpiryAction(rowId, timestamp, status, callerEmail, knownRow) {
   await checkActionPermission('expiry', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!rowId || String(rowId).trim() === '') throw new AppError('Container number is required');
@@ -415,10 +459,7 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
     const { rows } = await getSheetData(SHEETS.DEPLOYED);
     if (!rows.length) throw new AppError('No data rows');
 
-    let targetRow = -1;
-    for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][0]) == rowId) { targetRow = i + 2; break; } // eslint-disable-line eqeqeq
-    }
+    const targetRow = _resolveDeployedRow(rowId, rows, knownRow);
     if (targetRow === -1) throw notFound(`Not found: ${rowId}`);
     if (rows[targetRow - 2][21] && String(rows[targetRow - 2][21]).trim() !== '') return 'ALREADY_PROCESSED';
 
@@ -444,12 +485,12 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail) {
  * instantly, replay the ORIGINAL saveExpiryAction against the real sheet in
  * the background (env.outboxPollMs later, not instantly).
  */
-export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail) {
+export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail, knownRow) {
   await checkActionPermission('expiry', callerEmail);
   if (!rowId || String(rowId).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
-  const found = docs.find((d) => String(d.row[0]) == rowId); // eslint-disable-line eqeqeq
+  const found = _resolveDeployedMongoDoc(rowId, docs, knownRow);
   if (!found) throw notFound(`Not found: ${rowId}`);
   if (found.row[21] && String(found.row[21]).trim() !== '') return 'ALREADY_PROCESSED';
 
@@ -459,7 +500,10 @@ export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail
     { $set: { 'row.21': dmy, 'row.22': status || '', updatedAt: new Date() } }
   );
   cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
-  await enqueueSheetReplay('expiry.saveExpiryAction', [rowId, timestamp, status, callerEmail], { actor: callerEmail });
+  // Resolved row through to the replay — see completeDocumentStageFast's
+  // identical note above.
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.saveExpiryAction', [rowId, timestamp, status, callerEmail, resolvedRow], { actor: callerEmail });
   return 'OK';
 }
 
@@ -530,7 +574,8 @@ export async function getNewLeaseReport() {
 
   let rows = [];
   try {
-    ({ rows } = await getSheetData(SHEETS.NEW_LEASE));
+    // Read-only report, no write follows — safe for the Mongo mirror.
+    ({ rows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE));
   } catch (e) {
     return { data: [], error: e?.message || 'Could not read New Lease' };
   }
@@ -562,7 +607,7 @@ function fmtCellDate(v) {
   return d ? formatDateVal(d) : safeStr(v).trim();
 }
 
-export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity) {
+export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -606,16 +651,10 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     if (cycleCol < 0) cycleCol = 14; // col O fallback
     if (poValidityCol < 0) poValidityCol = 12; // col M fallback
 
-    let targetRow = -1, matchedRow = null;
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i][0] == containerNo) { // eslint-disable-line eqeqeq
-        if (String(rows[i][22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
-        targetRow = i + 2;
-        matchedRow = rows[i];
-        break;
-      }
-    }
+    const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
+    const matchedRow = rows[targetRow - 2];
+    if (String(matchedRow[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
 
     /* Capture OLD values BEFORE overwriting, for the Renewal Log. */
     const [oldAgrCell, oldPoNoCell, oldPoPdfCell] = await Promise.all([

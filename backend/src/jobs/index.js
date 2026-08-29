@@ -65,7 +65,6 @@ import cron from 'node-cron';
 import { runAutoApproval } from '../services/approve.service.js';
 import { copyApprovedData } from '../services/offlease.service.js';
 import { runSheetsReconciliation } from './sheetsReconcile.job.js';
-import { refreshFmsCaches } from '../services/stage8.service.js';
 import { refreshStage3FormCache } from '../services/stage3Form.service.js';
 import { logger } from '../utils/logger.js';
 
@@ -97,9 +96,12 @@ const RECONCILE_MINUTES = '1,6,11,16,21,26,31,36,41,46,51,56';
 const FMS_REFRESH_MINUTES = '3,8,13,18,23,28,33,38,43,48,53,58';
 
 export function registerSheetsSync() {
+  // STAGE-8/9/10 (2026-08-28): now part of runSheetsReconciliation's own
+  // sheet list (mongoSheetMapping.js) — the separate refreshFmsCaches live-
+  // read job that used to cover them is retired; stage8.service.js reads
+  // exclusively from the Mongo mirror now, same as every other sheet.
   cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
-  cron.schedule(`${FMS_REFRESH_MINUTES} * * * *`, safeRun('refreshFmsCaches', refreshFmsCaches));
   cron.schedule(`${FMS_REFRESH_MINUTES} * * * *`, safeRun('refreshStage3FormCache', refreshStage3FormCache));
-  logger.info('[SYNC] Sheets<->Mongo reconciliation registered (every 5 min, offset :01)');
-  logger.info('[SYNC] FMS (STAGE-8/9/10) + Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
+  logger.info('[SYNC] Sheets<->Mongo reconciliation registered (every 5 min, offset :01) — now includes STAGE-8/9/10');
+  logger.info('[SYNC] Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
 }

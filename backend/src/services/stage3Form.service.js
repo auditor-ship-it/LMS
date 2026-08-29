@@ -168,8 +168,10 @@ export function pickGateFormForClient(rows, clientName) {
 }
 
 /** Re-reads the Stage 3 form log and refreshes its cache, regardless of TTL.
- *  Registered alongside refreshFmsCaches() (jobs/index.js) so a new form
- *  submission is visible within 5 minutes without anyone opening the page. */
+ *  Registered in jobs/index.js so a new form submission is visible within 5
+ *  minutes without anyone opening the page. (STAGE-8/9/10 used to have an
+ *  equivalent refreshFmsCaches() job here too — retired 2026-08-28 now that
+ *  those tabs are Mongo-mirrored via the unified reconcile job instead.) */
 export async function refreshStage3FormCache() {
   try {
     const rows = await readStage3FormRows(true);

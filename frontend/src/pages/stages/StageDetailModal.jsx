@@ -5,9 +5,10 @@ import { Icon } from '../../components/ui/Icon.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchNextLeaseId, submitStage } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitSendBack } from '../../services/stage.service.js';
 import { lookupContainer } from '../../services/offLease.service.js';
-import { getOutstanding } from '../../api/offlease.api.js';
+import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
+import { usePermission } from '../../hooks/usePermission.js';
 import { exportLookupToPdf } from '../offLease/lookupExport.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
@@ -27,6 +28,7 @@ const normInvoiceNo = (v) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g,
  */
 // The heading comes from stageCaption(stageNumber), so no label prop is needed.
 export function StageDetailModal({ stageNumber, containerNo, readOnly, identityOnly, movement, transport, delivery, onClose, onSaved }) {
+  const { canAct } = usePermission();
   const fields = STAGE_FIELDS[stageNumber] || [];
   const { data, loading, error, reload } = useAsync(() => fetchStageDetail(containerNo, stageNumber), [containerNo, stageNumber]);
   const { data: leaseIdPreview } = useAsync(
@@ -63,6 +65,28 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
       : Promise.resolve(null)),
     [stageNumber, containerNo, data?.col_5]
   );
+  /* STAGE-8/9/10 (Movement/Transport/Site Delivery) for the read-only
+     Transportation stage. The Stage 2 tab's own grid batch-fetches this for
+     every row up front (enrichWithStage8Movements) and passes it down via
+     the movement/transport/delivery props — cheap, since it's one shared
+     fetch for the whole list. Other entry points into this same modal (the
+     Dashboard's order-book chips, OrderBookView.jsx) never fetched this at
+     all and never passed the props, so identityOnly rows opened from there
+     always rendered every FMS step as "Unavailable" regardless of whether
+     the data actually existed — not a caching or backend issue, this view
+     simply never wired it up. Self-fetch here whenever the caller didn't
+     supply it, rather than requiring every future caller to remember to. */
+  const suppliedFms = movement !== undefined || transport !== undefined || delivery !== undefined;
+  const { data: ownFms, loading: fmsLoading } = useAsync(
+    () => (identityOnly && !suppliedFms && containerNo
+      ? getOffLeaseContainerDetail(containerNo).then((d) => d?.fms || null)
+      : Promise.resolve(null)),
+    [identityOnly, suppliedFms, containerNo]
+  );
+  const fmsMovement = suppliedFms ? movement : ownFms?.movement;
+  const fmsTransport = suppliedFms ? transport : ownFms?.transport;
+  const fmsDelivery = suppliedFms ? delivery : ownFms?.delivery;
+
   /* Report stages don't close on save — the inspector is offered the report
      for the record they just completed before the modal goes away. */
   const [justSaved, setJustSaved] = useState(false);
@@ -261,6 +285,20 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                 ))}
               </div>
 
+              {/* This record was placed here directly by a Stage 2 "Move To
+                  Stage" jump (either reason), not by working through the
+                  normal sequence — offer a way to undo that. Independent of
+                  identityOnly: Gate In has no form either way, but Inspection
+                  and Billing do, and both still need this shown alongside
+                  their normal fields. */}
+              {!!data?._move?.canSendBackHere && (
+                <SendBackPanel
+                  containerNo={containerNo}
+                  moveInfo={data._move}
+                  onSentBack={() => { onSaved?.(); onClose(); }}
+                />
+              )}
+
               {/* FMS movement + transport detail, matched on Container No and
                   Client Name with Movement Type = Offlease. */}
               {/* `fields` is the WHOLE matched row, labelled with that tab's
@@ -268,13 +306,30 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                   hand-picked subset. */}
               {/* The steps ARE the pipeline summary — a separate status strip
                   above them repeated the same three states twice. */}
+              {identityOnly && (!suppliedFms && fmsLoading
+                ? <p className={styles.fmsEmpty}>Loading FMS movement data…</p>
+                : (
+                  <FmsSteps
+                    steps={[
+                      { n: 8, label: 'Movement', record: fmsMovement, empty: 'No Offlease movement in STAGE-8 for this container and client.' },
+                      { n: 9, label: 'Transport', record: fmsTransport, empty: 'No Offlease transport in STAGE-9 for this container and client.' },
+                      { n: 10, label: 'Site Delivery', record: fmsDelivery, empty: "No STAGE-10 record for this container's DO number." }
+                    ]}
+                  />
+                ))}
+
+              {/* Alternate-disposition closeout for containers that never go
+                  through the FMS-tracked transport chain at all (a direct
+                  client-to-client transfer, or some other movement type) —
+                  see saveOffLeaseMoveToStage's doc comment on the backend.
+                  Reads nothing from STAGE-8/9/10; only ever writes to this
+                  container's own Off-Lease Tracking row. */}
               {identityOnly && (
-                <FmsSteps
-                  steps={[
-                    { n: 8, label: 'Movement', record: movement, empty: 'No Offlease movement in STAGE-8 for this container and client.' },
-                    { n: 9, label: 'Transport', record: transport, empty: 'No Offlease transport in STAGE-9 for this container and client.' },
-                    { n: 10, label: 'Site Delivery', record: delivery, empty: "No STAGE-10 record for this container's DO number." }
-                  ]}
+                <MoveToStageSection
+                  containerNo={containerNo}
+                  canMove={canAct(`offlease${stageNumber}`)}
+                  alreadyMoved={data?._move}
+                  onMoved={() => { onSaved?.(); onClose(); }}
                 />
               )}
 
@@ -292,8 +347,10 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
                   Repair Required, matched by container) instead of asking
                   for the same information twice. A container still sitting
                   here has not shown up as "Inward (Gate-In)" on that form
-                  yet — there is nothing to save in the app itself. */}
-              {!identityOnly && !fields.length && (
+                  yet — there is nothing to save in the app itself. Suppressed
+                  when the record arrived via a Move To Stage jump instead —
+                  SendBackPanel above already explains why it's here. */}
+              {!identityOnly && !fields.length && !data?._move?.canSendBackHere && (
                 <div className={styles.savedPanel}>
                   <p className={styles.savedTitle}>Waiting for Gate-In confirmation</p>
                   <p className={styles.savedHint}>
@@ -921,6 +978,257 @@ function FmsSteps({ steps }) {
   );
 }
 
+const MOVE_REASON_OPTIONS = ['Client to Client', 'Client Scope', 'Other'];
+
+/** Display stage number (submitted to the backend) -> friendly label. Only
+ *  Gate In / Inspection / Billing are valid direct-jump destinations from
+ *  Stage 2 — see OL_JUMP_TARGET_INTERNALS on the backend. */
+const MOVE_JUMP_TARGET_OPTIONS = [
+  { value: '3', label: 'Stage 3 – Gate In' },
+  { value: '4', label: 'Stage 4 – Inspection Checklist' },
+  { value: '5', label: 'Stage 5 – Billing Reconciliation' }
+];
+
+/**
+ * Stage 2 (Transportation) "Move To Stage" — a manual alternate-disposition
+ * move for containers that never go through the FMS-tracked transport chain
+ * (STAGE-8/9/10) at all: a direct client-to-client transfer, or some other
+ * movement type with nothing for the FMS panel above to ever match.
+ *
+ * Both reasons record a Date and a direct Move To Stage destination (Stage
+ * 3/4/5), and the record appears there immediately, skipping whatever
+ * normally sits in between — see saveOffLeaseMoveToStage's doc comment on
+ * the backend. That destination stage then offers Send Back (SendBackPanel
+ * below) to undo it.
+ *
+ * Reason = "Client to Client" additionally captures a New Client Name and an
+ * optional Arrival Date. Reason = "Client Scope" additionally captures a
+ * free-text Scope. Reason = "Other" additionally captures a free-text
+ * Comment / Type.
+ *
+ * Self-contained: this never reads STAGE-8/9/10 or Transportation data —
+ * only the container number it's given and its own fields.
+ */
+function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
+  const [reason, setReason] = useState('');
+  const [newClientName, setNewClientName] = useState('');
+  const [clientScope, setClientScope] = useState('');
+  const [arrivalDate, setArrivalDate] = useState('');
+  const [commentType, setCommentType] = useState('');
+  const [remarks, setRemarks] = useState('');
+  const [date, setDate] = useState('');
+  const [moveToStage, setMoveToStage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(null); // { reason, label } once moved
+
+  // Already recorded (this modal was reopened after a Move) — show what was
+  // saved instead of an editable form; there's nothing left to submit here,
+  // Send Back (on the destination stage) is the only way to change it now.
+  if (alreadyMoved?.active) {
+    const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => Number(o.value) === alreadyMoved.jumpTargetDisplay);
+    return (
+      <div className={styles.fmsWrap}>
+        <h3 className={styles.sectionTitle}>Move To Stage</h3>
+        <p className={styles.sectionHint}>
+          Reason: {alreadyMoved.reason}
+          {alreadyMoved.newClientName ? ` — New Client: ${alreadyMoved.newClientName}` : ''}
+          {alreadyMoved.clientScope ? ` (${alreadyMoved.clientScope})` : ''}
+          {alreadyMoved.arrivalDate ? ` · Arrived ${alreadyMoved.arrivalDate}` : ''}
+          {alreadyMoved.commentType ? ` — ${alreadyMoved.commentType}` : ''}
+          {alreadyMoved.date ? ` · ${alreadyMoved.date}` : ''}
+          {alreadyMoved.remarks ? ` · ${alreadyMoved.remarks}` : ''}
+          {target ? ` · Moved to ${target.label}` : ''}
+        </p>
+      </div>
+    );
+  }
+
+  const handleMove = async () => {
+    if (!reason) { setError('Select a Reason first.'); return; }
+    setError('');
+
+    if (!date) { setError('Date is required.'); return; }
+    if (!moveToStage) { setError('Select a Move To Stage destination.'); return; }
+
+    const payload = { reason, remarks: remarks.trim(), date, moveToStage };
+    const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => o.value === moveToStage);
+    const destLabel = target?.label || `Stage ${moveToStage}`;
+    let successLabel = '';
+    if (reason === 'Client to Client') {
+      const name = newClientName.trim();
+      if (!name) { setError('New Client Name is required.'); return; }
+      payload.newClientName = name;
+      payload.arrivalDate = arrivalDate;
+      successLabel = `Client to Client (${name}) — moved directly to ${destLabel}`;
+    } else if (reason === 'Client Scope') {
+      const scope = clientScope.trim();
+      if (!scope) { setError('Scope is required.'); return; }
+      payload.clientScope = scope;
+      payload.arrivalDate = arrivalDate;
+      successLabel = `Client Scope (${scope}) — moved directly to ${destLabel}`;
+    } else {
+      const ct = commentType.trim();
+      if (!ct) { setError('Comment / Type is required.'); return; }
+      payload.commentType = ct;
+      successLabel = `Other (${ct}) — moved directly to ${destLabel}`;
+    }
+
+    setBusy(true);
+    try {
+      await submitMoveToStage(containerNo, payload);
+      setDone({ reason, label: successLabel });
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <div className={styles.savedPanel}>
+        <p className={styles.savedTitle}>Moved</p>
+        <p className={styles.savedHint}>{containerNo} is recorded as moved — {done.label}.</p>
+        <div className={styles.savedActions}>
+          <Button type="button" variant="primary" onClick={onMoved}>Done</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.fmsWrap}>
+      <h3 className={styles.sectionTitle}>Move To Stage</h3>
+      <div className={styles.fieldGrid}>
+        <Field
+          field={{ key: 'reason', label: 'Reason', type: 'select', options: MOVE_REASON_OPTIONS }}
+          value={reason}
+          onChange={(v) => { setReason(v); setError(''); }}
+          disabled={busy || !canMove}
+        />
+        {reason === 'Client to Client' && (
+          <>
+            <Field
+              field={{ key: 'newClientName', label: 'New Client Name', type: 'text', required: true }}
+              value={newClientName}
+              onChange={setNewClientName}
+              disabled={busy || !canMove}
+            />
+            <Field
+              field={{ key: 'arrivalDate', label: 'Arrival Date', type: 'date' }}
+              value={arrivalDate}
+              onChange={setArrivalDate}
+              disabled={busy || !canMove}
+            />
+          </>
+        )}
+        {reason === 'Client Scope' && (
+          <>
+            <Field
+              field={{ key: 'clientScope', label: 'Scope', type: 'text', required: true }}
+              value={clientScope}
+              onChange={setClientScope}
+              disabled={busy || !canMove}
+            />
+            <Field
+              field={{ key: 'arrivalDate', label: 'Arrival Date', type: 'date' }}
+              value={arrivalDate}
+              onChange={setArrivalDate}
+              disabled={busy || !canMove}
+            />
+          </>
+        )}
+        {reason === 'Other' && (
+          <Field
+            field={{ key: 'commentType', label: 'Comment / Type', type: 'text', required: true }}
+            value={commentType}
+            onChange={setCommentType}
+            disabled={busy || !canMove}
+          />
+        )}
+        {reason && (
+          <>
+            <Field
+              field={{ key: 'moveRemarks', label: 'Remarks', type: 'textarea' }}
+              value={remarks}
+              onChange={setRemarks}
+              disabled={busy || !canMove}
+            />
+            <Field
+              field={{ key: 'moveDate', label: 'Date', type: 'date', required: true }}
+              value={date}
+              onChange={setDate}
+              disabled={busy || !canMove}
+            />
+            <Field
+              field={{ key: 'moveToStage', label: 'Move To Stage', type: 'select', options: MOVE_JUMP_TARGET_OPTIONS, required: true }}
+              value={moveToStage}
+              onChange={setMoveToStage}
+              disabled={busy || !canMove}
+            />
+          </>
+        )}
+      </div>
+
+      {error && <div className={styles.error}>{error}</div>}
+      {!canMove && <p className={styles.sectionHint}>You don't have permission to move this stage.</p>}
+
+      {reason && (
+        <div className={styles.actions}>
+          <Button type="button" variant="primary" loading={busy} disabled={!canMove} onClick={handleMove}>
+            {busy ? 'Moving…' : 'Move'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Shown on whichever stage (Gate In / Inspection / Billing) a record was
+ * directly jumped to via Move To Stage (Reason = "Other") — see
+ * getOffLeaseStageDetail's `_move.canSendBackHere` on the backend. Reverses
+ * the jump: the record returns to Stage 2's own pending queue, the same row
+ * (nothing duplicated), with its full history preserved in the separate
+ * audit-trail sheet regardless.
+ */
+function SendBackPanel({ containerNo, moveInfo, onSentBack }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSendBack = async () => {
+    setError('');
+    setBusy(true);
+    try {
+      await submitSendBack(containerNo);
+      onSentBack?.();
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={styles.savedPanel}>
+      <p className={styles.savedTitle}>Moved here via Move To Stage</p>
+      <p className={styles.savedHint}>
+        Reason: {moveInfo.reason}
+        {moveInfo.commentType ? ` — ${moveInfo.commentType}` : ''}
+        {moveInfo.date ? ` · ${moveInfo.date}` : ''}
+        {moveInfo.remarks ? ` · ${moveInfo.remarks}` : ''}
+      </p>
+      {error && <div className={styles.error}>{error}</div>}
+      <div className={styles.savedActions}>
+        <Button type="button" variant="secondary" loading={busy} onClick={handleSendBack}>
+          {busy ? 'Sending back…' : 'Send Back'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function SourceCard({ title, rows, empty, show, unread }) {
   /* `show` decides whether the section exists at all; `rows` only decides
      what it says. Keying visibility off the data meant an unexpected shape —
@@ -1199,11 +1507,15 @@ function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
     );
   }
   if (type === 'select') {
+    // Plain strings (every existing field) use the same text as value and
+    // label; {value, label} lets a field show a friendlier label (e.g. "Stage
+    // 3 – Gate In") than what's actually submitted (e.g. "3").
+    const opts = options.map((o) => (typeof o === 'object' && o !== null ? o : { value: o, label: o }));
     return (
       <Labeled label={label} required={required}>
         <select value={value || ''} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
           <option value="">Select…</option>
-          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+          {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       </Labeled>
     );

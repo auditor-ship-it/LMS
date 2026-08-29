@@ -92,12 +92,15 @@ export function VerifyLeasePage() {
     setSubmitting(true);
     setActionError('');
     try {
+      // actionTarget._rowNum: this exact New Lease row — see saveVerifyAction's
+      // doc comment on the backend for why container number alone isn't safe.
       const res = await approveVerify(actionTarget.row[0], {
         timestamp: new Date().toISOString(),
         status: 'Approved',
         billingType,
         invoiceType,
-        linkContainer
+        linkContainer,
+        rowNum: actionTarget._rowNum
       });
       setActionTarget(null);
       setSelectedRowNum(null);
@@ -122,7 +125,8 @@ export function VerifyLeasePage() {
     if (!followUpTarget) return;
     setSubmitting(true);
     try {
-      await addVerifyFollowUp(followUpTarget.row[0], { timestamp: new Date().toISOString(), remarks, issue });
+      // followUpTarget._rowNum: see submitApprove's identical note above.
+      await addVerifyFollowUp(followUpTarget.row[0], { timestamp: new Date().toISOString(), remarks, issue, rowNum: followUpTarget._rowNum });
       setFollowUpTarget(null);
       setBanner({ type: 'success', text: 'Sent back — recorded.' });
       await reload();

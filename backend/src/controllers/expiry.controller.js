@@ -39,31 +39,34 @@ export async function refreshSalePersons(req, res) {
   res.json(result);
 }
 
-/** POST /api/expiry/documents/upload */
+/** POST /api/expiry/documents/upload — `rowNum` (item._rowNum from the list)
+ *  addresses this exact Deployed row; see expiry.service.js's
+ *  _resolveDeployedRow doc comment for why container number alone isn't
+ *  safe (a container can have more than one Deployed row). */
 export async function uploadDocument(req, res) {
-  const { base64Data, mimeType, fileName, containerNo, docType } = req.body;
-  res.json(await expiryService.uploadAndSaveDeployedDocument(base64Data, mimeType, fileName, containerNo, docType, req.user.email));
+  const { base64Data, mimeType, fileName, containerNo, docType, rowNum } = req.body;
+  res.json(await expiryService.uploadAndSaveDeployedDocument(base64Data, mimeType, fileName, containerNo, docType, req.user.email, rowNum));
 }
 
 /** POST /api/expiry/documents/complete — completeDocumentStage (LMS.js 1441) */
 export async function completeDocumentStage(req, res) {
-  const { containerNo } = req.body;
-  res.json({ result: await expiryService.completeDocumentStageFast(containerNo, req.user.email) });
+  const { containerNo, rowNum } = req.body;
+  res.json({ result: await expiryService.completeDocumentStageFast(containerNo, req.user.email, rowNum) });
 }
 
 /** POST /api/expiry/action — saveExpiryAction (LMS.js 1467) */
 export async function saveAction(req, res) {
-  const { rowId, timestamp, status } = req.body;
-  res.json({ result: await expiryService.saveExpiryActionFast(rowId, timestamp, status, req.user.email) });
+  const { rowId, timestamp, status, rowNum } = req.body;
+  res.json({ result: await expiryService.saveExpiryActionFast(rowId, timestamp, status, req.user.email, rowNum) });
 }
 
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
 export async function completeRenewalDocStage(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum } = req.body;
   res.json({
     result: await expiryService.completeDocStage(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity
+      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum
     )
   });
 }

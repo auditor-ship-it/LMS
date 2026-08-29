@@ -16,6 +16,11 @@ export const getExpiryData = (filter = 'pending') =>
 export const refreshSalePersons = () =>
   apiClient.post('/expiry/sale-person/refresh').then((r) => r.data);
 
-/** POST /api/expiry/action — Renew | Off-Lease row action. */
-export const saveExpiryAction = (rowId, timestamp, status) =>
-  apiClient.post('/expiry/action', { rowId, timestamp, status }).then((r) => r.data.result);
+/** POST /api/expiry/action — Renew | Off-Lease row action. `rowNum`
+ *  (item._rowNum from getExpiryData) addresses this exact Deployed row —
+ *  Container No is not unique there (a reused container keeps its earlier
+ *  row), so without it the backend falls back to matching by container
+ *  number alone, which can silently act on a different lease's row. Always
+ *  pass it when known. */
+export const saveExpiryAction = (rowId, timestamp, status, rowNum) =>
+  apiClient.post('/expiry/action', { rowId, timestamp, status, rowNum }).then((r) => r.data.result);

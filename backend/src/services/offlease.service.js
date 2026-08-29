@@ -88,7 +88,8 @@ import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys } from './stage8.service.js';
+import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches } from './stage8.service.js';
+import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
 
 /* =============================================
@@ -774,7 +775,10 @@ async function _scanSheetForLeaseInfo(sheetName, want) {
   const info = { orders: [], clientCode: '', clientName: '' };
   const seen = {};
   try {
-    const { headers, rows } = await getSheetData(sheetName);
+    // Read-only lookup, no write follows — also on the regular container-
+    // detail path (getOffLeaseContainerDetail -> _findLeaseInfoForContainer),
+    // not just the admin diagnostics below. Safe for the Mongo mirror.
+    const { headers, rows } = await getSheetDataFromMongo(sheetName);
     if (!rows.length) return info;
     const cols = _orderScanCols(headers);
 
@@ -842,7 +846,7 @@ export async function debugOrderNosForContainer(containerNo) {
 
   for (const name of OL_ORDER_SHEETS) {
     let headers, rows;
-    try { ({ headers, rows } = await getSheetData(name)); } catch (e) { out.push(`${name}: SHEET NOT FOUND`); out.push(''); continue; }
+    try { ({ headers, rows } = await getSheetDataFromMongo(name)); } catch (e) { out.push(`${name}: SHEET NOT FOUND`); out.push(''); continue; }
     if (!rows.length) { out.push(`${name}: empty`); out.push(''); continue; }
 
     const cols = _orderScanCols(headers);
@@ -881,7 +885,7 @@ export async function traceOrderNo(containerNo) {
 
   async function scan(name) {
     let headers, rows;
-    try { ({ headers, rows } = await getSheetData(name)); } catch (e) { out.push(`${name}: NOT FOUND`); return; }
+    try { ({ headers, rows } = await getSheetDataFromMongo(name)); } catch (e) { out.push(`${name}: NOT FOUND`); return; }
     if (!rows.length) { out.push(`${name}: empty`); return; }
     const cols = _orderScanCols(headers);
     const hits = [];
@@ -994,7 +998,110 @@ export async function whatFeedsAllSheets() {
 /* =============================================
    ADD CONTAINER TO OFF-LEASE TRACKING
 ============================================= */
-export async function addToOffLeaseTracking(containerNo) {
+/**
+ * Deployed-sheet lookup shared by addToOffLeaseTracking and the FMS
+ * auto-create path (_autoCreateOffLeaseFromFmsRow) — factored out 2026-08-28
+ * so the new path can reuse the exact same, already-correct column-detection
+ * and row-matching logic instead of a second copy that could drift from it.
+ *
+ * `preFetched`: an already-fetched {headers, rows}, so a caller resolving
+ * MANY containers in one pass (autoCreateOffLeaseFromFms's dry-run scan)
+ * reads Deployed ONCE instead of once per candidate — added 2026-08-28,
+ * same "read once, share across every row" fix as getOffLeaseData's
+ * opts.sheetData. Omit it (both real write-path callers do) to force a
+ * fresh LIVE read, correctly, right before the write that targets
+ * `targetRow` depends on it.
+ */
+/**
+ * `targetRow` (1-based sheet row, header = row 1): when given, addresses
+ * that EXACT row directly instead of searching — the container number is
+ * NOT unique on this sheet (GRMU3707464, TRIU6681671 and others each have
+ * more than one row — a returned lease's old row is left in place, not
+ * deleted, when the container goes out again under a new client), so a
+ * plain "first row matching this container number" search can silently
+ * grab a stale, already-superseded row instead of the one the caller
+ * actually means. Confirmed 2026-08-29: off-leasing GRMU3707464 from its
+ * Lease Expiry detail page (customer "Bengaluru Co.op. Milk Union
+ * Ltd.(BAMUL)", the current, active deployment) created the Off-Lease
+ * Tracking row under "DR reddy CTO 6" instead — an OLDER row for the same
+ * container, sitting earlier in the sheet, that the search reached first.
+ * Every caller that has a specific row in hand (the Lease Expiry page,
+ * which is built by reading this exact sheet) should pass it.
+ *
+ * `clientNameHint`: for the one caller that has NO specific row to point at
+ * (the FMS auto-create path — a Stage 8 movement row only carries a
+ * container number and client name, never a Deployed row reference) — used
+ * as a second-best safety net, same principle as `targetRow` but weaker.
+ * When given, a row matching BOTH container AND client (via the same
+ * fuzzy clientMatches() stage8.service.js already uses for FMS matching)
+ * is preferred over a blind first-match; falls through to the plain
+ * first-match search if no row satisfies both, so an unrecognized/aliased
+ * client name never turns into a hard failure. */
+async function _lookupDeployedForOffLease(containerNo, preFetched, targetRow, clientNameHint) {
+  const { headers: dHeaders, rows: dRows } = preFetched || await getSheetData(SHEETS.DEPLOYED);
+  if (!dRows.length) throw new AppError('No data in Deployed sheet');
+
+  const colMap = {};
+  for (let h = 0; h < dHeaders.length; h++) {
+    const hdr = String(dHeaders[h] || '').trim().toLowerCase();
+    if (hdr === '') continue;
+    if (hdr.indexOf('container') !== -1 && colMap.container === undefined) colMap.container = h;
+    else if ((hdr.indexOf('customer name') !== -1 || hdr.indexOf('client name') !== -1) && colMap.clientName === undefined) colMap.clientName = h;
+    else if ((hdr.indexOf('client code') !== -1 || hdr.indexOf('customer code') !== -1) && colMap.clientCode === undefined) colMap.clientCode = h;
+    else if (hdr.indexOf('size') !== -1 && colMap.size === undefined) colMap.size = h;
+    else if (hdr.indexOf('type') !== -1 && colMap.type === undefined) colMap.type = h;
+    else if (hdr.indexOf('location') !== -1 && colMap.location === undefined) colMap.location = h;
+    else if (hdr.indexOf('deployed') !== -1 && hdr.indexOf('date') !== -1 && colMap.deployedDate === undefined) colMap.deployedDate = h;
+    else if ((hdr.indexOf('valid') !== -1 || hdr.indexOf('agreement') !== -1) && (hdr.indexOf('upto') !== -1 || hdr.indexOf('till') !== -1 || hdr.indexOf('date') !== -1) && colMap.validUpto === undefined) colMap.validUpto = h;
+    else if (hdr.indexOf('rate') !== -1 && colMap.rate === undefined) colMap.rate = h;
+  }
+  if (colMap.container === undefined) colMap.container = 0;
+  if (colMap.clientName === undefined) colMap.clientName = 0;
+  if (colMap.clientCode === undefined) colMap.clientCode = 1;
+  if (colMap.size === undefined) colMap.size = 2;
+  if (colMap.type === undefined) colMap.type = 3;
+  if (colMap.location === undefined) colMap.location = 4;
+  if (colMap.deployedDate === undefined) colMap.deployedDate = 6;
+  if (colMap.validUpto === undefined) colMap.validUpto = 7;
+  if (colMap.rate === undefined) colMap.rate = 13;
+
+  if (targetRow != null) {
+    const j = targetRow - 2;
+    const row = dRows[j];
+    // Still verified against the container number — a stale/out-of-range
+    // row reference (the sheet changed shape since the caller last read it)
+    // must fail loudly, never silently write under the wrong container.
+    if (!row || !row[colMap.container] || String(row[colMap.container]).trim() != containerNo) { // eslint-disable-line eqeqeq
+      throw new AppError(`Deployed sheet row ${targetRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return { found: row, colMap, targetRow };
+  }
+
+  if (clientNameHint) {
+    for (let j = 0; j < dRows.length; j++) {
+      const row = dRows[j];
+      if (!row[colMap.container] || String(row[colMap.container]).trim() != containerNo) continue; // eslint-disable-line eqeqeq
+      if (clientMatches(row[colMap.clientName], clientNameHint)) return { found: row, colMap, targetRow: j + 2 };
+    }
+    // No container+client match — fall through to the plain search below
+    // rather than fail outright; an aliased/misspelled client name is a
+    // known, accepted risk elsewhere in this file (see clientMatches'
+    // own doc comment), not grounds to block a container that IS on the
+    // Deployed sheet.
+  }
+
+  for (let j = 0; j < dRows.length; j++) {
+    if (dRows[j][colMap.container] && String(dRows[j][colMap.container]).trim() == containerNo) { // eslint-disable-line eqeqeq
+      return { found: dRows[j], colMap, targetRow: j + 2 };
+    }
+  }
+  return { found: null, colMap, targetRow: -1 };
+}
+
+/** `deployedRow`: optional, the specific Deployed sheet row (1-based) to
+ *  off-lease — see _lookupDeployedForOffLease's doc comment for why this
+ *  matters whenever a container has more than one row there. */
+export async function addToOffLeaseTracking(containerNo, deployedRow) {
   return withSheetLock(OL_SHEET, async () => {
     await _ensureOffLeaseSheet();
 
@@ -1003,41 +1110,7 @@ export async function addToOffLeaseTracking(containerNo) {
       if (String(r[0]) == containerNo) return 'ALREADY_EXISTS'; // eslint-disable-line eqeqeq
     }
 
-    const { headers: dHeaders, rows: dRows } = await getSheetData(SHEETS.DEPLOYED);
-    if (!dRows.length) throw new AppError('No data in Deployed sheet');
-
-    const colMap = {};
-    for (let h = 0; h < dHeaders.length; h++) {
-      const hdr = String(dHeaders[h] || '').trim().toLowerCase();
-      if (hdr === '') continue;
-      if (hdr.indexOf('container') !== -1 && colMap.container === undefined) colMap.container = h;
-      else if ((hdr.indexOf('customer name') !== -1 || hdr.indexOf('client name') !== -1) && colMap.clientName === undefined) colMap.clientName = h;
-      else if ((hdr.indexOf('client code') !== -1 || hdr.indexOf('customer code') !== -1) && colMap.clientCode === undefined) colMap.clientCode = h;
-      else if (hdr.indexOf('size') !== -1 && colMap.size === undefined) colMap.size = h;
-      else if (hdr.indexOf('type') !== -1 && colMap.type === undefined) colMap.type = h;
-      else if (hdr.indexOf('location') !== -1 && colMap.location === undefined) colMap.location = h;
-      else if (hdr.indexOf('deployed') !== -1 && hdr.indexOf('date') !== -1 && colMap.deployedDate === undefined) colMap.deployedDate = h;
-      else if ((hdr.indexOf('valid') !== -1 || hdr.indexOf('agreement') !== -1) && (hdr.indexOf('upto') !== -1 || hdr.indexOf('till') !== -1 || hdr.indexOf('date') !== -1) && colMap.validUpto === undefined) colMap.validUpto = h;
-      else if (hdr.indexOf('rate') !== -1 && colMap.rate === undefined) colMap.rate = h;
-    }
-    if (colMap.container === undefined) colMap.container = 0;
-    if (colMap.clientName === undefined) colMap.clientName = 0;
-    if (colMap.clientCode === undefined) colMap.clientCode = 1;
-    if (colMap.size === undefined) colMap.size = 2;
-    if (colMap.type === undefined) colMap.type = 3;
-    if (colMap.location === undefined) colMap.location = 4;
-    if (colMap.deployedDate === undefined) colMap.deployedDate = 6;
-    if (colMap.validUpto === undefined) colMap.validUpto = 7;
-    if (colMap.rate === undefined) colMap.rate = 13;
-
-    let found = null, deployedTargetRow = -1;
-    for (let j = 0; j < dRows.length; j++) {
-      if (dRows[j][colMap.container] && String(dRows[j][colMap.container]).trim() == containerNo) { // eslint-disable-line eqeqeq
-        found = dRows[j];
-        deployedTargetRow = j + 2;
-        break;
-      }
-    }
+    const { found, colMap, targetRow: deployedTargetRow } = await _lookupDeployedForOffLease(containerNo, undefined, deployedRow);
     if (!found) throw new AppError(`Container not found: ${containerNo}`);
     console.log(`[OL-ADD] colMap.rate=${colMap.rate}, rateVal=${found[colMap.rate]}`);
 
@@ -1103,6 +1176,208 @@ export async function addToOffLeaseTracking(containerNo) {
     }
 
     return 'OK';
+  });
+}
+
+/* =============================================
+   AUTO-CREATE OFF-LEASE STAGE 2 FROM FMS STAGE 8 (2026-08-28)
+
+   Explicit, deliberate workflow change requested by the user: a Stage 8
+   (external FMS) row with Movement Type = "Offlease" now creates an
+   Off-Lease Tracking row AND completes its Stage 1 (Off-Lease Intimation)
+   automatically — attributed to the system ("Auto — FMS Stage 8"), not a
+   human. This is DIFFERENT from every other FMS integration in this file
+   (getFmsForContainer, enrichWithStage8Movements, getDeliveredKeys), which
+   only ever ENRICH a record a person already started via Stage 1 — this is
+   the one place Stage 8 data creates a new record by itself.
+
+   SAFETY: dryRun defaults to true. A dry run makes ZERO writes (to Sheets or
+   Mongo) — it only reads (Mongo mirror for the dedup set, one live Deployed
+   read per candidate, matching the live-read-before-write rule every other
+   write path in this file follows) and reports what WOULD happen and why.
+   Real writes only happen when a caller explicitly passes dryRun:false —
+   this is deliberately NOT wired into the automatic 5-minute FMS refresh
+   cron; it must be triggered (and reviewed) explicitly until the user is
+   satisfied with dry-run output across real data.
+============================================= */
+
+/** "Source DO No" — the last column of OL_HEADERS (olHeaders.generated.js),
+ *  a NEW bookkeeping column this feature added, not a live-sheet capture.
+ *  Fixed literal, not derived, per this file's established convention for
+ *  columns where drift would silently corrupt data (see OL_MARKED_COL_1BASED). */
+const OL_SOURCE_DO_COL = 289;
+
+const _normDoLike = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+const OL_AUTO_FMS_MIN_DO_LEN = 5; // same threshold/reasoning as stage8.service.js's MIN_DO_LEN — excludes "NA"-style placeholders
+
+/** Every Source DO already linked to an Off-Lease Tracking row — from the
+ *  Mongo mirror (fast), used to skip Stage 8 rows already fetched in (rule:
+ *  "no duplicate records"). */
+async function _linkedSourceDOs() {
+  const { rows } = await getSheetDataFromMongo(OL_SHEET);
+  const set = new Set();
+  for (const row of rows) {
+    const v = _normDoLike(row[OL_SOURCE_DO_COL]);
+    if (v) set.add(v);
+  }
+  return set;
+}
+
+/**
+ * Scans every Stage 8 "Offlease" movement row (already filtered by
+ * readOffleaseRows) and, for each one not yet linked, reports what would
+ * happen (dryRun, default) or actually creates the Off-Lease Stage 2 record
+ * (dryRun:false).
+ *
+ * Per-row outcome `status`:
+ *   WOULD_CREATE / CREATED   — eligible, everything checks out
+ *   ALREADY_LINKED           — this DO is already on an Off-Lease Tracking row
+ *   SKIPPED_INVALID          — missing/unusable Container No, Client Name, or DO No
+ *   SKIPPED_NOT_IN_DEPLOYED  — container isn't on the Deployed sheet (already
+ *                               off-leased elsewhere, or never tracked here) —
+ *                               there's no base record (size/type/location/...)
+ *                               to seed a tracking row from
+ *   ERROR                    — unexpected failure for this one row; never
+ *                               aborts the rest of the scan
+ */
+export async function autoCreateOffLeaseFromFms({ dryRun = true } = {}) {
+  const rows = await getAllOffleaseMovementRows();
+  const linked = await _linkedSourceDOs();
+  // Read once (Mongo mirror — this is a classification pass, not the write
+  // itself), shared across every candidate in the scan below, instead of one
+  // live Sheets read per row. The actual write, inside
+  // _createOffLeaseRecordFromFmsRow, always re-does this lookup fresh and
+  // live right before writing regardless of what this snapshot found, so a
+  // few minutes of staleness here can only ever produce an overly-cautious
+  // SKIPPED_NOT_IN_DEPLOYED at write time, never a wrong write.
+  const deployedSnapshot = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+  const results = [];
+
+  for (const r of rows) {
+    const container = safeStr(r.containerNo).trim();
+    const client = safeStr(r.clientName).trim();
+    const doRaw = safeStr(r.deliveryOrderNo).trim() || safeStr(r.bookingOrderNo).trim();
+    const doNorm = _normDoLike(doRaw);
+
+    const missing = [];
+    if (!container) missing.push('Container No');
+    if (!client) missing.push('Client Name');
+    if (doNorm.length < OL_AUTO_FMS_MIN_DO_LEN) missing.push('DO No');
+    if (missing.length) {
+      results.push({ container: container || '(blank)', do: doRaw || '(blank)', client, status: 'SKIPPED_INVALID', reason: `Missing/invalid: ${missing.join(', ')}` });
+      continue;
+    }
+
+    if (linked.has(doNorm)) {
+      results.push({ container, do: doRaw, client, status: 'ALREADY_LINKED' });
+      continue;
+    }
+
+    let deployedInfo;
+    try {
+      deployedInfo = await _lookupDeployedForOffLease(container, deployedSnapshot, undefined, client);
+    } catch (e) {
+      results.push({ container, do: doRaw, client, status: 'ERROR', reason: e?.message || String(e) });
+      continue;
+    }
+    if (!deployedInfo.found) {
+      results.push({ container, do: doRaw, client, status: 'SKIPPED_NOT_IN_DEPLOYED' });
+      continue;
+    }
+
+    if (dryRun) {
+      results.push({
+        container, do: doRaw, client,
+        status: 'WOULD_CREATE',
+        deployedClientName: safeStr(deployedInfo.found[deployedInfo.colMap.clientName])
+      });
+      continue;
+    }
+
+    try {
+      const status = await _createOffLeaseRecordFromFmsRow(container, doRaw, client);
+      results.push({ container, do: doRaw, client, status });
+    } catch (e) {
+      results.push({ container, do: doRaw, client, status: 'ERROR', reason: e?.message || String(e) });
+    }
+  }
+
+  const summary = results.reduce((acc, x) => { acc[x.status] = (acc[x.status] || 0) + 1; return acc; }, {});
+  return { dryRun, scanned: rows.length, summary, results };
+}
+
+/** The live-write half of autoCreateOffLeaseFromFms — everything re-checked
+ *  fresh inside the lock (dedup set AND the Deployed lookup), never trusting
+ *  the caller's dry-run snapshot for the actual write, same as every other
+ *  write path in this file. */
+async function _createOffLeaseRecordFromFmsRow(containerNo, doRaw, clientNameHint) {
+  return withSheetLock(OL_SHEET, async () => {
+    await _ensureOffLeaseSheet();
+
+    const linked = await _linkedSourceDOs();
+    if (linked.has(_normDoLike(doRaw))) return 'ALREADY_LINKED';
+
+    const { found, colMap, targetRow: deployedTargetRow } = await _lookupDeployedForOffLease(containerNo, undefined, undefined, clientNameHint);
+    if (!found) return 'SKIPPED_NOT_IN_DEPLOYED';
+
+    const leaseId = _formatLeaseId(await _peekNextLeaseIdNum());
+    const stamp = dmyTime(new Date());
+    const s1 = OL_STAGE_INFO[1];
+
+    const newRow = new Array(OL_HEADERS.length).fill('');
+    newRow[0] = found[colMap.container] || containerNo;
+    newRow[1] = leaseId;
+    newRow[2] = safeStr(found[colMap.size]);
+    newRow[3] = safeStr(found[colMap.type]);
+    newRow[4] = safeStr(found[colMap.clientCode]);
+    // Deployed's OWN client name, not the FMS row's — consistent with the
+    // rest of the app (access scoping, Sales CRM matching, etc. all key off
+    // this sheet's own client-name spelling), and avoids seeding a
+    // differently-spelled client name that would itself fail exactly the
+    // alias-matching problem this whole feature was built around.
+    newRow[5] = safeStr(found[colMap.clientName]);
+    newRow[6] = safeStr(found[colMap.location]);
+    newRow[7] = fmtCell(found[colMap.deployedDate]);
+    newRow[8] = fmtCell(found[colMap.validUpto]);
+    const rateVal = found[colMap.rate];
+    newRow[9] = typeof rateVal === 'number' ? rateVal : safeStr(rateVal);
+
+    // Stage 1 (Off-Lease Intimation), auto-completed — same status-quad
+    // convention saveOffLeaseStage uses (statusCol-2=timestamp,
+    // statusCol-1=user, statusCol=status), attributed to the system.
+    newRow[s1.startCol] = stamp.split(' ')[0];       // "OL Intimation Date"
+    newRow[s1.statusCol - 2] = stamp;                // "Stage 1 Timestamp"
+    newRow[s1.statusCol - 1] = 'Auto — FMS Stage 8';  // "Stage 1 User"
+    newRow[s1.statusCol] = 'Completed';               // "Stage 1 Status"
+
+    newRow[OL_SOURCE_DO_COL] = doRaw;
+
+    const { rowNum } = await appendRow(OL_SHEET, newRow);
+
+    const dStamp = dmyTime(new Date());
+    await batchUpdateValues([
+      { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[dStamp]] },
+      { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] }
+    ]);
+
+    try {
+      if (rowNum) {
+        await getCollection(OL_SHEET).updateOne(
+          { key: `row_${rowNum - 2}` },
+          { $set: { key: `row_${rowNum - 2}`, row: newRow } },
+          { upsert: true }
+        );
+      }
+      await getCollection(SHEETS.DEPLOYED).updateOne(
+        { key: `row_${deployedTargetRow - 2}` },
+        { $set: { 'row.21': dStamp, 'row.22': 'Off-Lease' } }
+      );
+    } catch (e) {
+      console.error('[OL-AUTO-FMS] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    console.log(`[OL-AUTO-FMS] Created ${containerNo} / DO ${doRaw} -> ${leaseId} (client: ${newRow[5]})`);
+    return 'CREATED';
   });
 }
 
@@ -1309,6 +1584,10 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     const gfRow = gateFormIndex ? pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]) : null;
     const gatedIn = isGatedIn(gfRow);
     const repairSkip = isRepairNotRequired(gfRow);
+    // Active "Move To Stage" jump (any reason) — computed once, reused
+    // below both to skip stages this jump bypassed and to land the row in
+    // its chosen destination stage's queue. See _jumpSkipsStage's doc comment.
+    const jumpTarget = _jumpTargetInternal(row);
 
     const statusVal = row[info.statusCol];
     /* Gate In (internal 7) has no form left to fill its own status column —
@@ -1321,16 +1600,38 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     if (Number(stage) === OL_STAGE3_INTERNAL && gatedIn) continue;
     if (Number(stage) === OL_INSPECTION_INTERNAL && repairSkip) continue;
     if (statusVal && String(statusVal).trim() !== '') continue;
+    /* This row was moved directly past `stage` via an active jump — it isn't
+       genuinely pending here, it jumped straight to its chosen destination
+       stage instead. */
+    if (_jumpSkipsStage(jumpTarget, stage)) continue;
 
     /* Has this container's site delivery been recorded in STAGE-10? Keyed on
-       container alone — see getDeliveredKeys() for why client is not used. */
-    const delivered = deliveredKeys ? deliveredKeys.has(containerKey) : false;
+       container alone — see getDeliveredKeys() for why client is not used.
+       REVERTED 2026-08-28: briefly bounded to "on/after this row's own
+       Stage 1 completion" to stop an older, unrelated cycle's delivery from
+       wrongly bypassing Stage 2 (confirmed once, MYRU4513729). Reverted the
+       same day — confirmed against SZLU9446439, SZLU9915829, GESU9563904,
+       CXRU1037294 and CAIU5404270 that the OPPOSITE pattern (this app's own
+       Stage 1 completed AFTER the external FMS system's own delivery
+       timestamp — paperwork catching up to physical reality, not the other
+       way round) is the common case here, not the exception. The date bound
+       blocked real, correct progression on multiple live containers — a
+       bigger cost than the one narrow case it prevented. Passing sinceMs as
+       null restores the original "ever delivered" behaviour via
+       isDeliveredSince's own fallback. */
+    const delivered = deliveredKeys ? isDeliveredSince(deliveredKeys, containerKey, null) : false;
+    /* Manual "Move To Stage" closeout (saveOffLeaseMoveToStage(Fast)) — the
+       same completion signal as `delivered`, for containers that never go
+       through the FMS-tracked transport chain at all (a direct client-to-
+       client transfer, or some other disposition). Read straight off this
+       same row, no extra fetch. */
+    const movedOut = _isMovedOut(row);
 
-    /* Stage 2 (internal 6) is DONE once STAGE-10 has its delivery — drop it
-       from that queue so it is not shown as still awaiting transport. Only
-       once it has actually reached Stage 2, though: a row still sitting at
-       Stage 1 must stay there. */
-    if (Number(stage) === OL_STAGE2_INTERNAL && delivered
+    /* Stage 2 (internal 6) is DONE once STAGE-10 has its delivery, or once
+       it's been manually moved — drop it from that queue so it is not shown
+       as still awaiting transport. Only once it has actually reached Stage
+       2, though: a row still sitting at Stage 1 must stay there. */
+    if (Number(stage) === OL_STAGE2_INTERNAL && (delivered || movedOut)
         && safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '') continue;
 
     if (prevInfo) {
@@ -1344,7 +1645,7 @@ export async function getOffLeaseData(stage, opts = {}, user) {
          at the same time, which is how 7 + 20 + 10 came to 37 against 36
          records. */
       const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
-      const releasedByDelivery = Number(stage) === OL_STAGE3_INTERNAL && delivered && stage1Done;
+      const releasedByDelivery = Number(stage) === OL_STAGE3_INTERNAL && (delivered || movedOut) && stage1Done;
       /* Gate In being confirmed says nothing about whether Transportation
          itself was ever completed — the external form only tracks physical
          gate movements, not this app's own Stage 2. A container gated in
@@ -1355,7 +1656,7 @@ export async function getOffLeaseData(stage, opts = {}, user) {
          this check it jumped straight into the Inspection queue while
          Transportation's own tab still correctly listed it as pending —
          two queues both claiming the same container. */
-      const transportDone = safeStr(row[OL_STAGE_INFO[OL_STAGE2_INTERNAL].statusCol]).trim() !== '' || (delivered && stage1Done);
+      const transportDone = safeStr(row[OL_STAGE_INFO[OL_STAGE2_INTERNAL].statusCol]).trim() !== '' || ((delivered || movedOut) && stage1Done);
       /* Same "released past a column nothing can fill" shape as the
          delivery bypass, one link further down the chain: Inspection's gate
          is normally Gate In's status column (135); a gated-in container
@@ -1365,7 +1666,13 @@ export async function getOffLeaseData(stage, opts = {}, user) {
          the SAME form's signal, skipping Inspection's column entirely. */
       const releasedByGateForm = Number(stage) === OL_INSPECTION_INTERNAL && gatedIn && !repairSkip && transportDone;
       const releasedByRepairSkip = Number(stage) === OL_BILLING_INTERNAL && repairSkip && transportDone;
-      const bypassed = releasedByDelivery || releasedByGateForm || releasedByRepairSkip;
+      /* This row's active jump names `stage` as its actual destination — it
+         must appear in this queue right now regardless of whatever normally
+         gates entry to it (an intermediate stage's own status), which is
+         the whole point of a direct jump. See _prepareMoveToStage/
+         saveOffLeaseMoveToStage's doc comments. */
+      const jumpLanded = jumpTarget != null && Number(stage) === jumpTarget && stage1Done;
+      const bypassed = releasedByDelivery || releasedByGateForm || releasedByRepairSkip || jumpLanded;
       const prevStatus = row[prevInfo.statusCol];
       if (!bypassed && (!prevStatus || String(prevStatus).trim() === '')) continue;
 
@@ -1514,8 +1821,13 @@ export async function getOffLeaseStageDetail(containerNo, stage, user) {
        every form open, which made the form slow and — once the per-minute
        read quota was exhausted — silently returned an empty record, so every
        field rendered as a dash. saveOffLeaseStage still reads live Sheets,
-       because its row numbers DO target writes. */
-    const { rows } = await getSheetData(OL_SHEET);
+       because its row numbers DO target writes.
+
+       BUG FOUND AND FIXED 2026-08-27: this comment already claimed the
+       Mongo-mirror switch above, but the line below still called the LIVE
+       getSheetData — never actually updated when the rest of the file's
+       Mongo-first pass happened 2026-08-26. Genuinely switched now. */
+    const { rows } = await getSheetDataFromMongo(OL_SHEET);
     const rn = _findOlRowByContainer(rows, containerNo);
     if (rn === -1) throw new AppError(`Not found: ${safeStr(containerNo)}`);
     const info = OL_STAGE_INFO[stage];
@@ -1556,6 +1868,25 @@ export async function getOffLeaseStageDetail(containerNo, stage, user) {
         ].filter(Boolean).join(' · ');
       }
     }
+
+    /* Move To Stage / Send Back state — exposed for every stage (cheap, just
+       a few more already-fetched columns) so the frontend can show what was
+       recorded on Stage 2's own form when reopened, and — for whichever
+       stage this row was actively jumped TO — offer Send Back there. */
+    const jumpTargetInternal = _jumpTargetInternal(row);
+    result._move = {
+      active: _isMovedOut(row),
+      reason: safeStr(row[OL_MOVE_REASON_COL]),
+      newClientName: safeStr(row[OL_MOVE_NEW_CLIENT_COL]),
+      clientScope: safeStr(row[OL_MOVE_CLIENT_SCOPE_COL]),
+      arrivalDate: safeStr(row[OL_MOVE_ARRIVAL_DATE_COL]),
+      remarks: safeStr(row[OL_MOVE_REMARKS_COL]),
+      commentType: safeStr(row[OL_MOVE_COMMENT_TYPE_COL]),
+      date: safeStr(row[OL_MOVE_DATE_COL]),
+      jumpTargetInternal,
+      jumpTargetDisplay: jumpTargetInternal != null ? displayStageNum(jumpTargetInternal) : null,
+      canSendBackHere: jumpTargetInternal != null && jumpTargetInternal === Number(stage)
+    };
 
     return result;
   } catch (e) {
@@ -1793,6 +2124,344 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail)
   return 'OK';
 }
 
+/* =============================================
+   MOVE TO STAGE (Stage 2 — Transportation) + SEND BACK
+============================================= */
+
+/** Appended columns (olHeaders.generated.js) — see that file's header comment
+ *  for why these are hand-added rather than a live-sheet capture. Fixed
+ *  literals, not derived, per this file's established convention (see
+ *  OL_SOURCE_DO_COL just above). Deliberately NOT OL_STAGE_INFO[6].statusCol
+ *  (99) — that column is "Other Charges [Loading/Crane/Labor]", a real
+ *  financial field this action must never overwrite.
+ *
+ *  These 8 columns hold only the CURRENT live move state — cleared entirely
+ *  by Send Back, which is what naturally reverts queue membership back to
+ *  Stage 2 (see _isMovedOut/_jumpTargetInternal below). The permanent,
+ *  never-cleared audit trail is a separate append-only sheet — see
+ *  offleaseMoveHistory.service.js — so Send Back losing the live columns
+ *  never loses the history. */
+const OL_MOVE_REASON_COL = 290;
+const OL_MOVE_NEW_CLIENT_COL = 291;
+const OL_MOVE_REMARKS_COL = 292;
+const OL_MOVE_BY_COL = 293;
+const OL_MOVE_TIMESTAMP_COL = 294;
+const OL_MOVE_COMMENT_TYPE_COL = 295;
+const OL_MOVE_DATE_COL = 296;
+const OL_MOVE_JUMP_TARGET_COL = 297;
+const OL_MOVE_CLIENT_SCOPE_COL = 298;
+const OL_MOVE_ARRIVAL_DATE_COL = 299;
+const OL_MOVE_ALL_COLS = [
+  OL_MOVE_REASON_COL, OL_MOVE_NEW_CLIENT_COL, OL_MOVE_REMARKS_COL, OL_MOVE_BY_COL,
+  OL_MOVE_TIMESTAMP_COL, OL_MOVE_COMMENT_TYPE_COL, OL_MOVE_DATE_COL, OL_MOVE_JUMP_TARGET_COL,
+  OL_MOVE_CLIENT_SCOPE_COL, OL_MOVE_ARRIVAL_DATE_COL
+];
+
+export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other'];
+
+/** DISPLAY stage number (what the UI and this Move To Stage dropdown show,
+ *  e.g. 3/4/5) -> INTERNAL stage number (what selects the sheet column
+ *  range everywhere else in this file) — the reverse of displayStageNum. */
+const OL_INTERNAL_BY_DISPLAY = new Map(OL_ACTIVE_STAGE_NUMS.map((s, i) => [i + 1, s]));
+
+/** The only stages a "Move To Stage" jump may target — Gate In, Inspection,
+ *  Billing (internal 7/3/5 — display Stage 3/4/5). Intimation (1) and FMS
+ *  Closure (8) are not valid jump destinations. */
+const OL_JUMP_TARGET_INTERNALS = [OL_STAGE3_INTERNAL, OL_INSPECTION_INTERNAL, OL_BILLING_INTERNAL];
+
+/** True once a row has been moved out of Stage 2 via either Reason — the
+ *  Transportation-done completion signal `getOffLeaseData`/
+ *  `getOffLeaseDashboardData`/`_classifyOffLeaseStages` all check, exactly
+ *  parallel to `delivered` (the STAGE-10 signal) but read directly off the
+ *  row with no extra fetch. */
+function _isMovedOut(row) {
+  return safeStr(row[OL_MOVE_REASON_COL]).trim() !== '';
+}
+
+/** The internal stage number this row was jumped directly to via Reason =
+ *  "Other", or null if not currently, actively jumped (never moved that
+ *  way, moved via "Client to Client" instead, or already Sent Back). */
+function _jumpTargetInternal(row) {
+  const v = parseInt(safeStr(row[OL_MOVE_JUMP_TARGET_COL]).trim(), 10);
+  return OL_JUMP_TARGET_INTERNALS.includes(v) ? v : null;
+}
+
+/** True when stage `s` sits strictly BETWEEN Transportation and an active
+ *  jump's target, in workflow order — i.e. a stage this jump skipped over
+ *  entirely, so `s`'s own pending queue must never show this row (it isn't
+ *  genuinely pending there; it jumped past it). Ordered by POSITION in
+ *  OL_ACTIVE_STAGE_NUMS, same reasoning as _prevActiveStage — the workflow
+ *  is 1 -> 6 -> 7 -> 3 -> 5 -> 8, not numeric order. */
+function _jumpSkipsStage(jumpTargetInternal, s) {
+  if (jumpTargetInternal == null) return false;
+  const iTransport = OL_ACTIVE_STAGE_NUMS.indexOf(OL_STAGE2_INTERNAL);
+  const iTarget = OL_ACTIVE_STAGE_NUMS.indexOf(jumpTargetInternal);
+  const iS = OL_ACTIVE_STAGE_NUMS.indexOf(Number(s));
+  return iS > iTransport && iS < iTarget;
+}
+
+/**
+ * Validates + shapes a Move To Stage payload into exactly what gets written,
+ * or throws AppError. Pure (no I/O) so the live and fast save paths below
+ * can share it rather than hand-duplicating this feature's branching logic
+ * twice — unlike the trivial technician-cost arithmetic this file duplicates
+ * elsewhere on purpose (see saveOffLeaseStageFast's own comment on why THAT
+ * duplication is fine), getting one of these two branches subtly out of
+ * sync would silently write inconsistent columns.
+ */
+function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }) {
+  const r = safeStr(reason).trim();
+  if (!OL_MOVE_REASONS.includes(r)) throw new AppError(`Reason must be one of: ${OL_MOVE_REASONS.join(', ')}`);
+  const rmk = safeStr(remarks).trim();
+
+  // All three reasons record where the container actually went: a real Date
+  // and a Move To Stage destination (Gate In / Inspection / Billing) — the
+  // record appears there directly, see _jumpSkipsStage's doc comment,
+  // without being forced through whatever normally sits between
+  // Transportation and that stage. Container No, DO No and Movement Type on
+  // the original record are untouched either way.
+  const d = safeStr(date).trim();
+  if (!d) throw new AppError('Date is required');
+  const display = parseInt(moveToStage, 10);
+  const jumpTargetInternal = OL_INTERNAL_BY_DISPLAY.get(display);
+  if (!OL_JUMP_TARGET_INTERNALS.includes(jumpTargetInternal)) {
+    throw new AppError('Move To Stage must be one of: Stage 3, Stage 4, Stage 5');
+  }
+
+  if (r === 'Client to Client') {
+    const clientName = safeStr(newClientName).trim();
+    if (!clientName) throw new AppError('New Client Name is required');
+    const arrival = safeStr(arrivalDate).trim();
+    return {
+      reason: r, newClientName: clientName, clientScope: '', arrivalDate: arrival,
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+    };
+  }
+
+  if (r === 'Client Scope') {
+    const scope = safeStr(clientScope).trim();
+    if (!scope) throw new AppError('Scope is required');
+    const arrival = safeStr(arrivalDate).trim();
+    return {
+      reason: r, newClientName: '', clientScope: scope, arrivalDate: arrival,
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+    };
+  }
+
+  // 'Other'
+  const ct = safeStr(commentType).trim();
+  if (!ct) throw new AppError('Comment / Type is required');
+  return {
+    reason: r, newClientName: '', clientScope: '', arrivalDate: '',
+    remarks: rmk, commentType: ct, date: d, jumpTargetInternal
+  };
+}
+
+function _moveColumnValues(shaped, userEmail, stamp) {
+  return {
+    [OL_MOVE_REASON_COL]: shaped.reason,
+    [OL_MOVE_NEW_CLIENT_COL]: shaped.newClientName,
+    [OL_MOVE_CLIENT_SCOPE_COL]: shaped.clientScope,
+    [OL_MOVE_ARRIVAL_DATE_COL]: shaped.arrivalDate,
+    [OL_MOVE_REMARKS_COL]: shaped.remarks,
+    [OL_MOVE_BY_COL]: userEmail || '',
+    [OL_MOVE_TIMESTAMP_COL]: stamp,
+    [OL_MOVE_COMMENT_TYPE_COL]: shaped.commentType,
+    [OL_MOVE_DATE_COL]: shaped.date,
+    [OL_MOVE_JUMP_TARGET_COL]: shaped.jumpTargetInternal != null ? String(shaped.jumpTargetInternal) : ''
+  };
+}
+
+/**
+ * Manual alternate-disposition move for Transportation (internal stage 6): a
+ * container that never goes through Crystal's own FMS-tracked transport
+ * chain (STAGE-8/9/10) — a direct client-to-client transfer, or some other
+ * movement type — has no STAGE-10 delivery to bypass it out of the Stage 2
+ * queue the normal way.
+ *
+ * All three reasons record moveToStage (a DISPLAY stage number: 3, 4 or 5) as
+ * the container's real destination stage (Gate In / Inspection / Billing)
+ * plus a Date, and the record appears there directly — see _jumpSkipsStage's
+ * doc comment — without being forced through whatever sits between
+ * Transportation and that stage in the normal sequence.
+ *
+ * Reason = "Client to Client" additionally captures a New Client Name and an
+ * optional Arrival Date (when the container reached the new client, separate
+ * from Date above, which is when the move itself was decided/recorded).
+ * Reason = "Client Scope" additionally captures a free-text Scope. Reason =
+ * "Other" additionally captures a free-text Comment / Type.
+ *
+ * LIVE path — writes the real Google Sheet and logs the audit-trail entry
+ * (offleaseMoveHistory.service.js). Called directly by nothing in this app
+ * except the outbox replay of the Fast path below; kept as a genuine,
+ * independently-callable function (not inlined into the replay registry)
+ * for the same reason saveOffLeaseStage is: this IS the source of truth the
+ * fast path's Mongo patch is a preview of. The history log is written HERE,
+ * not in the fast path, for the same reason saveOffLeaseStage (not its fast
+ * path) sends the Stage 4 quotation email — a side effect belongs on the
+ * one write the outbox guarantees runs, not on the instant preview.
+ */
+export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEmail) {
+  await checkActionPermission(`offlease${OL_STAGE2_INTERNAL}`, userEmail);
+  const shaped = _prepareMoveToStage(payload);
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _findOlRowByContainer(rows, containerNo);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    if (_isMovedOut(row)) return 'ALREADY_PROCESSED';
+
+    const stamp = dmyTime(new Date());
+    const values = _moveColumnValues(shaped, userEmail, stamp);
+    const cellUpdates = Object.entries(values).map(([col, val]) => ({
+      range: `'${OL_SHEET}'!${colLetter(Number(col))}${rn}`, values: [[val]]
+    }));
+    await batchUpdateValues(cellUpdates);
+
+    // Mirror into Mongo immediately — same best-effort reasoning as
+    // saveOffLeaseStage's own mirror block just above.
+    try {
+      const patch = {};
+      for (const [col, val] of Object.entries(values)) patch[`row.${col}`] = val;
+      const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: patch });
+      if (!r.matchedCount) console.warn(`[OL-MOVE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-MOVE] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    try {
+      await addMoveHistoryEntry({
+        containerNo, leaseId: safeStr(row[1]), clientName: safeStr(row[5]),
+        event: 'MOVED', reason: shaped.reason, commentType: shaped.commentType, remarks: shaped.remarks, date: shaped.date,
+        fromStage: stageCaption(OL_STAGE2_INTERNAL),
+        toStage: stageCaption(shaped.jumpTargetInternal),
+        by: userEmail
+      });
+    } catch (e) {
+      console.error('[OL-MOVE] history log failed (non-fatal):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/**
+ * Mongo-first fast path — same shape and trade-off as saveOffLeaseStageFast:
+ * patches Mongo directly so the container drops out of Stage 2's queue and
+ * into its chosen destination stage's queue instantly, then enqueues a
+ * replay of the live function above to make the same change
+ * on the real Google Sheet a few seconds later. This is the entry point the
+ * controller calls. Does not itself log the audit-trail entry — see the live
+ * function's doc comment for why.
+ */
+export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, userEmail) {
+  await checkActionPermission(`offlease${OL_STAGE2_INTERNAL}`, userEmail);
+  const shaped = _prepareMoveToStage(payload);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+  if (_isMovedOut(found.row)) return 'ALREADY_PROCESSED';
+
+  const stamp = dmyTime(new Date());
+  const values = _moveColumnValues(shaped, userEmail, stamp);
+  const patch = {};
+  for (const [col, val] of Object.entries(values)) patch[`row.${col}`] = val;
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  await enqueueSheetReplay('offlease.saveOffLeaseMoveToStage', [containerNo, payload, userEmail], { actor: userEmail });
+
+  return 'OK';
+}
+
+/**
+ * Reverses an active "Move To Stage" jump — either reason, both set a
+ * destination stage now. Clears all 8 live move-state columns,
+ * which is what naturally makes the record reappear in Stage 2's own
+ * pending queue again (see _isMovedOut/_jumpTargetInternal) — no duplicate
+ * record is created, this is the SAME row. The permanent audit trail is
+ * untouched (a new SENT_BACK entry is appended alongside the earlier MOVED
+ * one, neither is ever deleted).
+ *
+ * Permission is checked against the stage being sent back FROM (the one the
+ * caller is currently looking at, since that's what they need edit rights
+ * on to act from it) rather than Stage 2's own — deliberately different
+ * from saveOffLeaseMoveToStage above.
+ */
+export async function saveOffLeaseSendBack(containerNo, userEmail) {
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _findOlRowByContainer(rows, containerNo);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    const jumpTarget = _jumpTargetInternal(row);
+    if (jumpTarget == null) throw new AppError('This record was not moved via Move To Stage — nothing to send back.');
+    await checkActionPermission(`offlease${jumpTarget}`, userEmail);
+
+    const priorReason = safeStr(row[OL_MOVE_REASON_COL]);
+    const priorCommentType = safeStr(row[OL_MOVE_COMMENT_TYPE_COL]);
+    const priorRemarks = safeStr(row[OL_MOVE_REMARKS_COL]);
+    const priorDate = safeStr(row[OL_MOVE_DATE_COL]);
+
+    const cellUpdates = OL_MOVE_ALL_COLS.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const patch = {};
+      for (const c of OL_MOVE_ALL_COLS) patch[`row.${c}`] = '';
+      const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: patch });
+      if (!r.matchedCount) console.warn(`[OL-MOVE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-MOVE] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    try {
+      await addMoveHistoryEntry({
+        containerNo, leaseId: safeStr(row[1]), clientName: safeStr(row[5]),
+        event: 'SENT_BACK', reason: priorReason, commentType: priorCommentType, remarks: priorRemarks, date: priorDate,
+        fromStage: stageCaption(jumpTarget), toStage: stageCaption(OL_STAGE2_INTERNAL),
+        by: userEmail
+      });
+    } catch (e) {
+      console.error('[OL-MOVE] history log failed (non-fatal):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/** Mongo-first fast path for Send Back — same trade-off as the other Fast
+ *  paths in this file. */
+export async function saveOffLeaseSendBackFast(containerNo, userEmail) {
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  const jumpTarget = _jumpTargetInternal(found.row);
+  if (jumpTarget == null) throw new AppError('This record was not moved via Move To Stage — nothing to send back.');
+  await checkActionPermission(`offlease${jumpTarget}`, userEmail);
+
+  const patch = {};
+  for (const c of OL_MOVE_ALL_COLS) patch[`row.${c}`] = '';
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  await enqueueSheetReplay('offlease.saveOffLeaseSendBack', [containerNo, userEmail], { actor: userEmail });
+
+  return 'OK';
+}
+
 /** `row` = the pre-write base row (cols A-F never change in a stage-4 save,
  *  so the caller's already-fetched row is safe to reuse instead of a re-read). */
 async function _sendOffLeaseQuotationEmail(rn, data, row) {
@@ -1977,11 +2646,22 @@ function _clientNameFallback(leaseInfo) {
  *   and/or repair-skipped needs to land on its true current stage in one
  *   pass, not get stranded one hop short at Gate In because the patch only
  *   knew how to advance past Transportation.
+ *
+ *   `movedOut` (computed inside, not a param — read straight off `row`)
+ *   is the same completion signal for a manual "Move To Stage" closeout
+ *   (saveOffLeaseMoveToStage(Fast)): a container that never goes through
+ *   the FMS-tracked transport chain at all.
  */
 function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSkip = false, delivered = false) {
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const approval = apCol >= 0 ? safeStr(row[apCol]).trim() : '';
   const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
+  // Manual "Move To Stage" closeout — same completion signal as `delivered`,
+  // read straight off this row (see _isMovedOut's doc comment).
+  const movedOut = _isMovedOut(row);
+  // Active jump destination (any reason), or null — see
+  // _jumpSkipsStage's doc comment.
+  const jumpTarget = _jumpTargetInternal(row);
 
   const stages = OL_ACTIVE_STAGE_NUMS.map((s) => {
     const info = OL_STAGE_INFO[s];
@@ -1994,19 +2674,75 @@ function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSkip = fal
        another stage's data on the dashboard. */
     const remarkCol = info.statusCol - 3;
     const remark = /remark/i.test(safeStr(headers[remarkCol])) ? safeStr(row[remarkCol]).trim() : '';
-    const bypassDone = (s === OL_STAGE2_INTERNAL && delivered && stage1Done)
+    /* BUG FOUND AND FIXED 2026-08-28: this function is a SEPARATE
+       reimplementation of getOffLeaseData's own bypass rules (used for the
+       Off-Lease Dashboard's KPI/pipeline view instead of the actual stage
+       queues) and had drifted out of sync with it — missing the Billing
+       bypass entirely. Confirmed via a direct count comparison: the
+       Dashboard reported 4 containers at Billing where the real Stage 5
+       queue (getOffLeaseData) correctly showed 13, because a repair-skip
+       container that had genuinely bypassed Inspection straight into
+       Billing was never marked "done" at Inspection here, so the dashboard
+       kept reporting it stuck one stage further back. Both functions must
+       be kept in sync — see getOffLeaseData's own bypass block (~line 1546)
+       for the source of truth this mirrors.
+       CORRECTION, same day: the Billing bypass line this comment used to
+       add here was a MISREADING of getOffLeaseData's releasedByRepairSkip —
+       that condition describes "Inspection counts as done, for the purpose
+       of releasing rows INTO Billing's queue", not "Billing itself is
+       done". Applying it as a Billing-completion bypass wrongly marked
+       Billing done for repair-skip containers that are still genuinely
+       pending there (confirmed on HNKU6063239, HNKU6270257, SZLU2011901 —
+       all showed done at Billing but still appeared in Billing's own real
+       queue). Removed — Billing only completes via a real, human-filled
+       status, and the "implied done" backward pass below already covers
+       the actual case (an earlier stage bypassed) this was mistakenly
+       trying to solve a second time. */
+    // This stage sat between Transportation and an active jump's actual
+    // destination — it was never genuinely pending, the row jumped past it.
+    const jumpSkipped = _jumpSkipsStage(jumpTarget, s);
+    const bypassDone = (s === OL_STAGE2_INTERNAL && (delivered || movedOut) && stage1Done)
       || (s === OL_STAGE3_INTERNAL && gatedIn)
-      || (s === OL_INSPECTION_INTERNAL && repairSkip);
+      || (s === OL_INSPECTION_INTERNAL && repairSkip)
+      || jumpSkipped;
     return {
       stage: s,
       displayStage: displayStageNum(s),
       label: OL_STAGE_LABELS[s],
       done: st !== '' || bypassDone,
-      skipped: s === OL_INSPECTION_INTERNAL && repairSkip,
+      real: st !== '', // genuinely filled in (not just bypass-inferred) — see the backward pass below
+      skipped: (s === OL_INSPECTION_INTERNAL && repairSkip) || jumpSkipped,
+      movedToHere: jumpTarget != null && s === jumpTarget,
       timestamp: row[info.statusCol - 2],
       remark
     };
   });
+
+  /* BUG FOUND AND FIXED 2026-08-28: getOffLeaseData's actual write path
+   * (saveOffLeaseStage) never enforces "the previous stage must be done"
+   * as a precondition for WRITING — it only checks that stage N's own
+   * status is still blank. The prevStatus/bypass gating only governs
+   * whether a row is SHOWN in a given stage's pending queue, at read time,
+   * using whatever gatedIn/repairSkip/delivered signals hold RIGHT NOW.
+   * Both together mean a stage can end up genuinely completed even though
+   * an EARLIER stage's own status is blank and its bypass condition no
+   * longer holds (or never did, if it was filled by hand, or the
+   * gatedIn/delivered signal it relied on has since changed) — confirmed on
+   * GSOU6384240, CICU4881946, CXRU1030387, CXRU1040451: Inspection shows a
+   * real "Completed" status while Transportation and Gate In are both
+   * blank with no active bypass. The old strict "first not-done stage,
+   * scanned in order" model got stuck reporting Transportation as current
+   * for all four, while the real Billing queue (getOffLeaseData) correctly
+   * had them past Inspection already — it only ever checks the ONE
+   * immediately preceding stage, never the whole chain.
+   *
+   * Fix: a stage with a REAL (non-bypass) status implies every stage before
+   * it must have been satisfied at some point, even if this function can't
+   * reconstruct exactly how. `impliedDone` is set on every stage up to the
+   * LAST one with a real status. */
+  let lastRealIdx = -1;
+  stages.forEach((s, i) => { if (s.real) lastRealIdx = i; });
+  stages.forEach((s, i) => { s.impliedDone = i <= lastRealIdx; });
 
   const apLower = approval.toLowerCase();
   let currentStage, stageClass, currentStageNum;
@@ -2018,11 +2754,9 @@ function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSkip = fal
   } else if (apLower === 'rejected') {
     currentStage = 'Rejected — container stays on lease'; stageClass = 'rejected'; currentStageNum = null;
   } else {
-    /* First unfinished stage after Stage 1. Searched by stage number rather
-       than array index because retired stages leave gaps in the sequence. */
-    // `stages` is built in OL_ACTIVE_STAGE_NUMS order, so the first unfinished
-    // entry after the first IS the next stage — index order, not numeric.
-    const next = stages.slice(1).find((s) => !s.done);
+    /* First unfinished stage after Stage 1 — "unfinished" meaning neither
+       done (real or bypass) NOR implied done by a later real stage. */
+    const next = stages.slice(1).find((s) => !s.done && !s.impliedDone);
     if (!next) { currentStage = 'Completed — container released'; stageClass = 'done'; currentStageNum = null; }
     else { currentStage = stageCaption(next.stage); stageClass = 'stage'; currentStageNum = next.stage; }
   }
@@ -2080,19 +2814,97 @@ export async function getOffLeaseDashboardData(user) {
   let deliveredKeys;
   try { deliveredKeys = await getDeliveredKeys(); } catch (e) { deliveredKeys = undefined; }
 
-  const items = [];
-  const kpis = { active: 0, pendingApproval: 0, byStage: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0 }, completedThisMonth: 0 };
+  /* GUARANTEED-CONSISTENT current-stage/KPI source, added 2026-08-28 after a
+   * whole day of the Dashboard's own hand-approximated classifier
+   * (_classifyOffLeaseStages) drifting from the real per-stage queues
+   * (getOffLeaseData) in several different ways — missing bypasses, wrong
+   * bypass ownership, and finally a genuine data anomaly (a later stage
+   * completed while an earlier one's own gating condition never held, which
+   * no single-pass "is stage N done" model can safely infer either way).
+   * Rather than keep hand-fixing a second approximation of the same logic,
+   * this now calls the SAME getOffLeaseData/getOffLeaseApprovalData every
+   * stage tab uses, sharing the already-fetched sheetData/deliveredKeys/
+   * gateFormIndex so it costs one extra pass per active stage, not one
+   * extra live/Mongo read. byStage is now guaranteed to equal
+   * getOffLeaseStageCounts' own counts by construction, not by staying in
+   * sync by hand. `_classifyOffLeaseStages` is still used below for the
+   * per-stage remarks/timestamps the pipeline modal displays — only
+   * currentStage/currentStageNum/stageClass are overridden from here. */
+  const sheetData = { headers, rows };
+  /* Keyed by _rowNum (the actual sheet row), NOT container number — a
+   * container can have more than one Off-Lease Tracking record (TRIU6681671
+   * has two: LEASE0027 and LEASE0038), and keying this by container alone
+   * merges their queue memberships together. BUG FOUND AND FIXED 2026-08-28:
+   * confirmed LEASE0038's own pendingStages (below) wrongly included Gate In
+   * (7) — LEASE0038 itself is NOT in that queue (isGatedIn is true for it,
+   * which excludes it), but LEASE0027, sharing the same container number,
+   * genuinely IS, and the container-keyed map handed that membership to
+   * BOTH records. Same fix applied to approvalPending just below, for the
+   * identical reason. */
+  const pendingByRow = new Map(); // _rowNum -> Set(stage nums it's pending in)
+  const byStageQueueCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0 };
+  await Promise.all(OL_ACTIVE_STAGE_NUMS.map(async (s) => {
+    try {
+      const d = await getOffLeaseData(s, { deliveredKeys, gateFormIndex, sheetData }, user);
+      byStageQueueCounts[s] = d.data.length;
+      for (const item of d.data) {
+        if (!pendingByRow.has(item._rowNum)) pendingByRow.set(item._rowNum, new Set());
+        pendingByRow.get(item._rowNum).add(s);
+      }
+    } catch (e) { /* leave this stage's count/containers unrepresented rather than fail the whole dashboard */ }
+  }));
+  let approvalPendingRows = new Set();
+  try {
+    approvalPendingRows = new Set((await getOffLeaseApprovalData(user, sheetData)).data.map((d) => d._rowNum));
+  } catch (e) { /* leave empty — no approval-queue containers surfaced, not a broken dashboard */ }
 
-  for (const row of rows) {
+  const items = [];
+  /* byStage seeded directly from each stage's own real queue length
+   * (byStageQueueCounts), NOT accumulated per-row below — a container CAN
+   * legitimately be pending in more than one stage's queue at once (an
+   * already-accepted property of this workflow; see the historical "tab
+   * badges summed to 43 against 37 active records" comments elsewhere in
+   * this file), so a one-bucket-per-container tally can never sum to match
+   * every independent tab count when that happens. Counting queue
+   * membership directly, exactly like getOffLeaseStageCounts does, is the
+   * only way byStage stays exactly right by construction. pendingApproval
+   * still accumulates per-row below since Off-Lease Tracking rows and the
+   * approval queue are already known to be disjoint by definition. */
+  const kpis = { active: 0, pendingApproval: 0, byStage: { ...byStageQueueCounts }, completedThisMonth: 0 };
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     if (!row[0] || String(row[0]).trim() === '') continue;
     if (gate && !gate(safeStr(row[5]))) continue;
+    const rowNum = i + 2; // matches getOffLeaseData/getOffLeaseApprovalData's own _rowNum (i + 2)
+    const container = safeStr(row[0]);
     const containerKey = _containerKey(row[0]);
     // Client-aware match (row[5]) — see pickGateFormForClient's doc comment.
     const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]);
-    const delivered = deliveredKeys ? deliveredKeys.has(containerKey) : false;
+    const delivered = deliveredKeys ? isDeliveredSince(deliveredKeys, containerKey, null) : false;
     const c = _classifyOffLeaseStages(headers, row, isGatedIn(gfRow), isRepairNotRequired(gfRow), delivered);
+
+    // Override current-stage classification with the guaranteed-consistent
+    // queue-membership result — see the doc comment above.
+    let currentStage = c.currentStage, stageClass = c.stageClass, currentStageNum = c.currentStageNum, completed = c.completed;
+    if (c.stages[0].done) { // Stage 1 done — otherwise leave _classifyOffLeaseStages' own "Stage 1" result as-is
+      if (approvalPendingRows.has(rowNum)) {
+        currentStage = 'Pending Approval'; stageClass = 'approval'; currentStageNum = null; completed = false;
+      } else {
+        const pending = pendingByRow.get(rowNum);
+        const nextStage = OL_ACTIVE_STAGE_NUMS.slice(1).find((s) => pending?.has(s));
+        if (nextStage) {
+          currentStage = stageCaption(nextStage); stageClass = 'stage'; currentStageNum = nextStage; completed = false;
+        } else if (c.approvalStatus.toLowerCase() === 'rejected') {
+          currentStage = 'Rejected — container stays on lease'; stageClass = 'rejected'; currentStageNum = null; completed = false;
+        } else {
+          currentStage = 'Completed — container released'; stageClass = 'done'; currentStageNum = null; completed = true;
+        }
+      }
+    }
+
     items.push({
-      container: safeStr(row[0]),
+      container,
       leaseId: safeStr(row[1]),
       clientName: safeStr(row[5]),
       clientCode: safeStr(row[4]),
@@ -2109,15 +2921,33 @@ export async function getOffLeaseDashboardData(user) {
       raisedBy: safeStr(row[OL_STAGE_INFO[1].statusCol - 1]),
       stages: c.stages,
       approvalStatus: c.approvalStatus,
-      currentStage: c.currentStage,
-      stageClass: c.stageClass,
-      currentStageNum: c.currentStageNum
+      currentStage,
+      stageClass,
+      currentStageNum,
+      /* Every stage THIS ROW is genuinely pending in right now (see the
+         pendingByRow doc comment above for why this must be keyed by row,
+         not container number), not just the single one currentStageNum
+         picked to show as "current". A record CAN legitimately be pending
+         in more than one stage's queue at once (an already-accepted
+         property of this workflow — see byStage's own doc comment), and
+         currentStageNum always picks just the first of those in workflow
+         order for display (the MiniPipeline dot, the "Open" button's
+         target tab) — a caller filtering "show me everything pending at
+         stage X" (the Dashboard's own KPI-card click-through) must check
+         membership in THIS array, not equality against currentStageNum, or
+         a record pending elsewhere-first drops out of a filter its own KPI
+         count included it in. Bug found 2026-08-28: clicking "Stage 4
+         (Inspection)" (count 1) showed 0 records — the one record behind
+         that count had a DIFFERENT currentStageNum, since it was also
+         pending in an earlier-in-workflow-order stage. */
+      pendingStages: [...(pendingByRow.get(rowNum) || [])]
     });
 
-    if (!c.completed) kpis.active++;
-    if (c.stageClass === 'approval') kpis.pendingApproval++;
-    if (c.currentStageNum) kpis.byStage[c.currentStageNum]++;
-    if (c.completed && _completedThisMonth(c.stages[7])) kpis.completedThisMonth++;
+    if (!completed) kpis.active++;
+    if (stageClass === 'approval') kpis.pendingApproval++;
+    // byStage is seeded directly from each stage's own queue length above —
+    // not accumulated here, see that comment for why.
+    if (completed && _completedThisMonth(c.stages[7])) kpis.completedThisMonth++;
   }
 
   return { kpis, items, ...(_stale ? { _stale, _staleSince } : {}) };
@@ -2291,7 +3121,11 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
     // — skip rather than dereference undefined.
     if (!info) continue;
     const st = safeStr(row[info.statusCol]).trim();
-    const bypassDone = (s === OL_STAGE3_INTERNAL && gatedIn) || (s === OL_INSPECTION_INTERNAL && repairSkip);
+    // Manual "Move To Stage" closeout — same read-straight-off-the-row signal
+    // as getOffLeaseData/_classifyOffLeaseStages (see _isMovedOut/_jumpSkipsStage).
+    const bypassDone = (s === OL_STAGE2_INTERNAL && _isMovedOut(row))
+      || (s === OL_STAGE3_INTERNAL && gatedIn) || (s === OL_INSPECTION_INTERNAL && repairSkip)
+      || _jumpSkipsStage(_jumpTargetInternal(row), s);
 
     const fields = [];
     for (let c = info.startCol; c <= info.statusCol - 3; c++) {

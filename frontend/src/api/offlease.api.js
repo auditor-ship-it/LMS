@@ -21,9 +21,15 @@ export const getOffLeaseContainerDetail = (containerNo, leaseId) =>
     .get(`/offlease/${encodeURIComponent(containerNo)}/detail`, leaseId ? { params: { leaseId } } : undefined)
     .then((r) => r.data);
 
-/** POST /api/offlease/tracking — add a deployed container into the Stage 1 queue. */
-export const addToOffLeaseTracking = (containerNo) =>
-  apiClient.post('/offlease/tracking', { containerNo }).then((r) => r.data.message);
+/** POST /api/offlease/tracking — add a deployed container into the Stage 1 queue.
+ *  `deployedRow`: the specific Deployed sheet row (item._rowNum from Lease
+ *  Expiry's list) — pass it whenever known. A container can have more than
+ *  one Deployed row (a returned lease's old row isn't deleted), so without
+ *  it the backend falls back to matching by container number alone, which
+ *  can silently grab a stale row instead of the one actually being
+ *  off-leased. See _lookupDeployedForOffLease's doc comment on the backend. */
+export const addToOffLeaseTracking = (containerNo, deployedRow) =>
+  apiClient.post('/offlease/tracking', { containerNo, deployedRow }).then((r) => r.data.message);
 
 /** GET /api/offlease/stage-counts — pending count per stage, for tab badges. */
 export const getStageCounts = () => apiClient.get('/offlease/stage-counts').then((r) => r.data.counts || {});
