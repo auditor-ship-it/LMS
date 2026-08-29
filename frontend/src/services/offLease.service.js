@@ -1,5 +1,5 @@
 import {
-  getOffLeaseApprovalData, saveOffLeaseApprovalAction, getOffLeaseContainerDetail,
+  getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, getOffLeaseContainerDetail,
   addToOffLeaseTracking, getOffLeaseDashboardData,
   getMovementSourceContainers, getMovementSourceContainer, getStage9Movements, saveStage9Movement,
   getRemarkThread, addRemark, updateRemark, deleteRemark
@@ -8,8 +8,11 @@ import {
 export async function fetchApprovalQueue() {
   return getOffLeaseApprovalData();
 }
-export async function decideApproval(containerNo, status) {
-  return saveOffLeaseApprovalAction(containerNo, status);
+export async function decideApproval(containerNo, status, remarks) {
+  return saveOffLeaseApprovalAction(containerNo, status, remarks);
+}
+export async function sendRejectedBackToStage1(containerNo) {
+  return sendRejectedToStage1(containerNo);
 }
 export async function lookupContainer(containerNo, leaseId) {
   return getOffLeaseContainerDetail(containerNo, leaseId);

@@ -14,10 +14,22 @@ import { usePolling } from '../../hooks/usePolling.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
-import { fetchStageList } from '../../services/stage.service.js';
+import { fetchStageList, submitHold, submitSendBackToStage1, submitSendRejectedToStage1 } from '../../services/stage.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
+import { apiErrorMessage } from '../../shared/auth/index.js';
 import { StageDetailModal } from './StageDetailModal.jsx';
+import { HoldModal } from './HoldModal.jsx';
 import styles from './StagePageBase.module.css';
+
+/* Only Stage 1 (Intimation) gets the Hold and Reject sub-tabs today — Hold
+   is a per-record "park this without processing it yet" toggle (same row,
+   no duplicate, see saveOffLeaseHold's doc comment); Reject mirrors a
+   rejected Stage 1A/Approval decision back into Stage 1's own page (see
+   saveOffLeaseSendRejectedToStage1's doc comment). A plain number check
+   rather than a Set/config list since nothing else has asked for either;
+   if a second stage ever needs them, promote this to a stages.js-level set
+   the same way READ_ONLY_STAGES already works. */
+const STAGE1_EXTRAS_STAGE = 1;
 
 /**
  * Shared, fully-working shell for Off-Lease Stage 1..8 pages — one component
@@ -66,8 +78,18 @@ export function StagePageBase({ stageNumber, embedded }) {
      no form to open, so the Open button and the detail modal are both gone. */
   const readOnly = isReadOnlyStage(stageNumber);
   const canEdit = !readOnly && canAct(permKey);
+  const stage1Extras = stageNumber === STAGE1_EXTRAS_STAGE;
 
-  const { data, loading, error, reload } = useAsync(() => fetchStageList(stageNumber), [stageNumber]);
+  /* 'pending' (the normal queue), 'hold' or 'reject' (Stage 1's own Hold /
+     Reject views) — only ever switched away from 'pending' when
+     stage1Extras, but harmless to carry for every stage since
+     fetchStageList ignores it unless the backend also recognises
+     stageNumber === 1. */
+  const [subTab, setSubTab] = useState('pending');
+  const { data, loading, error, reload } = useAsync(
+    () => fetchStageList(stageNumber, stage1Extras && subTab !== 'pending' ? subTab : undefined),
+    [stageNumber, stage1Extras, subTab]
+  );
   /* Catches a container becoming eligible from OUTSIDE this app — a Gate-In
      form submission, an FMS sheet update — without the user clicking
      Refresh. Those land in the 5-minute cache the backend already refreshes
@@ -78,6 +100,62 @@ export function StagePageBase({ stageNumber, embedded }) {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
   const [activeRow, setActiveRow] = useState(null);
+  const [busyKey, setBusyKey] = useState('');
+  const [actionError, setActionError] = useState('');
+  /* Hold asks for an optional Remarks/Comment first (HoldModal) rather than
+     holding instantly on click — holdTarget is the row the modal is open
+     for, null when closed. */
+  const [holdTarget, setHoldTarget] = useState(null);
+  const [holdBusy, setHoldBusy] = useState(false);
+  const [holdError, setHoldError] = useState('');
+
+  const switchSubTab = (key) => { setSubTab(key); setSearch(''); resetPage(); };
+
+  const handleHoldSubmit = async (remarks) => {
+    const containerNo = holdTarget?.row?.[0];
+    setHoldBusy(true);
+    setHoldError('');
+    try {
+      const result = await submitHold(containerNo, remarks);
+      if (result === 'ALREADY_PROCESSED') {
+        setActionError(`${containerNo} was already put on hold by someone else.`);
+      }
+      setHoldTarget(null);
+      await reload();
+    } catch (e) {
+      setHoldError(apiErrorMessage(e));
+    } finally {
+      setHoldBusy(false);
+    }
+  };
+
+  const handleSendBackToStage1 = async (item) => {
+    const containerNo = item.row?.[0];
+    setBusyKey(containerNo);
+    setActionError('');
+    try {
+      await submitSendBackToStage1(containerNo);
+      await reload();
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setBusyKey('');
+    }
+  };
+
+  const handleSendRejectedToStage1 = async (item) => {
+    const containerNo = item.row?.[0];
+    setBusyKey(containerNo);
+    setActionError('');
+    try {
+      await submitSendRejectedToStage1(containerNo);
+      await reload();
+    } catch (e) {
+      setActionError(apiErrorMessage(e));
+    } finally {
+      setBusyKey('');
+    }
+  };
 
   const headers = data?.headers || [];
   const rows = data?.data || [];
@@ -94,7 +172,7 @@ export function StagePageBase({ stageNumber, embedded }) {
     return rows.filter((r) => (r.row || []).some((cell) => String(cell ?? '').toLowerCase().includes(q)));
   }, [rows, debouncedSearch]);
 
-  const { page, totalPages, pageRows, setPage, nextPage, prevPage } = usePagination(filteredRows, 10);
+  const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filteredRows, 10);
 
   return (
     <>
@@ -105,16 +183,52 @@ export function StagePageBase({ stageNumber, embedded }) {
         />
       )}
       <Card>
+        {/* Stage 1 only: Pending / Hold / Reject — a held or rejected record
+            drops out of the normal queue and appears here instead, same
+            row, no duplicate. See saveOffLeaseHold's and
+            saveOffLeaseSendRejectedToStage1's doc comments on the backend. */}
+        {stage1Extras && (
+          <div className={styles.tabRow}>
+            <button
+              type="button"
+              className={`${styles.tab} ${subTab === 'pending' ? styles.tabActive : ''}`}
+              onClick={() => switchSubTab('pending')}
+            >
+              Pending
+            </button>
+            <button
+              type="button"
+              className={`${styles.tab} ${subTab === 'hold' ? styles.tabActive : ''}`}
+              onClick={() => switchSubTab('hold')}
+            >
+              Hold
+            </button>
+            <button
+              type="button"
+              className={`${styles.tab} ${subTab === 'reject' ? styles.tabActive : ''}`}
+              onClick={() => switchSubTab('reject')}
+            >
+              Reject
+            </button>
+          </div>
+        )}
+
         <div className={styles.toolbar}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search by container, lease ID, client…" />
           <span className={styles.count}>
-            {filteredRows.length} pending record{filteredRows.length === 1 ? '' : 's'}
+            {filteredRows.length} {stage1Extras && subTab !== 'pending' ? subTab : 'pending'} record{filteredRows.length === 1 ? '' : 's'}
           </span>
         </div>
+
+        {actionError && <p className={styles.actionError}>{actionError}</p>}
 
         <DataGrid
           headers={[
             ...visibleHeaders,
+            /* The remark captured in the Hold/Reject dialog — only
+               meaningful, and only ever shown, on that same Stage 1 sub-tab. */
+            ...(stage1Extras && subTab === 'hold' ? ['Hold Remarks'] : []),
+            ...(stage1Extras && subTab === 'reject' ? ['Reject Remarks'] : []),
             ...(readOnly ? ['Status'] : []),
             /* Budget in the header, so every cell below reads as "elapsed"
                without repeating "of 1h" on every row. */
@@ -124,10 +238,22 @@ export function StagePageBase({ stageNumber, embedded }) {
           loading={loading}
           error={error}
           onRetry={reload}
-          emptyMessage={`No pending records for ${stageCaption(stageNumber)}`}
+          emptyMessage={
+            stage1Extras && subTab === 'hold'
+              ? 'No records on hold'
+              : stage1Extras && subTab === 'reject'
+              ? 'No rejected records'
+              : `No pending records for ${stageCaption(stageNumber)}`
+          }
           rowKey={(r) => r._rowNum}
           renderRow={(values, item) => [
             ...visibleIdx.map((i) => <td key={i}>{renderCellValue(values[i] ?? '')}</td>),
+            ...(stage1Extras && subTab === 'hold'
+              ? [<td key="holdRemarks">{item?.holdRemarks || '—'}</td>]
+              : []),
+            ...(stage1Extras && subTab === 'reject'
+              ? [<td key="rejectRemarks">{item?.rejectRemarks || '—'}</td>]
+              : []),
             /* Status here is the FMS pipeline, not this stage's own status —
                every row in this list is pending at this stage by definition
                (that is what puts it in the queue), so "Pending" said nothing.
@@ -150,11 +276,31 @@ export function StagePageBase({ stageNumber, embedded }) {
           /* A read-only stage still opens — canEdit is false there, so the
              button reads View and the modal comes up with its fields locked
              and no submit. Looking at a record is not editing it. */
-          renderActions={(r) => (
-            <Button size="sm" variant={canEdit ? 'primary' : 'secondary'} onClick={() => setActiveRow(r)}>
-              {canEdit ? 'Open' : 'View'}
-            </Button>
-          )}
+          renderActions={(r) => {
+            const isBusy = busyKey === r.row?.[0];
+            return (
+              <div className={styles.rowActions}>
+                <Button size="sm" variant={canEdit ? 'primary' : 'secondary'} onClick={() => setActiveRow(r)} disabled={isBusy}>
+                  {canEdit ? 'Open' : 'View'}
+                </Button>
+                {stage1Extras && canEdit && subTab === 'pending' && (
+                  <Button size="sm" variant="secondary" disabled={isBusy} onClick={() => setHoldTarget(r)}>
+                    Hold
+                  </Button>
+                )}
+                {stage1Extras && canEdit && subTab === 'hold' && (
+                  <Button size="sm" variant="secondary" loading={isBusy} disabled={isBusy} onClick={() => handleSendBackToStage1(r)}>
+                    Send Back to Stage 1
+                  </Button>
+                )}
+                {stage1Extras && canEdit && subTab === 'reject' && (
+                  <Button size="sm" variant="secondary" loading={isBusy} disabled={isBusy} onClick={() => handleSendRejectedToStage1(r)}>
+                    Send Back to Stage 1
+                  </Button>
+                )}
+              </div>
+            );
+          }}
         />
 
         <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
@@ -174,6 +320,17 @@ export function StagePageBase({ stageNumber, embedded }) {
           delivery={activeRow.delivery}
           onClose={() => setActiveRow(null)}
           onSaved={() => { setActiveRow(null); reload(); }}
+        />
+      )}
+
+      {stage1Extras && (
+        <HoldModal
+          open={!!holdTarget}
+          item={holdTarget}
+          submitting={holdBusy}
+          error={holdError}
+          onClose={() => { setHoldTarget(null); setHoldError(''); }}
+          onSubmit={handleHoldSubmit}
         />
       )}
     </>

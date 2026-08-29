@@ -1,7 +1,9 @@
 import { apiClient } from '../shared/auth/index.js';
 
-/** GET /api/offlease?stage=1..8 — pending rows for that stage. */
-export const getStageData = (stage) => apiClient.get('/offlease', { params: { stage } }).then((r) => r.data);
+/** GET /api/offlease?stage=1..8 — pending rows for that stage. `filter`
+ *  ('hold') is only meaningful for Stage 1 — see saveHold's doc comment. */
+export const getStageData = (stage, filter) =>
+  apiClient.get('/offlease', { params: filter ? { stage, filter } : { stage } }).then((r) => r.data);
 
 /** GET /api/offlease/:containerNo/stage/:stage — prefill data for the stage edit form. */
 export const getStageDetail = (containerNo, stage) => apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/stage/${stage}`).then((r) => r.data);
@@ -33,3 +35,21 @@ export const saveSendBack = (containerNo) =>
 export const getMoveHistory = (containerNo, leaseId) =>
   apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/move-history`, leaseId ? { params: { leaseId } } : undefined)
     .then((r) => r.data.history || []);
+
+/** POST /api/offlease/:containerNo/hold — Stage 1 (Intimation) Hold: parks
+ *  a still-pending record in Stage 1's own Hold view (GET ?stage=1&filter=hold)
+ *  instead of the normal pending queue. Same row, no duplicate. `remarks`
+ *  is optional free text (why it's on hold). */
+export const saveHold = (containerNo, remarks) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/hold`, { remarks }).then((r) => r.data.message);
+
+/** POST /api/offlease/:containerNo/hold/send-back — reverses an active
+ *  Hold, returning the record to Stage 1's normal pending queue. */
+export const saveSendBackToStage1 = (containerNo) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/hold/send-back`).then((r) => r.data.message);
+
+/** POST /api/offlease/:containerNo/reject/send-back — reverses a Rejected
+ *  approval decision (Stage 1A/Approval), returning the record to Stage 1's
+ *  own pending queue (Stage 1's Reject tab). */
+export const saveSendRejectedToStage1 = (containerNo) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/reject/send-back`).then((r) => r.data.message);

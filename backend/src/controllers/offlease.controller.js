@@ -62,7 +62,11 @@ export async function getData(req, res) {
     ? gateFormIndex()
     : undefined;
 
-  const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys, gateFormIndex: gfIndex }, req.user);
+  /* ?filter=hold — Stage 1's own Hold view (see getOffLeaseData's doc
+     comment on that branch). Meaningless for every other stage; harmless to
+     pass through unconditionally since getOffLeaseData only reads it when
+     stage === 1. */
+  const data = await offLeaseService.getOffLeaseData(stage, { deliveredKeys, gateFormIndex: gfIndex, filter: req.query.filter }, req.user);
   if (stage === STAGE2_INTERNAL) await stage8Service.enrichWithStage8Movements(data);
 
   /* TAT per row — how long this container has been waiting AT THIS STAGE
@@ -156,6 +160,22 @@ export async function getMoveHistoryForContainer(req, res) {
   res.json({ history });
 }
 
+/** Stage 1 (Intimation) "Hold" — parks a still-pending record in Stage 1's
+ *  own Hold view instead of the normal queue. Permission ('offlease1') is
+ *  checked inside the service. */
+export async function saveHold(req, res) {
+  const { remarks } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseHoldFast(req.params.containerNo, req.user.email, remarks);
+  res.json({ message });
+}
+
+/** Reverses an active Hold, sending the record back to Stage 1's normal
+ *  queue. Permission ('offlease1') is checked inside the service. */
+export async function saveSendBackToStage1(req, res) {
+  const message = await offLeaseService.saveOffLeaseSendBackToStage1Fast(req.params.containerNo, req.user.email);
+  res.json({ message });
+}
+
 /* ---- Pending Approval queue ---- */
 
 export async function getApprovalData(req, res) {
@@ -163,9 +183,18 @@ export async function getApprovalData(req, res) {
 }
 
 export async function saveApprovalAction(req, res) {
-  const { status } = req.body;
-  // Permission ('offleaseapproval') is checked inside the service.
-  const message = await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email);
+  const { status, remarks } = req.body;
+  // Permission ('offleaseapproval') is checked inside the service. `remarks`
+  // (RejectModal, frontend) is only ever meaningful when status === 'Rejected'.
+  const message = await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks);
+  res.json({ message });
+}
+
+/** Reverses a Rejected decision, sending the record back to Stage 1's own
+ *  pending queue (see saveOffLeaseSendRejectedToStage1's doc comment).
+ *  Permission ('offlease1') is checked inside the service. */
+export async function sendRejectedToStage1(req, res) {
+  const message = await offLeaseService.saveOffLeaseSendRejectedToStage1Fast(req.params.containerNo, req.user.email);
   res.json({ message });
 }
 

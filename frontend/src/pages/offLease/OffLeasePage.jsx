@@ -9,6 +9,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchApprovalQueue, decideApproval, lookupContainer } from '../../services/offLease.service.js';
+import { RejectModal } from './RejectModal.jsx';
 import { getStageCounts as fetchStageCounts } from '../../api/offlease.api.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { LookupResult } from './LookupResult.jsx';
@@ -183,8 +184,10 @@ function ApprovalQueue() {
     }
   };
 
-  /* Bulk Approve/Reject — same shape as Lease Expiry's bulk actions: one
-     write per container, run in parallel, no shared form data so no modal. */
+  /* Bulk Approve — same shape as Lease Expiry's bulk actions: one write per
+     container, run in parallel, no shared form data so no modal. Reject
+     (single and bulk) goes through RejectModal instead — see rejectItem/
+     rejectItems below — since it now captures an optional remark first. */
   const decideBulk = async (status) => {
     if (!selectedItems.length) return;
     const containers = selectedItems.map((it) => it.row[0]);
@@ -210,6 +213,45 @@ function ApprovalQueue() {
     }
   };
 
+  /* Reject (single + bulk) — RejectModal.jsx, mirroring RenewModal's
+     item/items mutually-exclusive convention. rejectItem/rejectItems null =
+     closed. */
+  const [rejectItem, setRejectItem] = useState(null);
+  const [rejectItems, setRejectItems] = useState(null);
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const [rejectError, setRejectError] = useState('');
+  const closeReject = () => { setRejectItem(null); setRejectItems(null); setRejectError(''); };
+
+  const handleRejectSubmit = async (remarks) => {
+    setRejectBusy(true);
+    setRejectError('');
+    try {
+      if (rejectItems) {
+        const containers = rejectItems.map((it) => it.row[0]);
+        const results = await Promise.allSettled(containers.map((c) => decideApproval(c, 'Rejected', remarks)));
+        const alreadyProcessed = results
+          .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
+          .filter(Boolean);
+        const failed = results
+          .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
+          .filter(Boolean);
+        const notes = [];
+        if (alreadyProcessed.length) notes.push(`Already actioned by someone else: ${alreadyProcessed.join(', ')}.`);
+        if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
+        if (notes.length) setActionError(notes.join(' '));
+      } else if (rejectItem) {
+        const message = await decideApproval(rejectItem.row[0], 'Rejected', remarks);
+        if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
+      }
+      closeReject();
+      await reload();
+    } catch (e) {
+      setRejectError(apiErrorMessage(e));
+    } finally {
+      setRejectBusy(false);
+    }
+  };
+
   return (
     <Card title="Pending Approval" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}>
       <div className={styles.toolbar}>
@@ -225,7 +267,7 @@ function ApprovalQueue() {
           <Button size="sm" variant="primary" loading={bulkBusy === 'Approved'} disabled={!!bulkBusy} onClick={() => decideBulk('Approved')}>
             Approve ({selectedItems.length})
           </Button>
-          <Button size="sm" variant="danger" loading={bulkBusy === 'Rejected'} disabled={!!bulkBusy} onClick={() => decideBulk('Rejected')}>
+          <Button size="sm" variant="danger" disabled={!!bulkBusy} onClick={() => setRejectItems(selectedItems)}>
             Reject ({selectedItems.length})
           </Button>
         </div>
@@ -257,8 +299,7 @@ function ApprovalQueue() {
             <Button
               size="sm"
               variant="danger"
-              loading={busyKey === `${item._rowNum}-Rejected`}
-              onClick={() => decide(item, 'Rejected')}
+              onClick={() => setRejectItem(item)}
             >
               Reject
             </Button>
@@ -267,6 +308,16 @@ function ApprovalQueue() {
       />
 
       <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
+
+      <RejectModal
+        open={!!(rejectItem || rejectItems)}
+        item={rejectItem}
+        items={rejectItems}
+        submitting={rejectBusy}
+        error={rejectError}
+        onClose={closeReject}
+        onSubmit={handleRejectSubmit}
+      />
     </Card>
   );
 }

@@ -39,6 +39,20 @@ router.post('/:containerNo/move-to-stage', asyncHandler(offLeaseController.saveM
 router.post('/:containerNo/send-back', asyncHandler(offLeaseController.saveSendBack));
 router.get('/:containerNo/move-history', asyncHandler(offLeaseController.getMoveHistoryForContainer));
 
+/* Stage 1 (Intimation) Hold / Send Back To Stage 1 — same "same row, no
+   duplicate" shape as Move To Stage above, declared alongside it for the
+   same reason (see saveOffLeaseHold's doc comment in offlease.service.js). */
+router.post('/:containerNo/hold', asyncHandler(offLeaseController.saveHold));
+router.post('/:containerNo/hold/send-back', asyncHandler(offLeaseController.saveSendBackToStage1));
+
+/* Stage 1 (Intimation) Reject tab's own Send Back — reverses a Rejected
+   approval decision AND reopens Stage 1 itself (see
+   saveOffLeaseSendRejectedToStage1's doc comment). The Reject action itself
+   has no separate route: it's the existing /:containerNo/approval endpoint
+   with status = 'Rejected', now also accepting an optional `remarks` body
+   field (RejectModal, frontend). */
+router.post('/:containerNo/reject/send-back', asyncHandler(offLeaseController.sendRejectedToStage1));
+
 /* Pending Approval queue (between Stage 1 and Stage 2) */
 router.get('/approval', asyncHandler(offLeaseController.getApprovalData));
 router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprovalAction));

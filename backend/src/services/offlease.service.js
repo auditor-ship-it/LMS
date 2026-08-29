@@ -1572,6 +1572,12 @@ export async function getOffLeaseData(stage, opts = {}, user) {
      delivery bypass below also needs it, since that bypass walks around the
      gate this column normally enforces. */
   const intApprovalCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  /* Stage 1's own Reject tab reads these straight off the SAME columns
+     saveOffLeaseApprovalAction(Fast) already writes on Rejected — no new
+     sheet columns needed, unlike Hold (which has nothing existing to read). */
+  const intApprovalRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+  const intApprovalTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+  const intApprovalUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
 
   const finalData = [];
   for (let i = 0; i < rows.length; i++) {
@@ -1590,6 +1596,15 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     const jumpTarget = _jumpTargetInternal(row);
 
     const statusVal = row[info.statusCol];
+    /* A rejected row's OWN Stage 1 Status stays 'Completed' forever — that
+       is a prerequisite for ever having reached Stage 1A/Approval in the
+       first place (see getOffLeaseApprovalData's queue-membership check) —
+       so without this it could never appear in ITS OWN Reject tab below.
+       Bypasses the generic statusVal gate ONLY for a genuinely rejected row
+       on Stage 1's Reject view; every other case still gates on it exactly
+       as before. */
+    const rejected = Number(stage) === 1 && intApprovalCol >= 0
+      && String(row[intApprovalCol]).trim().toLowerCase() === 'rejected';
     /* Gate In (internal 7) has no form left to fill its own status column —
        the external form confirming it IS the completion signal, so a
        gated-in container must drop out of this queue exactly as if that
@@ -1599,11 +1614,25 @@ export async function getOffLeaseData(stage, opts = {}, user) {
        entirely and belongs in Billing's queue instead. */
     if (Number(stage) === OL_STAGE3_INTERNAL && gatedIn) continue;
     if (Number(stage) === OL_INSPECTION_INTERNAL && repairSkip) continue;
-    if (statusVal && String(statusVal).trim() !== '') continue;
+    if (!(Number(stage) === 1 && opts.filter === 'reject' && rejected)) {
+      if (statusVal && String(statusVal).trim() !== '') continue;
+    }
     /* This row was moved directly past `stage` via an active jump — it isn't
        genuinely pending here, it jumped straight to its chosen destination
        stage instead. */
     if (_jumpSkipsStage(jumpTarget, stage)) continue;
+    /* Stage 1's Hold / Reject sub-tabs — same row, three queues:
+       opts.filter selects which ONE shows; the default (no filter) view
+       shows everything else (a held or rejected record disappears from the
+       normal pending list the moment it's put on hold or rejected).
+       Irrelevant to every other stage, so this only ever branches for
+       Stage 1. */
+    if (Number(stage) === 1) {
+      const held = _isOnHold(row);
+      if (opts.filter === 'hold') { if (!held) continue; }
+      else if (opts.filter === 'reject') { if (!rejected) continue; }
+      else if (held || rejected) continue;
+    }
 
     /* Has this container's site delivery been recorded in STAGE-10? Keyed on
        container alone — see getDeliveredKeys() for why client is not used.
@@ -1697,6 +1726,20 @@ export async function getOffLeaseData(stage, opts = {}, user) {
 
     for (const bCol of displayIndices) item[`col_${bCol}`] = fmtCell(row[bCol]);
     for (let c = info.startCol; c <= info.endCol; c++) item[`col_${c}`] = fmtCell(row[c]);
+
+    /* Hold's own Remarks/Comment — only meaningful (and only ever
+       non-blank) on Stage 1's Hold view, but cheap to attach unconditionally
+       for stage 1 so the field is there whichever sub-tab reads this list. */
+    if (Number(stage) === 1) {
+      item.holdRemarks = safeStr(row[OL_HOLD_REMARKS_COL]);
+      item.holdBy = safeStr(row[OL_HOLD_BY_COL]);
+      item.holdTimestamp = safeStr(row[OL_HOLD_TIMESTAMP_COL]);
+      /* Reject's own Remarks — read off the SAME Intimation Approval
+         columns saveOffLeaseApprovalAction(Fast) writes on Rejected. */
+      item.rejectRemarks = intApprovalRemarkCol >= 0 ? safeStr(row[intApprovalRemarkCol]) : '';
+      item.rejectBy = intApprovalUserCol >= 0 ? safeStr(row[intApprovalUserCol]) : '';
+      item.rejectTimestamp = intApprovalTimestampCol >= 0 ? safeStr(row[intApprovalTimestampCol]) : '';
+    }
 
     finalData.push(item);
   }
@@ -1886,6 +1929,16 @@ export async function getOffLeaseStageDetail(containerNo, stage, user) {
       jumpTargetInternal,
       jumpTargetDisplay: jumpTargetInternal != null ? displayStageNum(jumpTargetInternal) : null,
       canSendBackHere: jumpTargetInternal != null && jumpTargetInternal === Number(stage)
+    };
+
+    /* Hold state — only ever meaningful on Stage 1 itself, but cheap
+       (already-fetched columns) and harmless to include everywhere, same
+       reasoning as _move above. */
+    result._hold = {
+      active: _isOnHold(row),
+      timestamp: safeStr(row[OL_HOLD_TIMESTAMP_COL]),
+      by: safeStr(row[OL_HOLD_BY_COL]),
+      remarks: safeStr(row[OL_HOLD_REMARKS_COL])
     };
 
     return result;
@@ -2458,6 +2511,155 @@ export async function saveOffLeaseSendBackFast(containerNo, userEmail) {
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
   await enqueueSheetReplay('offlease.saveOffLeaseSendBack', [containerNo, userEmail], { actor: userEmail });
+
+  return 'OK';
+}
+
+/* =============================================
+   HOLD (Stage 1 — Intimation) + SEND BACK TO STAGE 1
+============================================= */
+
+/** Appended columns (olHeaders.generated.js), same fixed-literal convention
+ *  as the Move To Stage columns just above — picked past the end of every
+ *  real sheet column (and past the Move To Stage block, 290-299) so neither
+ *  feature can ever collide with real data or with each other.
+ *
+ *  Holding a record never touches any of its real Stage 1 fields — the
+ *  status column stays blank, exactly like any other still-pending Stage 1
+ *  row. These two columns are the ONLY thing that changes, which is also
+ *  all Send Back To Stage 1 clears — same row, no duplicate ever created. */
+const OL_HOLD_TIMESTAMP_COL = 300;
+const OL_HOLD_BY_COL = 301;
+const OL_HOLD_REMARKS_COL = 302;
+const OL_HOLD_ALL_COLS = [OL_HOLD_TIMESTAMP_COL, OL_HOLD_BY_COL, OL_HOLD_REMARKS_COL];
+
+function _isOnHold(row) {
+  return safeStr(row[OL_HOLD_TIMESTAMP_COL]).trim() !== '';
+}
+
+/**
+ * Puts an Off-Lease Stage 1 (Intimation) record on hold: it drops out of
+ * Stage 1's normal pending queue and appears in that page's separate Hold
+ * view instead (see getOffLeaseData's OL_STAGE1 hold-filter branch) — same
+ * row, no duplicate. Send Back To Stage 1 (below) reverses it.
+ *
+ * LIVE path — writes the real Google Sheet. Called directly by nothing in
+ * this app except the outbox replay of the Fast path below; kept as a
+ * genuine, independently-callable function for the same reason
+ * saveOffLeaseMoveToStage is (see that function's doc comment).
+ */
+export async function saveOffLeaseHold(containerNo, userEmail, remarks = '') {
+  await checkActionPermission('offlease1', userEmail);
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _findOlRowByContainer(rows, containerNo);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    if (_isOnHold(row)) return 'ALREADY_PROCESSED';
+
+    const stamp = dmyTime(new Date());
+    const rmk = safeStr(remarks).trim();
+    const cellUpdates = [
+      { range: `'${OL_SHEET}'!${colLetter(OL_HOLD_TIMESTAMP_COL)}${rn}`, values: [[stamp]] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_HOLD_BY_COL)}${rn}`, values: [[userEmail || '']] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_HOLD_REMARKS_COL)}${rn}`, values: [[rmk]] }
+    ];
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const r = await getCollection(OL_SHEET).updateOne(
+        { key: `row_${rn - 2}` },
+        { $set: { [`row.${OL_HOLD_TIMESTAMP_COL}`]: stamp, [`row.${OL_HOLD_BY_COL}`]: userEmail || '', [`row.${OL_HOLD_REMARKS_COL}`]: rmk } }
+      );
+      if (!r.matchedCount) console.warn(`[OL-HOLD] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-HOLD] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/** Mongo-first fast path — same shape and trade-off as saveOffLeaseStageFast.
+ *  This is the entry point the controller calls. */
+export async function saveOffLeaseHoldFast(containerNo, userEmail, remarks = '') {
+  await checkActionPermission('offlease1', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+  if (_isOnHold(found.row)) return 'ALREADY_PROCESSED';
+
+  const stamp = dmyTime(new Date());
+  const rmk = safeStr(remarks).trim();
+  await getCollection(OL_SHEET).updateOne(
+    { key: found.key },
+    { $set: { [`row.${OL_HOLD_TIMESTAMP_COL}`]: stamp, [`row.${OL_HOLD_BY_COL}`]: userEmail || '', [`row.${OL_HOLD_REMARKS_COL}`]: rmk, updatedAt: new Date() } }
+  );
+  await enqueueSheetReplay('offlease.saveOffLeaseHold', [containerNo, userEmail, remarks], { actor: userEmail });
+
+  return 'OK';
+}
+
+/**
+ * Reverses an active Hold: clears both hold columns, which is what naturally
+ * makes the record reappear in Stage 1's own pending queue again (see
+ * _isOnHold above) — no duplicate record, this is the SAME row.
+ *
+ * Permission checked against Stage 1 ('offlease1'), same as Hold itself —
+ * unlike Move To Stage's Send Back, there is no other stage this could be
+ * acted from.
+ */
+export async function saveOffLeaseSendBackToStage1(containerNo, userEmail) {
+  await checkActionPermission('offlease1', userEmail);
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _findOlRowByContainer(rows, containerNo);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    if (!_isOnHold(row)) throw new AppError('This record is not on hold — nothing to send back.');
+
+    const cellUpdates = OL_HOLD_ALL_COLS.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const patch = {};
+      for (const c of OL_HOLD_ALL_COLS) patch[`row.${c}`] = '';
+      const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: patch });
+      if (!r.matchedCount) console.warn(`[OL-HOLD] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-HOLD] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/** Mongo-first fast path for Send Back To Stage 1 — same trade-off as the
+ *  other Fast paths in this file. */
+export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail) {
+  await checkActionPermission('offlease1', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+  if (!_isOnHold(found.row)) throw new AppError('This record is not on hold — nothing to send back.');
+
+  const patch = {};
+  for (const c of OL_HOLD_ALL_COLS) patch[`row.${c}`] = '';
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  await enqueueSheetReplay('offlease.saveOffLeaseSendBackToStage1', [containerNo, userEmail], { actor: userEmail });
 
   return 'OK';
 }
@@ -3360,7 +3562,7 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
   return { headers: displayHeaders, data: finalData, count: finalData.length };
 }
 
-export async function saveOffLeaseApprovalAction(containerNo, status, userEmail) {
+export async function saveOffLeaseApprovalAction(containerNo, status, userEmail, remarks = '') {
   await checkActionPermission('offleaseapproval', userEmail);
 
   return withSheetLock(OL_SHEET, async () => {
@@ -3390,8 +3592,11 @@ export async function saveOffLeaseApprovalAction(containerNo, status, userEmail)
       { range: `'${OL_SHEET}'!${colLetter(userCol)}${rn}`, values: [[userEmail || '']] }
     ];
     if (status && status.toLowerCase() === 'rejected' && remarkCol >= 0) {
-      const remarks = `Rejected on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
-      updates.push({ range: `'${OL_SHEET}'!${colLetter(remarkCol)}${rn}`, values: [[remarks]] });
+      /* User-supplied remarks (RejectModal, same shape as Hold's) take
+         priority; falls back to the old auto-generated sentence when none
+         was given (e.g. the bulk-reject path, which has no per-row prompt). */
+      const rmk = safeStr(remarks).trim() || `Rejected on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+      updates.push({ range: `'${OL_SHEET}'!${colLetter(remarkCol)}${rn}`, values: [[rmk]] });
     }
     await batchUpdateValues(updates);
     console.log(`[OL-APPROVAL] Saved: rn=${rn} status=${status} user=${userEmail}`);
@@ -3416,7 +3621,7 @@ export async function saveOffLeaseApprovalAction(containerNo, status, userEmail)
  * replay of the original function, which still runs it for real within one
  * outbox poll interval.
  */
-export async function saveOffLeaseApprovalActionFast(containerNo, status, userEmail) {
+export async function saveOffLeaseApprovalActionFast(containerNo, status, userEmail, remarks = '') {
   await checkActionPermission('offleaseapproval', userEmail);
 
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -3445,11 +3650,97 @@ export async function saveOffLeaseApprovalActionFast(containerNo, status, userEm
     [`row.${userCol}`]: userEmail || ''
   };
   if (status && status.toLowerCase() === 'rejected' && remarkCol >= 0) {
-    patch[`row.${remarkCol}`] = `Rejected on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+    patch[`row.${remarkCol}`] = safeStr(remarks).trim() || `Rejected on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
   }
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail], { actor: userEmail });
+  await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail, remarks], { actor: userEmail });
+
+  return 'OK';
+}
+
+/**
+ * Reverses a Rejected decision from Stage 1's own Reject tab: clears the
+ * Intimation Approval Status/Timestamp/User/Remark columns AND Stage 1's
+ * own status column — unlike Hold's Send Back (which only ever touches its
+ * own bolt-on columns), this one deliberately also reopens Stage 1 itself,
+ * not just the approval decision. A rejection means something about the
+ * original intimation needs correcting, so sending it back to a blank
+ * approval verdict but a still-"Completed" Stage 1 would only let it be
+ * re-approved unchanged — the whole point of Send Back here is to let it be
+ * revised and resubmitted. The underlying field VALUES are left exactly as
+ * they were (only the status column clears), so reopening the Stage 1 form
+ * shows what was there before, ready to edit rather than blank.
+ *
+ * Permission checked against Stage 1 ('offlease1'), same as Hold — the
+ * destination is Stage 1's own pending queue, not the Approval desk.
+ */
+export async function saveOffLeaseSendRejectedToStage1(containerNo, userEmail) {
+  await checkActionPermission('offlease1', userEmail);
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { headers, rows } = await getSheetData(OL_SHEET);
+    const rn = _findOlRowByContainer(rows, containerNo);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+    const timestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+    const userCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+    const remarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+    if (statusCol < 0) throw new AppError('Approval columns not found in sheet. Please check headers.');
+
+    const row = rows[rn - 2] || [];
+    if (String(row[statusCol]).trim().toLowerCase() !== 'rejected') {
+      throw new AppError('This record is not rejected — nothing to send back.');
+    }
+
+    const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+    const cols = [statusCol, timestampCol, userCol, remarkCol, stage1StatusCol].filter((c) => c >= 0);
+    const cellUpdates = cols.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const patch = {};
+      for (const c of cols) patch[`row.${c}`] = '';
+      const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: patch });
+      if (!r.matchedCount) console.warn(`[OL-REJECT] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-REJECT] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/** Mongo-first fast path — same trade-off as the other Fast paths in this file. */
+export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmail) {
+  await checkActionPermission('offlease1', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const { headers } = await getSheetDataFromMongo(OL_SHEET);
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const want = normKey(containerNo);
+  const found = docs.find((d) => normKey(d.row[0]) === want);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  const timestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+  const userCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+  const remarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+  if (statusCol < 0) throw new AppError('Approval columns not found in sheet. Please check headers.');
+
+  if (String(found.row[statusCol]).trim().toLowerCase() !== 'rejected') {
+    throw new AppError('This record is not rejected — nothing to send back.');
+  }
+
+  const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+  const cols = [statusCol, timestampCol, userCol, remarkCol, stage1StatusCol].filter((c) => c >= 0);
+  const patch = {};
+  for (const c of cols) patch[`row.${c}`] = '';
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  await enqueueSheetReplay('offlease.saveOffLeaseSendRejectedToStage1', [containerNo, userEmail], { actor: userEmail });
 
   return 'OK';
 }
