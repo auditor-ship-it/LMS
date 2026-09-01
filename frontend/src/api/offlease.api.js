@@ -4,15 +4,18 @@ import { apiClient } from '../shared/auth/index.js';
 export const getOffLeaseApprovalData = () => apiClient.get('/offlease/approval').then((r) => r.data);
 
 /** POST /api/offlease/:containerNo/approval — status: 'Approved' | 'Rejected'.
- *  `remarks` (RejectModal) is only ever meaningful when status is 'Rejected'. */
-export const saveOffLeaseApprovalAction = (containerNo, status, remarks) =>
-  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval`, { status, remarks }).then((r) => r.data.message);
+ *  `remarks` (RejectModal) is only ever meaningful when status is 'Rejected'.
+ *  `rowNum` (item._rowNum from the approval queue list) — Container No is
+ *  not unique in Off-Lease Tracking, so without it this can silently act on
+ *  a different lease's row for the same container. Always pass it when known. */
+export const saveOffLeaseApprovalAction = (containerNo, status, remarks, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval`, { status, remarks, rowNum }).then((r) => r.data.message);
 
 /** POST /api/offlease/:containerNo/reject/send-back — reverses a Rejected
  *  decision, returning the record to Stage 1's own pending queue (Stage 1's
- *  Reject tab). */
-export const sendRejectedToStage1 = (containerNo) =>
-  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/reject/send-back`).then((r) => r.data.message);
+ *  Reject tab). `rowNum`: see saveOffLeaseApprovalAction's doc comment. */
+export const sendRejectedToStage1 = (containerNo, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/reject/send-back`, { rowNum }).then((r) => r.data.message);
 
 /** GET /api/offlease/:containerNo/outstanding — Tally outstanding, proxied
  *  through our backend so the Accounts & Collection credentials stay server-side. */
@@ -34,9 +37,11 @@ export const getOffLeaseContainerDetail = (containerNo, leaseId) =>
  *  one Deployed row (a returned lease's old row isn't deleted), so without
  *  it the backend falls back to matching by container number alone, which
  *  can silently grab a stale row instead of the one actually being
- *  off-leased. See _lookupDeployedForOffLease's doc comment on the backend. */
-export const addToOffLeaseTracking = (containerNo, deployedRow) =>
-  apiClient.post('/offlease/tracking', { containerNo, deployedRow }).then((r) => r.data.message);
+ *  off-leased. See _lookupDeployedForOffLease's doc comment on the backend.
+ *  `remarks`/`personName` (OffLeaseModal) captured once, at creation time —
+ *  personName is who requested/handled this off-lease, remarks is optional. */
+export const addToOffLeaseTracking = (containerNo, deployedRow, remarks, personName) =>
+  apiClient.post('/offlease/tracking', { containerNo, deployedRow, remarks, personName }).then((r) => r.data.message);
 
 /** GET /api/offlease/stage-counts — pending count per stage, for tab badges. */
 export const getStageCounts = () => apiClient.get('/offlease/stage-counts').then((r) => r.data.counts || {});

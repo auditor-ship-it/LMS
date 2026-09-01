@@ -66,6 +66,7 @@ import { runAutoApproval } from '../services/approve.service.js';
 import { copyApprovedData } from '../services/offlease.service.js';
 import { runSheetsReconciliation } from './sheetsReconcile.job.js';
 import { refreshStage3FormCache } from '../services/stage3Form.service.js';
+import { warmFmsCache } from '../services/stage8.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -94,6 +95,13 @@ export function registerCronJobs() {
  */
 const RECONCILE_MINUTES = '1,6,11,16,21,26,31,36,41,46,51,56';
 const FMS_REFRESH_MINUTES = '3,8,13,18,23,28,33,38,43,48,53,58';
+/* 3 minutes after RECONCILE_MINUTES — enough time for that job's own 9-sheet
+   sync (spaced 4s apart, ~35s+ actual read/write time) to have actually
+   finished writing STAGE-8/9/10 before this re-reads them. See
+   warmFmsCache's doc comment for why this exists: without it, the ~17s cold
+   Mongo read for these three large collections happened on whichever real
+   user's Stage 2 tab switch landed on an expired application-level cache. */
+const WARM_FMS_CACHE_MINUTES = '4,9,14,19,24,29,34,39,44,49,54,59';
 
 export function registerSheetsSync() {
   // STAGE-8/9/10 (2026-08-28): now part of runSheetsReconciliation's own
@@ -102,6 +110,8 @@ export function registerSheetsSync() {
   // exclusively from the Mongo mirror now, same as every other sheet.
   cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
   cron.schedule(`${FMS_REFRESH_MINUTES} * * * *`, safeRun('refreshStage3FormCache', refreshStage3FormCache));
+  cron.schedule(`${WARM_FMS_CACHE_MINUTES} * * * *`, safeRun('warmFmsCache', warmFmsCache));
   logger.info('[SYNC] Sheets<->Mongo reconciliation registered (every 5 min, offset :01) — now includes STAGE-8/9/10');
   logger.info('[SYNC] Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
+  logger.info('[SYNC] STAGE-8/9/10 application cache warm registered (every 5 min, offset :04)');
 }

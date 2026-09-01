@@ -35,6 +35,46 @@ import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { parseStamp } from './offleaseSla.service.js';
+import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
+
+/* getSheetDataFromMongo's own cache is only 8s (right, for sheets this app
+   writes to directly and needs to reflect promptly) — far shorter than these
+   three tabs can ever actually change, since nothing here writes and the
+   reconcile job that refreshes their Mongo mirror only runs every 5 minutes
+   (see this file's header comment). That mismatch meant every Stage 2 tab
+   switch re-triggered a full, multi-second Mongo read of 1000+ rows across
+   three collections for data that was, at most, 8 seconds stale to begin
+   with — Off-Lease's own reported "switching stages feels slow" bug, found
+   2026-09-01. A second cache layer here, TTL just under the reconcile
+   cadence, means repeat navigation within that window is instant while still
+   never lagging behind the mirror itself. */
+/* Longer than the 5-minute gap between warmFmsCache cron runs (jobs/index.js),
+   not shorter — TTL < warm interval leaves a real window where the cache has
+   already expired but the next warm cycle hasn't run yet, and a user's tab
+   switch lands on a genuine cold 17s read right in that gap. 330s keeps every
+   entry alive until the NEXT warm cycle refills it, so there is no gap at all
+   under normal operation; this TTL is really only a safety net for a missed
+   cron tick, not the primary freshness mechanism. */
+const FMS_CACHE_TTL_SECS = 330;
+function cachedFmsRead(tab, loader) {
+  return cacheGetOrLoad(`stage8_fms_read_v1:${tab}`, FMS_CACHE_TTL_SECS, loader);
+}
+
+/**
+ * Forces this cache to re-fill right after the reconcile job updates these
+ * three tabs' Mongo mirror, so the ~15-20s cold read (confirmed 2026-09-01 —
+ * STAGE-9 alone took 17s for 595 rows) happens on a cron tick nobody is
+ * waiting on, not on whichever user's tab switch happens to land on an
+ * expired cache. Registered in jobs/index.js a couple minutes after
+ * runSheetsReconciliation, giving that job time to actually finish writing
+ * before this re-reads it. Explicit cacheRemove first — without it,
+ * cacheGetOrLoad would just hand back the still-valid old entry and this
+ * would warm nothing.
+ */
+export async function warmFmsCache() {
+  for (const tab of [S8_TAB, S9_TAB, S10_TAB]) cacheRemove(`stage8_fms_read_v1:${tab}`);
+  await Promise.all([readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()]);
+}
 
 const S8_TAB = SHEETS.FMS_STAGE8;
 const S9_TAB = SHEETS.FMS_STAGE9;
@@ -165,6 +205,7 @@ function allFields(headers, row) {
  *  the reconcile job (see sheetsReconcile.job.js's _enrichStage8DeliveryOrderLinks)
  *  before it ever reaches Mongo, so no second live call is needed for it here. */
 async function readOffleaseRows() {
+  return cachedFmsRead(S8_TAB, async () => {
   const { headers, rows } = await getSheetDataFromMongo(S8_TAB);
   return rows
     .filter((r) => safeStr(r[S8.MOVEMENT_TYPE]).trim().toLowerCase() === OFFLEASE)
@@ -181,6 +222,7 @@ async function readOffleaseRows() {
       fields: allFields(headers, r)
     }))
     .filter((r) => r.containerNo);   // a movement with no container cannot be matched
+  });
 }
 
 /**
@@ -209,6 +251,7 @@ const S10 = { DO_NUMBER: 3 };
 const normDo = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 async function readStage10Rows() {
+  return cachedFmsRead(S10_TAB, async () => {
   const { headers, rows } = await getSheetDataFromMongo(S10_TAB);
   /* `keys` is EVERY cell in the row, normalised. The DO number is not reliably
      in the "DO Number" column — that column carries values like "QAS 549"
@@ -223,6 +266,7 @@ async function readStage10Rows() {
       fields: allFields(headers, r)
     }))
     .filter((r) => r.keys.length);
+  });
 }
 
 /**
@@ -276,6 +320,7 @@ function matchByDo(rows, candidates) {
 
 /** Every Offlease row in STAGE-9 — the transport-execution detail. */
 async function readStage9OffleaseRows() {
+  return cachedFmsRead(S9_TAB, async () => {
   const { headers, rows } = await getSheetDataFromMongo(S9_TAB);
   return rows
     .filter((r) => safeStr(r[S9.MOVEMENT_TYPE]).trim().toLowerCase() === OFFLEASE)
@@ -295,6 +340,7 @@ async function readStage9OffleaseRows() {
       fields: allFields(headers, r)
     }))
     .filter((r) => r.containerNo);
+  });
 }
 
 /**

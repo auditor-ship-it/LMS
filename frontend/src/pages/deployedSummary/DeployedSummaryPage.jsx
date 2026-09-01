@@ -17,7 +17,7 @@ const GROUPS = [
   { key: 'closing', label: 'Closing Deployed' }
 ];
 
-const DETAIL_HEADERS = ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Location', 'Deployed Date', 'Valid Upto', 'Movement'];
+const DETAIL_HEADERS = ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement'];
 
 /**
  * Reads one summary cell out of a Deployed Summary row — same shape
@@ -87,11 +87,11 @@ export function DeployedSummaryPage() {
       // than one cell.
       const { containers = [] } = await fetchDeployedDetail(months[0], 'closing', typeVal, sizeVal);
       const detailAoa = [
-        ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Location', 'Deployed Date', 'Valid Upto'],
-        ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.location, c.deployedDate, c.validUpto])
+        ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto'],
+        ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto])
       ];
       const detailSheet = XLSX.utils.aoa_to_sheet(detailAoa);
-      detailSheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
+      detailSheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
@@ -112,9 +112,9 @@ export function DeployedSummaryPage() {
     if (format === 'excel') {
       const wb = XLSX.utils.book_new();
       sections.forEach((sec) => {
-        const aoa = [DETAIL_HEADERS, ...sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.location, c.deployedDate, c.validUpto, c.movement])];
+        const aoa = [DETAIL_HEADERS, ...sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
         const sheet = XLSX.utils.aoa_to_sheet(aoa);
-        sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+        sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
         XLSX.utils.book_append_sheet(wb, sheet, sec.label.slice(0, 31));
       });
       XLSX.writeFile(wb, `${stamp}.xlsx`);
@@ -132,7 +132,7 @@ export function DeployedSummaryPage() {
         autoTable(doc, {
           startY: nextY + 3,
           head: [DETAIL_HEADERS],
-          body: sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.location, c.deployedDate, c.validUpto, c.movement]),
+          body: sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
           styles: { fontSize: 7 },
           headStyles: { fillColor: [5, 35, 121] },
           margin: { top: 22 }
@@ -353,7 +353,7 @@ function DeployedDetailPanel({ selection, onClose }) {
   const filterLabel = selection.typeVal ? (selection.sizeVal ? `${selection.typeVal} — ${selection.sizeVal}` : selection.typeVal) : (selection.sizeVal ? `Size: ${selection.sizeVal}` : 'All Types');
 
   const rows = containers.map((c) => ({
-    row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.location, c.deployedDate, c.validUpto, c.movement],
+    row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
     _rowNum: c.container
   }));
 
@@ -361,9 +361,9 @@ function DeployedDetailPanel({ selection, onClose }) {
 
   const exportDetailToExcel = () => {
     if (!containers.length) return;
-    const aoa = [DETAIL_HEADERS, ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.location, c.deployedDate, c.validUpto, c.movement])];
+    const aoa = [DETAIL_HEADERS, ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, sheet, `${catLabel} ${selection.monthLabel}`.slice(0, 31));
     XLSX.writeFile(wb, `Deployed-${fileStamp}.xlsx`);
@@ -379,7 +379,7 @@ function DeployedDetailPanel({ selection, onClose }) {
     autoTable(doc, {
       startY: 26,
       head: [DETAIL_HEADERS],
-      body: containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.location, c.deployedDate, c.validUpto, c.movement]),
+      body: containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
       styles: { fontSize: 8 },
       headStyles: { fillColor: [5, 35, 121] }
     });

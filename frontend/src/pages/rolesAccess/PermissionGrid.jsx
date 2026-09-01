@@ -17,7 +17,18 @@ export function PermissionGrid({ emails, permKeys, emailPerms, onToggle }) {
 
   return (
     <DataGrid
-      headers={['What they can do', ...emails]}
+      headers={[
+        'What they can do',
+        // Column is already scoped to one email per row below (onToggle,
+        // emailPerms lookups) — this only shortens what's DISPLAYED. Strips
+        // exactly "@crystalgroup.in", not any domain, so an account on a
+        // different domain (if one ever exists) still shows in full rather
+        // than silently truncating something that isn't actually redundant.
+        ...emails.map((email) => {
+          const short = email.replace(/@crystalgroup\.in$/i, '');
+          return short === email ? email : <span key={email} title={email}>{short}</span>;
+        })
+      ]}
       rows={rows}
       rowKey={(r) => r.key}
       renderRow={(_, r) => (

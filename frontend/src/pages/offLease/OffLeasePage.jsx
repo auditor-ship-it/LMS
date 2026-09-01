@@ -173,7 +173,7 @@ function ApprovalQueue() {
     setBusyKey(key);
     setActionError('');
     try {
-      const message = await decideApproval(item.row[0], status);
+      const message = await decideApproval(item.row[0], status, undefined, item._rowNum);
       if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
       // Write, then read — one sequential reload, nothing racing it.
       await reload();
@@ -194,7 +194,7 @@ function ApprovalQueue() {
     setBulkBusy(status);
     setActionError('');
     try {
-      const results = await Promise.allSettled(containers.map((c) => decideApproval(c, status)));
+      const results = await Promise.allSettled(selectedItems.map((it) => decideApproval(it.row[0], status, undefined, it._rowNum)));
       const alreadyProcessed = results
         .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
         .filter(Boolean);
@@ -228,7 +228,7 @@ function ApprovalQueue() {
     try {
       if (rejectItems) {
         const containers = rejectItems.map((it) => it.row[0]);
-        const results = await Promise.allSettled(containers.map((c) => decideApproval(c, 'Rejected', remarks)));
+        const results = await Promise.allSettled(rejectItems.map((it) => decideApproval(it.row[0], 'Rejected', remarks, it._rowNum)));
         const alreadyProcessed = results
           .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
           .filter(Boolean);
@@ -240,7 +240,7 @@ function ApprovalQueue() {
         if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
         if (notes.length) setActionError(notes.join(' '));
       } else if (rejectItem) {
-        const message = await decideApproval(rejectItem.row[0], 'Rejected', remarks);
+        const message = await decideApproval(rejectItem.row[0], 'Rejected', remarks, rejectItem._rowNum);
         if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
       }
       closeReject();

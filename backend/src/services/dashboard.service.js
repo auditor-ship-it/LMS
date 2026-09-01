@@ -207,6 +207,9 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
       deployedDate: safeStr(row[6]), // G = Deployed Date
       validUpto: safeStr(row[7]),    // H = Valid Upto
       rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate
+      billingType: safeStr(row[16]), // Q = Billing Type
+      agreementUrl: safeStr(row[8]), // I = Agreement PDF
+      poAttachment: safeStr(row[11]), // L = PO PDF
       movement,
       offLeaseDate: movement === 'Deletion' ? safeStr(row[21]) : '' // V = Action TS
     });

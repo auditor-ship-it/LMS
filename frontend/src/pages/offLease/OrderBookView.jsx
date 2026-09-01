@@ -306,11 +306,11 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
      editable right now -- 'current' is the one stage actually open for
      action; 'done' may be reviewed but not overwritten; 'future' cannot be
      opened at all until the workflow reaches it. */
-  const openStageChip = (containerNo, chip) => {
+  const openStageChip = (containerNo, chip, rowNum) => {
     if (chip.tone === 'future') return; // locked -- not clickable
     const readOnlyType = isReadOnlyStage(chip.stageNumber);
     const canEditNow = !readOnlyType && chip.tone === 'current' && canAct(`offlease${chip.stageNumber}`);
-    setStageForm({ container: containerNo, stageNumber: chip.stageNumber, readOnly: !canEditNow, identityOnly: readOnlyType });
+    setStageForm({ container: containerNo, rowNum, stageNumber: chip.stageNumber, readOnly: !canEditNow, identityOnly: readOnlyType });
   };
   const rows = useMemo(() => items.map((it) => ({
     it, chips: buildChips(it), status: statusOf(it)
@@ -389,7 +389,7 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
                     title={c.title}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (c.stageNumber != null) openStageChip(it.container, c);
+                      if (c.stageNumber != null) openStageChip(it.container, c, it._rowNum);
                       else onOpenTab?.(c.tab);
                     }}
                   >
@@ -430,6 +430,7 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
         <StageDetailModal
           stageNumber={stageForm.stageNumber}
           containerNo={stageForm.container}
+          rowNum={stageForm.rowNum}
           readOnly={stageForm.readOnly}
           identityOnly={stageForm.identityOnly}
           onClose={() => setStageForm(null)}

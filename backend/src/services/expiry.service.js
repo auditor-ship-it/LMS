@@ -317,7 +317,14 @@ export async function getExpiryDataByFilter(filterType, user) {
  * Lease Expiry action below used to resolve by container number alone.
  * Verified against `containerNo` first, so a stale/out-of-range reference
  * still fails loudly rather than silently writing under the wrong row.
- * Falls back to the old first-match search when omitted.
+ *
+ * HARDENED 2026-08-31 (user directive, after the identical bug class
+ * resurfaced in Off-Lease Tracking: this must never silently recur
+ * anywhere): omitting knownRow is safe ONLY when the container genuinely
+ * has one Deployed row — first-match is used in that case exactly as
+ * before. A SECOND row for the same container now throws a clear,
+ * actionable error instead of silently picking whichever comes first; see
+ * offlease.service.js's _resolveOlRow for the identical fix and reasoning.
  */
 function _resolveDeployedRow(containerNo, rows, knownRow) {
   if (knownRow != null) {
@@ -327,15 +334,21 @@ function _resolveDeployedRow(containerNo, rows, knownRow) {
     }
     return knownRow;
   }
+  let first = -1, count = 0;
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][0]) == containerNo) return i + 2; // eslint-disable-line eqeqeq
+    if (String(rows[i][0]) != containerNo) continue; // eslint-disable-line eqeqeq
+    count++;
+    if (first === -1) first = i + 2;
   }
-  return -1;
+  if (count > 1) {
+    throw new AppError(`${containerNo} has ${count} Deployed sheet records — open it from its own list row (not by container number alone) so the exact one can be targeted.`);
+  }
+  return first;
 }
 
 /** Same as _resolveDeployedRow but against the Mongo-mirrored, position-keyed
  *  (`row_<i>`) docs the Fast paths read — used by completeDocumentStageFast /
- *  saveExpiryActionFast. */
+ *  saveExpiryActionFast. Same 2026-08-31 hardening applies. */
 function _resolveDeployedMongoDoc(containerNo, docs, knownRow) {
   if (knownRow != null) {
     const doc = docs.find((d) => d.key === `row_${knownRow - 2}`);
@@ -344,7 +357,11 @@ function _resolveDeployedMongoDoc(containerNo, docs, knownRow) {
     }
     return doc;
   }
-  return docs.find((d) => String(d.row[0]) == containerNo); // eslint-disable-line eqeqeq
+  const allMatches = docs.filter((d) => String(d.row[0]) == containerNo); // eslint-disable-line eqeqeq
+  if (allMatches.length > 1) {
+    throw new AppError(`${containerNo} has ${allMatches.length} Deployed sheet records — open it from its own list row (not by container number alone) so the exact one can be targeted.`);
+  }
+  return allMatches[0];
 }
 
 /* =============================================

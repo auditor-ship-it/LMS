@@ -20,6 +20,26 @@ import styles from './StageDetailModal.module.css';
  *  two systems; compared on alphanumerics alone so they still match. */
 const normInvoiceNo = (v) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+/* Shared with the Billing form's own Outstanding Amount / Estimated repair
+   charges billed prefill below — the Gate-In form's "Estimated repair
+   budget" is free text ("INR 3000", "25K", "arround 2000/-"), not a number
+   field, so a plain Number(v) only matched a handful of clean digit-only
+   rows. Strip currency words/commas, expand a trailing K/k as thousands,
+   then take the first number in whatever's left — genuinely non-numeric text
+   (NA, No, "will know after inspection") still has no digit to find and
+   stays null. */
+function parseCostFigure(v) {
+  let s = String(v ?? '').trim();
+  if (!s) return null;
+  s = s.replace(/₹|inr|rs\.?/gi, '').trim();
+  const k = s.match(/^(\d+(?:\.\d+)?)\s*k$/i);
+  if (k) return Number(k[1]) * 1000;
+  const m = s.replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Detail/edit form for one Off-Lease row at one stage. Fields shown are
  * exactly STAGE_FIELDS[stageNumber] (never hand-written per stage — Stage 6
@@ -27,10 +47,10 @@ const normInvoiceNo = (v) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g,
  * only the visible field keys back to POST /offlease/:containerNo/stage/:stage.
  */
 // The heading comes from stageCaption(stageNumber), so no label prop is needed.
-export function StageDetailModal({ stageNumber, containerNo, readOnly, identityOnly, movement, transport, delivery, onClose, onSaved }) {
+export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, onClose, onSaved }) {
   const { canAct } = usePermission();
   const fields = STAGE_FIELDS[stageNumber] || [];
-  const { data, loading, error, reload } = useAsync(() => fetchStageDetail(containerNo, stageNumber), [containerNo, stageNumber]);
+  const { data, loading, error, reload } = useAsync(() => fetchStageDetail(containerNo, stageNumber, rowNum), [containerNo, stageNumber, rowNum]);
   const { data: leaseIdPreview } = useAsync(
     () => (stageNumber === 1 ? fetchNextLeaseId() : Promise.resolve(null)),
     [stageNumber]
@@ -94,6 +114,30 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
   useEffect(() => {
     if (data) setValues(data);
   }, [data]);
+
+  /* Billing's own "Outstanding Amount" (col_306) and "Estimated repair
+     charges billed" (col_308) used to start blank and make the reconciler
+     retype figures the form already fetches and shows a few lines above them
+     (Accounts & Collection's Net Balance, and the Cost Reference card's
+     Inspection/Repair Estimate) — pre-fill each from that same source once it
+     arrives, but ONLY while the cell is still genuinely blank. Never overwrite
+     a value already on the sheet (someone reconciled this before and the
+     figure may have been deliberately adjusted) or one the user just typed —
+     functional setValues + a blank-check inside it, not a dependency on
+     values itself, so this can't re-fire and clobber a fresh edit. */
+  useEffect(() => {
+    if (stageNumber !== BILLING_STAGE || !outstanding) return;
+    const net = Number.isFinite(Number(outstanding.netBalance)) ? Number(outstanding.netBalance) : parseCostFigure(outstanding.grandTotal);
+    if (net == null || !Number.isFinite(net)) return;
+    setValues((prev) => (String(prev.col_306 ?? '').trim() !== '' ? prev : { ...prev, col_306: String(net) }));
+  }, [stageNumber, outstanding]);
+
+  useEffect(() => {
+    if (stageNumber !== BILLING_STAGE || data?._inspectionCost == null) return;
+    const est = parseCostFigure(data._inspectionCost);
+    if (est == null) return;
+    setValues((prev) => (String(prev.col_308 ?? '').trim() !== '' ? prev : { ...prev, col_308: String(est) }));
+  }, [stageNumber, data]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -226,7 +270,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
 
     setSaving(true);
     try {
-      const message = await submitStage(containerNo, stageNumber, payload);
+      const message = await submitStage(containerNo, stageNumber, payload, rowNum);
       if (message === 'ALREADY_PROCESSED') {
         setSaveError('This record was already processed by someone else — refreshing…');
         await reload();
@@ -294,6 +338,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
               {!!data?._move?.canSendBackHere && (
                 <SendBackPanel
                   containerNo={containerNo}
+                  rowNum={rowNum}
                   moveInfo={data._move}
                   onSentBack={() => { onSaved?.(); onClose(); }}
                 />
@@ -327,6 +372,7 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
               {identityOnly && (
                 <MoveToStageSection
                   containerNo={containerNo}
+                  rowNum={rowNum}
                   canMove={canAct(`offlease${stageNumber}`)}
                   alreadyMoved={data?._move}
                   onMoved={() => { onSaved?.(); onClose(); }}
@@ -338,7 +384,10 @@ export function StageDetailModal({ stageNumber, containerNo, readOnly, identityO
               )}
 
               {stageNumber === BILLING_STAGE && (
-                <CostReferencePanel transportCost={data?._transportCost} inspectionCost={data?._inspectionCost} />
+                <>
+                  <CostReferencePanel transportCost={data?._transportCost} inspectionCost={data?._inspectionCost} />
+                  <Stage1DataNote data={data?._stage1Data} />
+                </>
               )}
 
               {/* Gate In's own form was removed 2026-08-24: gate/depot staff
@@ -712,12 +761,8 @@ function OutstandingPanel({ data, loading }) {
  * pretending it's zero.
  */
 function CostReferencePanel({ transportCost, inspectionCost }) {
-  const num = (v) => {
-    const n = Number(String(v ?? '').replace(/,/g, '').trim());
-    return Number.isFinite(n) && String(v ?? '').trim() !== '' ? n : null;
-  };
-  const t = num(transportCost);
-  const i = num(inspectionCost);
+  const t = parseCostFigure(transportCost);
+  const i = parseCostFigure(inspectionCost);
   const hasAny = t !== null || i !== null;
   const inr = (n) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
@@ -725,8 +770,10 @@ function CostReferencePanel({ transportCost, inspectionCost }) {
     <>
       <h3 className={styles.sectionTitle}>Cost Reference (Transport + Inspection)</h3>
       <p className={styles.sectionHint}>
-        Fetched from Stage 9 (Transport) and the Gate-In form's repair estimate — for
-        reference while reconciling, not saved anywhere on this form.
+        Fetched from Stage 9 (Transport) and the Inspection Checklist's own Estimate
+        Value total (falling back to the Gate-In form's repair estimate if the
+        checklist has none) — for reference while reconciling, not saved anywhere on
+        this form.
       </p>
       <div className={styles.outstandingRow}>
         <div className={styles.outstandingCard}>
@@ -743,6 +790,36 @@ function CostReferencePanel({ transportCost, inspectionCost }) {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Stage 1's own intimation dates, fetched read-only for the reconciler —
+ * Final Billing Date in particular is the figure Billing is meant to
+ * reconcile against, set back at intimation time and otherwise invisible on
+ * this form (getOffLeaseStageDetail's _stage1Data); never saved from here.
+ */
+function Stage1DataNote({ data }) {
+  if (!data || (!data.intimationDate && !data.offLeaseDate && !data.finalBillingDate && !data.emailNotification)) return null;
+  return (
+    <div className={styles.outstandingRow}>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Off-Lease Intimation Date (Stage 1)</span>
+        <span className={styles.outstandingValue}>{data.intimationDate || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Off-Lease Date (Stage 1)</span>
+        <span className={styles.outstandingValue}>{data.offLeaseDate || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Final Billing Date (Stage 1)</span>
+        <span className={styles.outstandingValue}>{data.finalBillingDate || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Email Notification (Stage 1)</span>
+        <span className={styles.outstandingValue}>{renderCellValue(data.emailNotification)}</span>
+      </div>
+    </div>
   );
 }
 
@@ -1008,7 +1085,7 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * Self-contained: this never reads STAGE-8/9/10 or Transportation data —
  * only the container number it's given and its own fields.
  */
-function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
+function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMoved }) {
   const [reason, setReason] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [clientScope, setClientScope] = useState('');
@@ -1048,7 +1125,7 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
     if (!date) { setError('Date is required.'); return; }
     if (!moveToStage) { setError('Select a Move To Stage destination.'); return; }
 
-    const payload = { reason, remarks: remarks.trim(), date, moveToStage };
+    const payload = { reason, remarks: remarks.trim(), date, moveToStage, rowNum };
     const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => o.value === moveToStage);
     const destLabel = target?.label || `Stage ${moveToStage}`;
     let successLabel = '';
@@ -1172,7 +1249,7 @@ function MoveToStageSection({ containerNo, canMove, alreadyMoved, onMoved }) {
  * (nothing duplicated), with its full history preserved in the separate
  * audit-trail sheet regardless.
  */
-function SendBackPanel({ containerNo, moveInfo, onSentBack }) {
+function SendBackPanel({ containerNo, rowNum, moveInfo, onSentBack }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -1180,7 +1257,7 @@ function SendBackPanel({ containerNo, moveInfo, onSentBack }) {
     setError('');
     setBusy(true);
     try {
-      await submitSendBack(containerNo);
+      await submitSendBack(containerNo, rowNum);
       onSentBack?.();
     } catch (e) {
       setError(apiErrorMessage(e));
@@ -1286,6 +1363,15 @@ function BillingTable({ billing, clientName }) {
 }
 
 function ChecklistTable({ title, columnLabel, rows, footer = [], values, pendingFiles, disabled, onChange, onFile }) {
+  /* Estimate/Photo/Remarks were a second row that opened up underneath a
+     damaged point — one line per point became two, and the whole table
+     re-flowed every time a dropdown changed. Same fix as the read-only
+     report view (offLease/LookupResult.jsx's own ChecklistTable): once ANY
+     point needs them, they become three more COLUMNS every row already has
+     (dash for a sound point), so a damaged point is still exactly one row,
+     not a row plus an expanding panel below it. */
+  const anyDamage = rows.some((row) => isFaultStatus(String(values[row.status.key] || '')));
+
   return (
     <>
       <h3 className={styles.sectionTitle}>{title}</h3>
@@ -1298,65 +1384,58 @@ function ChecklistTable({ title, columnLabel, rows, footer = [], values, pending
           <tr>
             <th scope="col">{columnLabel}</th>
             <th scope="col">Good / Damage</th>
+            {anyDamage && DAMAGE_ROLES.map(([role, shortLabel]) => <th key={role} scope="col">{shortLabel}</th>)}
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => {
             const statusField = row.status;
             const selected = String(values[statusField.key] || '');
-            /* Any fault wording opens the panel — Rusty, Leak, Short, Noisy,
-               Faulty, Cut, Missing, Safety Pin Cut — not just "Damage". Must
-               use the same predicate the fields' showIf uses, or the fields
-               become visible while the row that renders them stays closed. */
+            /* Any fault wording asks for the extra columns — Rusty, Leak,
+               Short, Noisy, Faulty, Cut, Missing, Safety Pin Cut — not just
+               "Damage". Must use the same predicate the fields' showIf uses,
+               or a point could ask for values it never actually shows a
+               place to enter. */
             const damaged = isFaultStatus(selected);
 
             return (
-              <Fragment key={row.n}>
-                <tr>
-                  <td className={styles.inspPoint}>
-                    <span className={styles.inspNum}>{row.n}.</span>{row.item}
-                  </td>
-                  <td>
-                    {/* A dropdown rather than a row of radios: points carry up
-                        to four options, which wrapped onto a second line and
-                        made the rows ragged. The control keeps the colour
-                        signal — red for a fault, green for sound. */}
-                    <select
-                      className={`${styles.statusSelect} ${statusTone(selected, styles)}`}
-                      value={selected}
-                      onChange={(e) => onChange(statusField.key, e.target.value)}
-                      disabled={disabled}
-                      aria-label={`${row.item} condition`}
-                    >
-                      <option value="">Select…</option>
-                      {statusField.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                    </select>
-                  </td>
-                </tr>
-
-                {damaged && DAMAGE_ROLES.some(([role]) => row[role]) && (
-                  <tr>
-                    <td className={styles.inspDamageCell} colSpan={2}>
-                      <div className={styles.inspDamageBox}>
-                        {DAMAGE_ROLES.filter(([role]) => row[role]).map(([role, shortLabel]) => {
-                          const f = row[role];
-                          return (
-                            <Field
-                              key={f.key}
-                              field={{ ...f, label: shortLabel }}
-                              value={values[f.key]}
-                              pendingFileName={pendingFiles[f.key]?.fileName}
-                              onChange={(v) => onChange(f.key, v)}
-                              onFile={(payload) => onFile(f.key, payload)}
-                              disabled={disabled}
-                            />
-                          );
-                        })}
-                      </div>
+              <tr key={row.n}>
+                <td className={styles.inspPoint}>
+                  <span className={styles.inspNum}>{row.n}.</span>{row.item}
+                </td>
+                <td>
+                  {/* A dropdown rather than a row of radios: points carry up
+                      to four options, which wrapped onto a second line and
+                      made the rows ragged. The control keeps the colour
+                      signal — red for a fault, green for sound. */}
+                  <select
+                    className={`${styles.statusSelect} ${statusTone(selected, styles)}`}
+                    value={selected}
+                    onChange={(e) => onChange(statusField.key, e.target.value)}
+                    disabled={disabled}
+                    aria-label={`${row.item} condition`}
+                  >
+                    <option value="">Select…</option>
+                    {statusField.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                </td>
+                {anyDamage && DAMAGE_ROLES.map(([role]) => {
+                  const f = row[role];
+                  if (!damaged || !f) return <td key={role} className={styles.inspDamageDash}>—</td>;
+                  return (
+                    <td key={role} className={styles.inspDamageCol}>
+                      <Field
+                        field={{ ...f, label: '' }}
+                        value={values[f.key]}
+                        pendingFileName={pendingFiles[f.key]?.fileName}
+                        onChange={(v) => onChange(f.key, v)}
+                        onFile={(payload) => onFile(f.key, payload)}
+                        disabled={disabled}
+                      />
                     </td>
-                  </tr>
-                )}
-              </Fragment>
+                  );
+                })}
+              </tr>
             );
           })}
         </tbody>
@@ -1673,7 +1752,10 @@ function SelectOtherInput({ options, value, onChange, disabled }) {
 function Labeled({ label, required, full, children }) {
   return (
     <label className={`${styles.field} ${full ? styles.full : ''}`}>
-      <span className={styles.label}>{label}{required && <span className={styles.req}> *</span>}</span>
+      {/* Empty label (ChecklistTable's per-column cells, where the column
+          header already names the field) renders no span at all, rather
+          than an empty one still claiming its own line of vertical space. */}
+      {label && <span className={styles.label}>{label}{required && <span className={styles.req}> *</span>}</span>}
       {children}
     </label>
   );
