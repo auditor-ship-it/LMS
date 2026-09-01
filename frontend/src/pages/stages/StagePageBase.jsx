@@ -3,6 +3,7 @@ import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { Card } from '../../components/ui/Card.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { SearchBar } from '../../components/ui/SearchBar.jsx';
+import { FilterBar } from '../../components/ui/FilterBar.jsx';
 import { Pagination } from '../../components/ui/Pagination.jsx';
 import { DataGrid } from '../../components/ui/DataGrid.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
@@ -31,6 +32,31 @@ import styles from './StagePageBase.module.css';
    the same way READ_ONLY_STAGES already works. */
 const STAGE1_EXTRAS_STAGE = 1;
 
+/* Stage 2 (internal 6, Transportation) only — the list is big enough here
+   (dozens of pending records across many clients/depots) that Location and
+   Size filters are worth it; no other stage's queue has asked for them.
+   A plain number check, same reasoning as STAGE1_EXTRAS_STAGE above. */
+const LOCATION_FILTER_STAGE = 6;
+
+/* Size (col_2) and Type (col_3) are both messy free text — "40 FT Reefer
+   Refurbished - RFH40R", "20FT Cabin", "Reefer Container" — so the filter
+   classifies by substring rather than exact match. Cabin is checked first:
+   "20FT Cabin" contains both "20" and "cabin", and belongs under Site Cabin,
+   not 20FT. */
+function classifySize(sizeCell, typeCell) {
+  const s = String(sizeCell || '').toLowerCase();
+  const t = String(typeCell || '').toLowerCase();
+  if (t === 'site cabin' || s.includes('cabin')) return 'Site Cabin';
+  if (s.includes('20')) return '20FT';
+  if (s.includes('40')) return '40FT';
+  return null;
+}
+const SIZE_FILTER_OPTIONS = [
+  { value: '40FT', label: '40FT' },
+  { value: '20FT', label: '20FT' },
+  { value: 'Site Cabin', label: 'Site Cabin' }
+];
+
 /**
  * Shared, fully-working shell for Off-Lease Stage 1..8 pages — one component
  * parametrized by stageNumber. Lists the rows currently pending at this
@@ -41,8 +67,15 @@ const STAGE1_EXTRAS_STAGE = 1;
 const dotState = (v) => (v === undefined ? 'unread' : v ? 'found' : 'missing');
 const DOT_TITLE = { found: 'record found', missing: 'no record', unread: 'sheet unavailable' };
 
-/** The FMS chain as three compact dots, so a whole column of them can be
- *  scanned down the page. Full detail is behind View. */
+/** The FMS chain (STAGE-8 Movement -> STAGE-9 Transport -> STAGE-10 Site
+ *  Delivery) as an actual connected pipeline — three nodes joined by lines,
+ *  same visual language as PipelineDashboard.jsx's own MiniPipeline step-
+ *  tracker (offLease/PipelineDashboard.module.css's .dot/.line), not three
+ *  disconnected badges. A line fills in once the step BEFORE it is found,
+ *  reading left-to-right as "how far the physical movement has actually
+ *  progressed" the same way MiniPipeline reads "how far the workflow has
+ *  progressed". Full detail is still behind View — this is the at-a-glance
+ *  column, not the full record. */
 function FmsDots({ item }) {
   const steps = [
     [8, 'Movement', item?.movement],
@@ -51,15 +84,17 @@ function FmsDots({ item }) {
   ];
   return (
     <span className={styles.dots}>
-      {steps.map(([n, label, value]) => {
+      {steps.map(([n, label, value], i) => {
         const state = dotState(value);
         return (
-          <span
-            key={n}
-            className={`${styles.dot} ${styles[`dot_${state}`]}`}
-            title={`Stage ${n} — ${label}: ${DOT_TITLE[state]}`}
-          >
-            {n}
+          <span key={n} className={styles.dotWrap}>
+            {i > 0 && <span className={`${styles.dotLine} ${dotState(steps[i - 1][2]) === 'found' ? styles.dotLineDone : ''}`} />}
+            <span
+              className={`${styles.dot} ${styles[`dot_${state}`]}`}
+              title={`Stage ${n} — ${label}: ${DOT_TITLE[state]}`}
+            >
+              {n}
+            </span>
           </span>
         );
       })}
@@ -99,6 +134,8 @@ export function StagePageBase({ stageNumber, embedded }) {
   usePolling(() => reload({ silent: true }));
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
+  const [locationFilter, setLocationFilter] = useState('');
+  const [sizeFilter, setSizeFilter] = useState('');
   const [activeRow, setActiveRow] = useState(null);
   const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
@@ -116,7 +153,7 @@ export function StagePageBase({ stageNumber, embedded }) {
     setHoldBusy(true);
     setHoldError('');
     try {
-      const result = await submitHold(containerNo, remarks);
+      const result = await submitHold(containerNo, remarks, holdTarget?._rowNum);
       if (result === 'ALREADY_PROCESSED') {
         setActionError(`${containerNo} was already put on hold by someone else.`);
       }
@@ -134,7 +171,7 @@ export function StagePageBase({ stageNumber, embedded }) {
     setBusyKey(containerNo);
     setActionError('');
     try {
-      await submitSendBackToStage1(containerNo);
+      await submitSendBackToStage1(containerNo, item._rowNum);
       await reload();
     } catch (e) {
       setActionError(apiErrorMessage(e));
@@ -148,7 +185,7 @@ export function StagePageBase({ stageNumber, embedded }) {
     setBusyKey(containerNo);
     setActionError('');
     try {
-      await submitSendRejectedToStage1(containerNo);
+      await submitSendRejectedToStage1(containerNo, item._rowNum);
       await reload();
     } catch (e) {
       setActionError(apiErrorMessage(e));
@@ -166,11 +203,32 @@ export function StagePageBase({ stageNumber, embedded }) {
   );
   const visibleHeaders = useMemo(() => visibleIdx.map((i) => headers[i]), [visibleIdx, headers]);
 
+  /* r.row is NOT the raw sheet row — getOffLeaseData compacts it to just the
+     display columns (displayIndices = [0,1,2,3,5,6,7,8,9], Client Code at
+     raw col_4 dropped), so position 5 here is Location (raw col_6), not 6 —
+     index 6 in this array is Deployed Date, which is exactly what showed up
+     in the filter the first time this was wired to the raw column number.
+     All distinct values actually present in THIS stage's rows, not a fixed
+     list, so a new depot city shows up here the moment a row exists for it. */
+  const locationOptions = useMemo(() => {
+    if (stageNumber !== LOCATION_FILTER_STAGE) return [];
+    const set = new Set();
+    for (const r of rows) {
+      const loc = String(r.row?.[5] || '').trim();
+      if (loc) set.add(loc);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
+  }, [rows, stageNumber]);
+
   const filteredRows = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => (r.row || []).some((cell) => String(cell ?? '').toLowerCase().includes(q)));
-  }, [rows, debouncedSearch]);
+    return rows.filter((r) => {
+      if (q && !(r.row || []).some((cell) => String(cell ?? '').toLowerCase().includes(q))) return false;
+      if (locationFilter && String(r.row?.[5] || '').trim() !== locationFilter) return false;
+      if (sizeFilter && classifySize(r.row?.[2], r.row?.[3]) !== sizeFilter) return false;
+      return true;
+    });
+  }, [rows, debouncedSearch, locationFilter, sizeFilter]);
 
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filteredRows, 10);
 
@@ -219,6 +277,17 @@ export function StagePageBase({ stageNumber, embedded }) {
             {filteredRows.length} {stage1Extras && subTab !== 'pending' ? subTab : 'pending'} record{filteredRows.length === 1 ? '' : 's'}
           </span>
         </div>
+
+        {stageNumber === LOCATION_FILTER_STAGE && (
+          <div className={styles.stageFilterBar}>
+            <FilterBar
+              filters={[
+                { key: 'location', label: 'Location', options: locationOptions, value: locationFilter, onChange: setLocationFilter },
+                { key: 'size', label: 'Size', options: SIZE_FILTER_OPTIONS, value: sizeFilter, onChange: setSizeFilter }
+              ]}
+            />
+          </div>
+        )}
 
         {actionError && <p className={styles.actionError}>{actionError}</p>}
 
@@ -310,6 +379,7 @@ export function StagePageBase({ stageNumber, embedded }) {
         <StageDetailModal
           stageNumber={stageNumber}
           containerNo={activeRow.row[0]}
+          rowNum={activeRow._rowNum}
           readOnly={!canEdit}
           identityOnly={readOnly}
           /* STAGE-8 / STAGE-9 detail for this container, matched server-side.

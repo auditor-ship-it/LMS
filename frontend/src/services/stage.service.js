@@ -6,11 +6,11 @@ import {
 export async function fetchStageList(stage, filter) {
   return getStageData(stage, filter);
 }
-export async function fetchStageDetail(containerNo, stage) {
-  return getStageDetail(containerNo, stage);
+export async function fetchStageDetail(containerNo, stage, rowNum) {
+  return getStageDetail(containerNo, stage, rowNum);
 }
-export async function submitStage(containerNo, stage, data) {
-  return saveStage(containerNo, stage, data);
+export async function submitStage(containerNo, stage, data, rowNum) {
+  return saveStage(containerNo, stage, data, rowNum);
 }
 export async function fetchNextLeaseId() {
   return getNextLeaseId();
@@ -18,18 +18,18 @@ export async function fetchNextLeaseId() {
 export async function submitMoveToStage(containerNo, payload) {
   return saveMoveToStage(containerNo, payload);
 }
-export async function submitSendBack(containerNo) {
-  return saveSendBack(containerNo);
+export async function submitSendBack(containerNo, rowNum) {
+  return saveSendBack(containerNo, rowNum);
 }
 export async function fetchMoveHistory(containerNo, leaseId) {
   return getMoveHistory(containerNo, leaseId);
 }
-export async function submitHold(containerNo, remarks) {
-  return saveHold(containerNo, remarks);
+export async function submitHold(containerNo, remarks, rowNum) {
+  return saveHold(containerNo, remarks, rowNum);
 }
-export async function submitSendBackToStage1(containerNo) {
-  return saveSendBackToStage1(containerNo);
+export async function submitSendBackToStage1(containerNo, rowNum) {
+  return saveSendBackToStage1(containerNo, rowNum);
 }
-export async function submitSendRejectedToStage1(containerNo) {
-  return saveSendRejectedToStage1(containerNo);
+export async function submitSendRejectedToStage1(containerNo, rowNum) {
+  return saveSendRejectedToStage1(containerNo, rowNum);
 }

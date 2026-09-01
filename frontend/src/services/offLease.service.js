@@ -8,17 +8,17 @@ import {
 export async function fetchApprovalQueue() {
   return getOffLeaseApprovalData();
 }
-export async function decideApproval(containerNo, status, remarks) {
-  return saveOffLeaseApprovalAction(containerNo, status, remarks);
+export async function decideApproval(containerNo, status, remarks, rowNum) {
+  return saveOffLeaseApprovalAction(containerNo, status, remarks, rowNum);
 }
-export async function sendRejectedBackToStage1(containerNo) {
-  return sendRejectedToStage1(containerNo);
+export async function sendRejectedBackToStage1(containerNo, rowNum) {
+  return sendRejectedToStage1(containerNo, rowNum);
 }
 export async function lookupContainer(containerNo, leaseId) {
   return getOffLeaseContainerDetail(containerNo, leaseId);
 }
-export async function trackContainer(containerNo, deployedRow) {
-  return addToOffLeaseTracking(containerNo, deployedRow);
+export async function trackContainer(containerNo, deployedRow, remarks, personName) {
+  return addToOffLeaseTracking(containerNo, deployedRow, remarks, personName);
 }
 export async function fetchOffLeaseDashboard() {
   return getOffLeaseDashboardData();

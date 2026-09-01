@@ -11,6 +11,7 @@ import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchExpiryList, actionExpiryRow, syncSalePersons } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
+import { OffLeaseModal } from './OffLeaseModal.jsx';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { distinctOptionsForColumn } from '../../utils/tableFilters.js';
 import styles from './LeaseExpiryPage.module.css';
@@ -77,6 +78,15 @@ export function LeaseExpiryPage() {
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [bulkBusy, setBulkBusy] = useState('');
   useEffect(() => { setSelectedKeys(new Set()); }, [data]);
+
+  /* Off-Lease confirmation — OffLeaseModal.jsx, mirroring RejectModal's
+     item/items mutually-exclusive convention (Approval queue) and Stage 1's
+     own HoldModal. offLeaseItem/offLeaseItems null = closed. */
+  const [offLeaseItem, setOffLeaseItem] = useState(null);
+  const [offLeaseItems, setOffLeaseItems] = useState(null);
+  const [offLeaseBusy, setOffLeaseBusy] = useState(false);
+  const [offLeaseError, setOffLeaseError] = useState('');
+  const closeOffLease = () => { setOffLeaseItem(null); setOffLeaseItems(null); setOffLeaseError(''); };
 
   const headers = data?.headers || [];
   // Container No. alone isn't a unique row identifier — the same container
@@ -242,24 +252,48 @@ export function LeaseExpiryPage() {
   // tracking row AND marks Deployed sheet Off-Lease in one step; calling the
   // generic runAction here only did the second half, so the container never
   // actually entered the tracking workflow (confirmed 2026-08-08, GESU6329868).
-  const runOffLease = async (item) => {
-    const containerNo = item.row?.[0];
-    const key = `${containerNo}-Off-Lease`;
-    setBusyKey(key);
-    setActionError('');
+  //
+  // Goes through OffLeaseModal (Person Name + optional Remarks) rather than
+  // acting instantly on click — same "confirm with a couple of fields
+  // first" shape as Stage 1's Hold and Stage 1A's Reject, both built this
+  // session. handleOffLeaseSubmit below does the actual write, for both the
+  // single-row (offLeaseItem) and bulk (offLeaseItems) case.
+  const handleOffLeaseSubmit = async ({ personName, remarks }) => {
+    setOffLeaseBusy(true);
+    setOffLeaseError('');
     try {
-      // item._rowNum: this exact Deployed row, not just the container number
-      // — see trackContainer's doc comment for why that distinction matters.
-      const result = await trackContainer(containerNo, item._rowNum);
-      if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
-      setSelectedIdx(null);
+      if (offLeaseItems) {
+        const containers = offLeaseItems.map((it) => it.row?.[0]);
+        const results = await Promise.allSettled(
+          offLeaseItems.map((it) => trackContainer(it.row?.[0], it._rowNum, remarks, personName))
+        );
+        const alreadyExists = results
+          .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_EXISTS' ? containers[i] : null))
+          .filter(Boolean);
+        const failed = results
+          .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
+          .filter(Boolean);
+        const notes = [];
+        if (alreadyExists.length) notes.push(`Already in Off-Lease tracking: ${alreadyExists.join(', ')}.`);
+        if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
+        if (notes.length) setActionError(notes.join(' '));
+      } else if (offLeaseItem) {
+        const containerNo = offLeaseItem.row?.[0];
+        // offLeaseItem._rowNum: this exact Deployed row, not just the
+        // container number — see trackContainer's doc comment for why that
+        // distinction matters.
+        const result = await trackContainer(containerNo, offLeaseItem._rowNum, remarks, personName);
+        if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
+        setSelectedIdx(null);
+      }
+      closeOffLease();
       // Write, then read — see runAction's identical note above.
       await reload();
       invalidate('deployed-sheet');
     } catch (e) {
-      setActionError(apiErrorMessage(e));
+      setOffLeaseError(apiErrorMessage(e));
     } finally {
-      setBusyKey('');
+      setOffLeaseBusy(false);
     }
   };
 
@@ -296,31 +330,10 @@ export function LeaseExpiryPage() {
     }
   };
 
-  const handleBulkOffLease = async () => {
+  const handleBulkOffLease = () => {
     if (!selectedItems.length) return;
-    const containers = selectedItems.map((it) => it.row?.[0]);
-    setBulkBusy('Off-Lease');
-    setActionError('');
-    try {
-      // it._rowNum: see runOffLease's identical note above.
-      const results = await Promise.allSettled(selectedItems.map((it) => trackContainer(it.row?.[0], it._rowNum)));
-      const alreadyExists = results
-        .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_EXISTS' ? containers[i] : null))
-        .filter(Boolean);
-      const failed = results
-        .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
-        .filter(Boolean);
-      const notes = [];
-      if (alreadyExists.length) notes.push(`Already in Off-Lease tracking: ${alreadyExists.join(', ')}.`);
-      if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
-      if (notes.length) setActionError(notes.join(' '));
-      await reload();
-      invalidate('deployed-sheet');
-    } catch (e) {
-      setActionError(apiErrorMessage(e));
-    } finally {
-      setBulkBusy('');
-    }
+    setOffLeaseError('');
+    setOffLeaseItems(selectedItems);
   };
 
   return (
@@ -378,7 +391,7 @@ export function LeaseExpiryPage() {
                 <Button size="sm" variant="primary" loading={bulkBusy === 'Renewed'} disabled={!!bulkBusy} onClick={() => handleBulkAction('Renewed')}>
                   Renew ({selectedItems.length})
                 </Button>
-                <Button size="sm" variant="secondary" loading={bulkBusy === 'Off-Lease'} disabled={!!bulkBusy} onClick={handleBulkOffLease}>
+                <Button size="sm" variant="secondary" disabled={!!bulkBusy} onClick={handleBulkOffLease}>
                   Off-Lease ({selectedItems.length})
                 </Button>
               </div>
@@ -427,10 +440,20 @@ export function LeaseExpiryPage() {
             busyKey={busyKey}
             onBack={() => setSelectedIdx(null)}
             onRenew={() => runAction(selected, 'Renewed')}
-            onOffLease={() => runOffLease(selected)}
+            onOffLease={() => { setOffLeaseError(''); setOffLeaseItem(selected); }}
           />
         )}
       </Card>
+
+      <OffLeaseModal
+        open={!!(offLeaseItem || offLeaseItems)}
+        item={offLeaseItem}
+        items={offLeaseItems}
+        submitting={offLeaseBusy}
+        error={offLeaseError}
+        onClose={closeOffLease}
+        onSubmit={handleOffLeaseSubmit}
+      />
     </>
   );
 }
@@ -443,6 +466,15 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
   // guard, so swap the button for a status note instead of leaving a
   // confusing dead-end action visible.
   const inProgress = !!item.actionStatus;
+  // Renew only needs to be offered once the lease is actually approaching —
+  // a container freshly renewed for another year+ has nothing to act on
+  // yet. Reappears on its own once daysLeft (the sooner of Agreement Valid
+  // Upto / PO Validity — see getExpiryDataByFilter's Math.min) drops to 15
+  // or below, same threshold whether this is its first renewal or its
+  // fifth. `daysLeft == null` (neither date on record) still shows it —
+  // nothing to compute a window from, so the old "always available" default
+  // applies rather than hiding it with no way back.
+  const dueSoon = item.daysLeft == null || item.daysLeft <= 15;
   return (
     <div>
       <Button variant="secondary" size="sm" onClick={onBack} className={styles.backBtn}>← Back to List ({total})</Button>
@@ -476,10 +508,12 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
             <div className={styles.actionsCell}>
               {inProgress ? (
                 <span className={styles.viewOnlyIcon}>Sent for renewal — continue from Renew &amp; Document</span>
-              ) : (
+              ) : dueSoon ? (
                 <Button size="lg" variant="primary" loading={busyKey === `${containerNo}-Renewed`} onClick={onRenew}>Renew</Button>
+              ) : (
+                <span className={styles.viewOnlyIcon}>Not due yet — Renew reappears within 15 days of expiry ({formatDays(item.daysLeft)} left)</span>
               )}
-              <Button size="lg" variant="secondary" loading={busyKey === `${containerNo}-Off-Lease`} onClick={onOffLease}>Off-Lease</Button>
+              <Button size="lg" variant="secondary" onClick={onOffLease}>Off-Lease</Button>
             </div>
           ) : (
             <span className={styles.viewOnlyIcon}>View Only</span>

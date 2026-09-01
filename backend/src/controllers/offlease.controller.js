@@ -95,7 +95,12 @@ export async function getStageCounts(req, res) {
 
 export async function getStageDetail(req, res) {
   const stage = parseInt(req.params.stage, 10);
-  const detail = await offLeaseService.getOffLeaseStageDetail(req.params.containerNo, stage, req.user);
+  // ?rn= (item._rowNum from whichever list this was opened from) — Container
+  // No is not unique in Off-Lease Tracking (see _resolveOlRow's doc comment
+  // in offlease.service.js), so without it this can silently pre-fill a
+  // different lease's data for the same container.
+  const rowNum = req.query.rn ? parseInt(req.query.rn, 10) : undefined;
+  const detail = await offLeaseService.getOffLeaseStageDetail(req.params.containerNo, stage, req.user, rowNum);
 
   /* Billing Reconciliation needs the transport cost (STAGE-9 Freight Cost)
      and the inspection/repair estimate (Gate-In form's "Estimated repair
@@ -111,10 +116,21 @@ export async function getStageDetail(req, res) {
       detail._transportCost = freight ? freight[1] : null;
     } catch (e) { detail._transportCost = undefined; }
 
-    try {
-      const gf = stage3FormService.getGateFormForContainer(req.params.containerNo, detail.col_5);
-      detail._inspectionCost = gf?.repairBudget ?? null;
-    } catch (e) { detail._inspectionCost = undefined; }
+    /* Prefer the Inspection Checklist's own numeric Estimate Value total
+       (detail._inspectionEstimateTotal, set in getOffLeaseStageDetail from
+       this row's own checklist columns) over the Gate-In form's free-text
+       guess — that field is typed by depot staff and reads "NA" for the
+       overwhelming majority of containers even when the checklist itself has
+       real, itemised repair estimates recorded. Only fall back to the form
+       when the checklist has nothing usable. */
+    if (detail._inspectionEstimateTotal != null) {
+      detail._inspectionCost = detail._inspectionEstimateTotal;
+    } else {
+      try {
+        const gf = stage3FormService.getGateFormForContainer(req.params.containerNo, detail.col_5);
+        detail._inspectionCost = gf?.repairBudget ?? null;
+      } catch (e) { detail._inspectionCost = undefined; }
+    }
   }
 
   res.json(detail);
@@ -124,7 +140,10 @@ export async function saveStage(req, res) {
   const stage = parseInt(req.params.stage, 10);
   // Permission for this stage (offlease1..offlease8) is checked inside the
   // service, since it's derived from the :stage route param at request time.
-  const message = await offLeaseService.saveOffLeaseStageFast(req.params.containerNo, stage, req.body || {}, req.user.email);
+  // rowNum: see getStageDetail's comment above — same reasoning, this time
+  // for the WRITE, where a wrong-row match would corrupt real data.
+  const { rowNum, ...data } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseStageFast(req.params.containerNo, stage, data, req.user.email, rowNum);
   res.json({ message });
 }
 
@@ -139,9 +158,9 @@ export async function nextLeaseId(req, res) {
  *  Permission ('offlease6') is checked inside the service, same as saveStage
  *  above. */
 export async function saveMoveToStage(req, res) {
-  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage } = req.body || {};
+  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, rowNum } = req.body || {};
   const message = await offLeaseService.saveOffLeaseMoveToStageFast(
-    req.params.containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }, req.user.email
+    req.params.containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }, req.user.email, rowNum
   );
   res.json({ message });
 }
@@ -150,7 +169,8 @@ export async function saveMoveToStage(req, res) {
  *  Stage 2. Permission (against the stage being sent back FROM) is checked
  *  inside the service. */
 export async function saveSendBack(req, res) {
-  const message = await offLeaseService.saveOffLeaseSendBackFast(req.params.containerNo, req.user.email);
+  const { rowNum } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseSendBackFast(req.params.containerNo, req.user.email, rowNum);
   res.json({ message });
 }
 
@@ -164,15 +184,16 @@ export async function getMoveHistoryForContainer(req, res) {
  *  own Hold view instead of the normal queue. Permission ('offlease1') is
  *  checked inside the service. */
 export async function saveHold(req, res) {
-  const { remarks } = req.body || {};
-  const message = await offLeaseService.saveOffLeaseHoldFast(req.params.containerNo, req.user.email, remarks);
+  const { remarks, rowNum } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseHoldFast(req.params.containerNo, req.user.email, remarks, rowNum);
   res.json({ message });
 }
 
 /** Reverses an active Hold, sending the record back to Stage 1's normal
  *  queue. Permission ('offlease1') is checked inside the service. */
 export async function saveSendBackToStage1(req, res) {
-  const message = await offLeaseService.saveOffLeaseSendBackToStage1Fast(req.params.containerNo, req.user.email);
+  const { rowNum } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseSendBackToStage1Fast(req.params.containerNo, req.user.email, rowNum);
   res.json({ message });
 }
 
@@ -183,10 +204,10 @@ export async function getApprovalData(req, res) {
 }
 
 export async function saveApprovalAction(req, res) {
-  const { status, remarks } = req.body;
+  const { status, remarks, rowNum } = req.body;
   // Permission ('offleaseapproval') is checked inside the service. `remarks`
   // (RejectModal, frontend) is only ever meaningful when status === 'Rejected'.
-  const message = await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks);
+  const message = await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks, rowNum);
   res.json({ message });
 }
 
@@ -194,7 +215,8 @@ export async function saveApprovalAction(req, res) {
  *  pending queue (see saveOffLeaseSendRejectedToStage1's doc comment).
  *  Permission ('offlease1') is checked inside the service. */
 export async function sendRejectedToStage1(req, res) {
-  const message = await offLeaseService.saveOffLeaseSendRejectedToStage1Fast(req.params.containerNo, req.user.email);
+  const { rowNum } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseSendRejectedToStage1Fast(req.params.containerNo, req.user.email, rowNum);
   res.json({ message });
 }
 
@@ -419,8 +441,8 @@ export async function deleteRemark(req, res) {
 /* ---- Tracking-sheet bootstrap ---- */
 
 export async function addToTracking(req, res) {
-  const { containerNo, deployedRow } = req.body;
-  const message = await offLeaseService.addToOffLeaseTracking(containerNo, deployedRow);
+  const { containerNo, deployedRow, remarks, personName } = req.body;
+  const message = await offLeaseService.addToOffLeaseTracking(containerNo, deployedRow, remarks, personName);
   res.json({ message });
 }
 

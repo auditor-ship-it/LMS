@@ -92,8 +92,13 @@ export async function uploadAndSaveVerifyDocument(base64Data, mimeType, fileName
  *  directly instead of searching — Container No is not unique on Deployed
  *  (see mongoSheetMapping.js's fullRefresh note on that sheet; same bug
  *  class fixed 2026-08-29 in offlease.service.js's addToOffLeaseTracking
- *  and expiry.service.js's own Deployed writers). Falls back to first-match
- *  when omitted. */
+ *  and expiry.service.js's own Deployed writers).
+ *
+ *  HARDENED 2026-08-31 (user directive: this class of error must never
+ *  recur anywhere): omitting knownRow is safe only when the container
+ *  genuinely has one Deployed row — a second row now throws a clear error
+ *  instead of silently picking whichever comes first. See
+ *  offlease.service.js's _resolveOlRow for the identical fix/reasoning. */
 function _resolveDeployedRow(containerNo, rows, knownRow) {
   if (knownRow != null) {
     const row = rows[knownRow - 2];
@@ -102,10 +107,16 @@ function _resolveDeployedRow(containerNo, rows, knownRow) {
     }
     return knownRow;
   }
+  let first = -1, count = 0;
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][0]) == containerNo) return i + 2; // eslint-disable-line eqeqeq
+    if (String(rows[i][0]) != containerNo) continue; // eslint-disable-line eqeqeq
+    count++;
+    if (first === -1) first = i + 2;
   }
-  return -1;
+  if (count > 1) {
+    throw new AppError(`${containerNo} has ${count} Deployed sheet records — open it from its own list row (not by container number alone) so the exact one can be targeted.`);
+  }
+  return first;
 }
 
 export async function updateLeasePeriod(containerNo, newDateString, userEmail, knownRow) {
@@ -427,6 +438,11 @@ export async function getVerifyData() {
  * has a specific record open (which is every caller — this app only ever
  * shows one record's action buttons at a time) should pass it through.
  */
+/* HARDENED 2026-08-31 (user directive: this class of error must never
+ * recur anywhere): omitting knownRow is safe only when the container
+ * genuinely has one New Lease row — a second row now throws a clear error
+ * instead of silently picking whichever comes first. See
+ * offlease.service.js's _resolveOlRow for the identical fix/reasoning. */
 function _resolveNewLeaseRow(containerNo, rows, knownRow) {
   if (knownRow != null) {
     const row = rows[knownRow - 2];
@@ -435,10 +451,16 @@ function _resolveNewLeaseRow(containerNo, rows, knownRow) {
     }
     return knownRow;
   }
+  let first = -1, count = 0;
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][0]) == containerNo) return i + 2; // eslint-disable-line eqeqeq
+    if (String(rows[i][0]) != containerNo) continue; // eslint-disable-line eqeqeq
+    count++;
+    if (first === -1) first = i + 2;
   }
-  return -1;
+  if (count > 1) {
+    throw new AppError(`${containerNo} has ${count} New Lease records — open it from its own list row (not by container number alone) so the exact one can be targeted.`);
+  }
+  return first;
 }
 
 export async function saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail, knownRow) {

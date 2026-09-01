@@ -8,6 +8,10 @@
 }
 .count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
 
+/* Stage 2 (Transportation) only — Location/Size filters, same bottom gap the
+   toolbar above it already uses. */
+.stageFilterBar { margin-bottom: 14px; }
+
 /* Stage 1 only: Pending / Hold — same shape as Renew & Document's own
    in-page tabs (RenewDocumentPage.module.css's .tabRow/.tab/.tabActive). */
 .tabRow { display: flex; gap: 20px; border-bottom: 1.5px solid var(--line); margin-bottom: 14px; }
@@ -44,29 +48,40 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* FMS chain (STAGE-8 -> 9 -> 10) in the Status column. */
+/* FMS chain (STAGE-8 -> 9 -> 10) in the Status column — an actual connected
+   pipeline (node - line - node - line - node), same visual language as
+   PipelineDashboard.jsx's own MiniPipeline step-tracker, not three
+   disconnected badges. */
 .dots {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  white-space: nowrap;   /* "10" must never wrap onto its own line */
+  white-space: nowrap;   /* the chain must never wrap mid-pipeline */
 }
+.dotWrap { display: inline-flex; align-items: center; }
+.dotLine {
+  width: 10px;
+  height: 2px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.dotLineDone { background: var(--success); }
 .dot {
-  /* Fixed box, centred content: "8" and "10" are different widths, and
+  /* Fixed circle, centred content: "8" and "10" are different widths, and
      letting them size themselves left the three chips visibly ragged down
      the column. */
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 20px;
-  border-radius: var(--r-sm);
-  font-size: 10.5px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  font-size: 9.5px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   cursor: default;
 }
-.dot_found { background: var(--success-bg); color: var(--success); }
-.dot_missing { background: var(--surface-2); color: var(--text-3); }
-.dot_unread { background: var(--error-bg); color: var(--error); }
+.dot_found { border-color: var(--success); background: var(--success); color: var(--text-inv); }
+.dot_missing { border-color: var(--line); background: var(--surface); color: var(--text-3); }
+.dot_unread { border-color: var(--error); background: var(--error); color: var(--text-inv); }

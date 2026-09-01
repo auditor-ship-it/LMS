@@ -11,7 +11,16 @@ export function SidebarGrid({ emails, sidebarKeys, emailSidebar, onToggle }) {
 
   return (
     <DataGrid
-      headers={['Menu item', ...emails]}
+      headers={[
+        'Menu item',
+        // Display-only shortening — see PermissionGrid.jsx's identical
+        // comment for why only "@crystalgroup.in" is stripped, not any
+        // domain, and why the underlying `email` values are untouched.
+        ...emails.map((email) => {
+          const short = email.replace(/@crystalgroup\.in$/i, '');
+          return short === email ? email : <span key={email} title={email}>{short}</span>;
+        })
+      ]}
       rows={sidebarKeys}
       rowKey={(r) => r.key}
       renderRow={(_, r) => (

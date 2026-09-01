@@ -583,15 +583,16 @@
 .inspChoiceNA { border-color: var(--text-3); background: var(--surface-2); color: var(--text-2); }
 .inspChoice.disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* Revealed only when an item is marked Damage. */
-.inspDamageCell { padding: 0 !important; background: var(--error-bg); }
-.inspDamageBox {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px 18px;
-  padding: 14px 14px 16px 32px;
-  border-left: 3px solid var(--error);
-}
+/* Estimate/Photo/Remarks — inline columns on the SAME row as the checklist
+   point (mirrors LookupResult.jsx's read-only ChecklistTable), not a second
+   row that expands underneath. Columns only appear at all when anyDamage;
+   within them, a non-damaged row shows a dash instead of an empty control. */
+.inspDamageCol { min-width: 160px; }
+.inspDamageCol .field { gap: 0; }
+.inspDamageCol .drop { padding: 8px 10px; gap: 6px; }
+.inspDamageCol .dropText { flex-direction: row; align-items: baseline; gap: 5px; }
+.inspDamageCol .dropHint::before { content: '· '; }
+.inspDamageDash { color: var(--text-3); text-align: center; }
 
 .cabinQty {
   width: 90px;
@@ -687,6 +688,7 @@
   font-weight: 500;
 }
 .outstandingValue { font-size: 18px; font-weight: 800; color: var(--text); }
+.approvalMeta { font-size: 12px; color: var(--text-2); }
 .outstandingOpen { color: var(--error); font-weight: 700; }
 
 /* Container list under an invoice — several per row, so it wraps rather than

@@ -114,4 +114,9 @@ export const OL_HEADERS = [
   "Move To Stage Comment / Type", "Move To Stage Date", "Move To Stage Jump Target", "Move To Stage Client Scope",
   "Move To Stage Arrival Date",
   "Hold Timestamp", "Hold By", "Hold Remarks",
+  "Off-Lease Tracking Remarks", "Off-Lease Requested By",
+  "Billing Rentals Billed Upto Last Date", "Billing Outstanding Amount", "Billing Date Billed Till",
+  "Billing Estimated Repair Charges", "Billing Transport Cost Billed", "Billing Adjust Security Deposit",
+  "Billing Security Deposit Amount", "Billing Last Date Of Billing", "Billing Accrued Rental Amount",
+  "Billing Accrued Rental Amount Date", "Billing Reconcile Entire Cycle", "Billing Remark",
 ];

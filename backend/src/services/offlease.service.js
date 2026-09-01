@@ -239,6 +239,44 @@ export const OL_MACHINE_POINTS = OL_MACHINE_DEFS.map((d, i) => ({
   remark: d.status + 3
 }));
 
+/** True for any inspection/machine status meaning a fault was recorded — same
+ *  rule as frontend/src/pages/stages/stageFields.js's isFaultStatus (Good/OK/
+ *  Not Required/blank are sound, everything else — Damage, Rusty, Cut,
+ *  Missing, Noisy, Short, Faulty — is a fault). Kept in step with that file. */
+function _olIsFaultStatus(status) {
+  const s = safeStr(status).trim().toLowerCase();
+  return s !== '' && s !== 'good' && s !== 'ok' && s !== 'not required';
+}
+
+/**
+ * Sums the Stage 4 Inspection Checklist's own per-item "Estimate Value"
+ * cells (Container Inspection + Machine Check, 26 points total) for whichever
+ * points were actually marked as a fault — mirrors StageDetailModal.jsx's own
+ * ChecklistTable, which only shows/populates the Estimate column for a
+ * damaged row.
+ *
+ * Returns null, not 0, when nothing usable was found — either no point was
+ * marked as a fault (nothing to estimate) or every faulted point's Estimate
+ * cell is still blank (recorded but not costed yet). Both cases mean "no
+ * figure exists", which the Billing Reconciliation cost-reference card shows
+ * as "—" rather than a misleading ₹0. Callers should NOT fall back to the
+ * Gate-In form's free-text budget guess unless this returns null — this is
+ * the app's own structured, numeric-typed data and takes priority over a
+ * hand-typed note that is "NA" for the overwhelming majority of containers.
+ */
+function _olInspectionEstimateTotal(row) {
+  let total = 0;
+  let has = false;
+  for (const p of [...OL_INSPECTION_POINTS, ...OL_MACHINE_POINTS]) {
+    if (!_olIsFaultStatus(row[p.status])) continue;
+    const raw = safeStr(row[p.estimate]).trim();
+    if (raw === '') continue;
+    const n = Number(raw.replace(/,/g, ''));
+    if (Number.isFinite(n)) { total += n; has = true; }
+  }
+  return has ? total : null;
+}
+
 /**
  * Site Cabin fittings inventory, in printed-sheet order. `qty` is the expected
  * count per cabin size — a spec, so it lives here rather than in the sheet;
@@ -295,6 +333,25 @@ const OL_STAGE3_EXTRA_COLS = [
 ];
 const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
 
+/**
+ * Billing Reconciliation's (internal Stage 5) own data fields. NOT part of
+ * OL_STAGE_INFO[5]'s startCol..endCol range (29..44) — that range's LAST four
+ * columns (41-44) are Stage 5's own auto-written Remark/Timestamp/User/Status
+ * quad (see saveOffLeaseStage's cellUpdates for statusCol/-1/-2/-3), and
+ * every other stage's own field list correctly stops before that quad
+ * (Stage 1's Remark sits at col_14 = 17-3, Stage 2's at col_20 = 23-3, by
+ * design). Stage 5's field list used to claim col_43 ("Check if rentals
+ * billed") and col_44 ("Outstanding Amount") — the SAME cells as its own
+ * User/Status stamps, silently overwritten by "Completed"/the saver's email
+ * on every single save — and col_45-55 for the rest, which collide with
+ * Stage 6 (Transportation)'s own startCol:45. Found 2026-08-31 while chasing
+ * "this field never shows what I saved" reports; zero rows had ever
+ * accumulated real data in either colliding range, so nothing needed
+ * recovering. Relocated here, mirroring how the Inspection Checklist/Cabin/
+ * Technician fields were similarly appended once they outgrew a contiguous
+ * block — see OL_STAGE_INFO's own header comment for that precedent. */
+const OL_STAGE5_EXTRA_COLS = [305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316];
+
 /* FIXED, not derived — see LMS.js's long comment on this constant. A prior
    derived value (OL_HEADERS.length + 1) collided with real data whenever a
    field was added. Do not change this back to a derived value (a formula
@@ -306,8 +363,15 @@ const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
    above) stayed blank. 134 is still a fixed literal, not a derived one. */
 export const OL_MARKED_COL_1BASED = 134;
 
-const OL_LEASE_ID_PREFIX = 'LEASE';
-const OL_LEASE_ID_START = 28; // first new Lease ID = LEASE0028
+/* Switched from 'LEASE' 2026-09-01 — new records are now typed "OF00xx"
+   directly into the sheet (OF0056..OF0062 confirmed live), so the
+   auto-generator follows suit rather than minting a LEASE-prefixed ID nobody
+   else is using anymore. Existing LEASE00xx rows are untouched (go-forward
+   only) — see _peekNextLeaseIdNum, which reads across BOTH prefixes so the
+   counter keeps counting up from whichever is higher, not restarting at
+   OL_LEASE_ID_START just because the prefix changed. */
+const OL_LEASE_ID_PREFIX = 'OF';
+const OL_LEASE_ID_START = 28; // first-ever new Lease ID was LEASE0028
 const OL_LEASE_ID_PAD = 4;
 
 /**
@@ -498,9 +562,9 @@ export function _findOlColumnMulti(headers, names) {
  *  number, so a stale/differently-ordered list read (e.g. from the Mongo
  *  mirror) can never cause a write to land on the wrong row — see
  *  splendid-rolling-candy.md Phase 1a. Returns the 1-based sheet row number,
- *  or -1 if not found. Shared by getOffLeaseStageDetail / saveOffLeaseStage /
- *  saveOffLeaseApprovalAction, the three OL_SHEET write-adjacent reads that
- *  used to trust a passed-in rowNum directly. */
+ *  or -1 if not found. Internal to _resolveOlRow's no-knownRow branch —
+ *  every real caller goes through that, not this directly, so the ambiguous-
+ *  duplicate case below is never bypassed. */
 function _findOlRowByContainer(rows, containerNo) {
   const want = normKey(containerNo);
   if (!want) return -1;
@@ -508,6 +572,85 @@ function _findOlRowByContainer(rows, containerNo) {
     if (normKey(rows[i][0]) === want) return i + 2;
   }
   return -1;
+}
+
+/**
+ * Resolves the exact Off-Lease Tracking row for a read or write, preferring
+ * a caller-supplied row number (validated against containerNo) over blind
+ * first-match. Container No is NOT unique in this sheet — a container
+ * re-leased after an earlier cycle keeps its old row alongside the new one
+ * — confirmed live 2026-08-31: TRIU6681671 has both LEASE0027/Hetero Labs
+ * Limited/Kolar AND LEASE0038/63Ideas Infolabs Pvt Ltd/Krishnagiri as
+ * separate rows. Every one of getOffLeaseStageDetail/saveOffLeaseStage(Fast)
+ * and the whole Hold/Move-To-Stage/Send-Back/Approval family used
+ * first-match-by-container alone until this fix, which is how opening a
+ * specific list row's "Open" button could silently show (and a submit could
+ * silently WRITE) a completely different lease's data for the same
+ * container — the exact bug class already fixed for the Deployed sheet, New
+ * Lease and Verify Lease earlier this session, now closed here too.
+ *
+ * `knownRow` is the 1-based sheet row (item._rowNum from getOffLeaseData/
+ * getOffLeaseApprovalData/getOffLeaseDashboardData — whichever list the
+ * caller actually clicked a row in) the caller actually acted on. Throws a
+ * clear "may have changed" error if it no longer matches rather than
+ * silently falling through to a different row.
+ *
+ * HARDENED 2026-08-31 (user directive: this class of error must never
+ * recur): omitting knownRow is safe ONLY when the container genuinely has
+ * one row — first-match-by-container is used in that case exactly as
+ * before. The moment a SECOND row for the same container exists, silently
+ * picking "whichever comes first" is exactly the bug this whole fix closes,
+ * so that case now throws a clear, actionable error instead of guessing —
+ * every real call site already has a row number to pass (threaded through
+ * on the frontend this same day); a caller that doesn't is a bug to fix at
+ * the call site, not a case to silently paper over here. */
+function _resolveOlRow(rows, containerNo, knownRow) {
+  if (knownRow != null) {
+    const row = rows[knownRow - 2];
+    if (!row || normKey(row[0]) !== normKey(containerNo)) {
+      throw new AppError(`Row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return knownRow;
+  }
+  const want = normKey(containerNo);
+  if (!want) return -1;
+  let first = -1, count = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (normKey(rows[i][0]) !== want) continue;
+    count++;
+    if (first === -1) first = i + 2;
+  }
+  if (count > 1) {
+    throw new AppError(
+      `${containerNo} has ${count} Off-Lease Tracking records — open it from its own list row (not by container number alone) so the exact one can be targeted.`
+    );
+  }
+  return first;
+}
+
+/** Mongo-first equivalent of _resolveOlRow — same reasoning (including the
+ *  2026-08-31 hardening: an unspecified row is only safe when the container
+ *  is genuinely unique), resolves against getMongoRowsWithKeys' row_<n>-
+ *  keyed docs (OL_SHEET's mirror is fullRefresh/position-keyed, precisely
+ *  because container numbers here are not unique) instead of a live-Sheets
+ *  row array. Returns the matched { key, row } doc, or undefined if
+ *  genuinely not found — callers already check for that. */
+function _resolveOlMongoDoc(docs, containerNo, knownRow) {
+  if (knownRow != null) {
+    const doc = docs.find((d) => d.key === `row_${knownRow - 2}`);
+    if (!doc || normKey(doc.row[0]) !== normKey(containerNo)) {
+      throw new AppError(`Row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return doc;
+  }
+  const want = normKey(containerNo);
+  const allMatches = docs.filter((d) => normKey(d.row[0]) === want);
+  if (allMatches.length > 1) {
+    throw new AppError(
+      `${containerNo} has ${allMatches.length} Off-Lease Tracking records — open it from its own list row (not by container number alone) so the exact one can be targeted.`
+    );
+  }
+  return allMatches[0]; // undefined when genuinely not found — callers already check for that
 }
 
 let sheetEnsured = false;
@@ -1098,10 +1241,23 @@ async function _lookupDeployedForOffLease(containerNo, preFetched, targetRow, cl
   return { found: null, colMap, targetRow: -1 };
 }
 
+/** Appended columns (olHeaders.generated.js), same fixed-literal convention
+ *  as Move To Stage (290-299) / Hold (300-302) — picked past the end of
+ *  every real sheet column and every other bolt-on feature's own block, so
+ *  none can ever collide. Captured once, at Off-Lease creation time, from
+ *  the confirmation dialog (OffLeaseModal, frontend) — this row has no
+ *  other narrative/free-text field until Stage 1's own form is filled in
+ *  later, so without these two there was nowhere to record who initiated
+ *  the off-lease or why. */
+const OL_TRACKING_REMARKS_COL = 303;
+const OL_TRACKING_PERSON_NAME_COL = 304;
+
 /** `deployedRow`: optional, the specific Deployed sheet row (1-based) to
  *  off-lease — see _lookupDeployedForOffLease's doc comment for why this
- *  matters whenever a container has more than one row there. */
-export async function addToOffLeaseTracking(containerNo, deployedRow) {
+ *  matters whenever a container has more than one row there. `remarks` and
+ *  `personName` (OffLeaseModal, frontend): personName is who requested/
+ *  handled this off-lease; remarks is optional free text. */
+export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = '', personName = '') {
   return withSheetLock(OL_SHEET, async () => {
     await _ensureOffLeaseSheet();
 
@@ -1137,6 +1293,20 @@ export async function addToOffLeaseTracking(containerNo, deployedRow) {
 
     const { rowNum } = await appendRow(OL_SHEET, newRow);
 
+    // Remarks / Person Name (OffLeaseModal) — a separate write, not part of
+    // newRow above: newRow is only ever 10 cells wide (appendRow leaves
+    // every column past that untouched on the sheet), so a column this far
+    // out (303/304) is written the same way the Deployed-sheet mark below is
+    // — a targeted cell update against the row appendRow just returned.
+    const rmk = safeStr(remarks).trim();
+    const person = safeStr(personName).trim();
+    if (rowNum) {
+      await batchUpdateValues([
+        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_REMARKS_COL)}${rowNum}`, values: [[rmk]] },
+        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_PERSON_NAME_COL)}${rowNum}`, values: [[person]] }
+      ]);
+    }
+
     // Also mark the Deployed sheet — removes it from Pending
     const stamp = dmyTime(new Date());
     await batchUpdateValues([
@@ -1159,9 +1329,12 @@ export async function addToOffLeaseTracking(containerNo, deployedRow) {
          (TRIU6681671 has two records), so `row_<n>` is the only safe address.
          `rowNum` is 1-based including the header, and data row 2 is row_0. */
       if (rowNum) {
+        const mirrorRow = [...newRow];
+        mirrorRow[OL_TRACKING_REMARKS_COL] = rmk;
+        mirrorRow[OL_TRACKING_PERSON_NAME_COL] = person;
         await getCollection(OL_SHEET).updateOne(
           { key: `row_${rowNum - 2}` },
-          { $set: { key: `row_${rowNum - 2}`, row: newRow } },
+          { $set: { key: `row_${rowNum - 2}`, row: mirrorRow } },
           { upsert: true }
         );
       }
@@ -1856,22 +2029,28 @@ export async function attachStageTat(result, stage) {
   return result;
 }
 
-export async function getOffLeaseStageDetail(containerNo, stage, user) {
+export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow) {
   try {
-    /* Served from the Mongo mirror, like the stage lists. This is a read-only
-       pre-fill: nothing here computes a row number for a later write, so the
-       mirror's row order is safe to use. It previously read live Sheets on
-       every form open, which made the form slow and — once the per-minute
-       read quota was exhausted — silently returned an empty record, so every
-       field rendered as a dash. saveOffLeaseStage still reads live Sheets,
-       because its row numbers DO target writes.
+    /* Served from the Mongo mirror, like the stage lists. It previously read
+       live Sheets on every form open, which made the form slow and — once
+       the per-minute read quota was exhausted — silently returned an empty
+       record, so every field rendered as a dash. saveOffLeaseStage still
+       reads live Sheets, because its row numbers DO target writes.
 
        BUG FOUND AND FIXED 2026-08-27: this comment already claimed the
        Mongo-mirror switch above, but the line below still called the LIVE
        getSheetData — never actually updated when the rest of the file's
-       Mongo-first pass happened 2026-08-26. Genuinely switched now. */
+       Mongo-first pass happened 2026-08-26. Genuinely switched now.
+
+       BUG FOUND AND FIXED 2026-08-31: this being read-only does NOT make
+       first-match-by-container safe — Container No is not unique (see
+       _resolveOlRow's doc comment; TRIU6681671 confirmed live with two
+       different lease rows), so opening a specific list row's "Open" could
+       silently pre-fill a DIFFERENT lease's data for the same container.
+       knownRow (item._rowNum from whichever list the caller opened this
+       from) is now required to land on the exact row that was clicked. */
     const { rows } = await getSheetDataFromMongo(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${safeStr(containerNo)}`);
     const info = OL_STAGE_INFO[stage];
     if (!info) throw new AppError(`No such stage: ${safeStr(stage)}`);
@@ -1892,6 +2071,54 @@ export async function getOffLeaseStageDetail(containerNo, stage, user) {
 
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+
+    /* Billing Reconciliation's Cost Reference card: the checklist's own
+       itemised Estimate Value total, computed here because only this
+       function has the raw row (Billing's own column range, 29..44, never
+       reaches the checklist's columns at 136-239). null when no fault point
+       has a numeric estimate — the controller falls back to the Gate-In
+       form's free-text figure only in that case (see _olInspectionEstimateTotal). */
+    if (Number(stage) === 5) {
+      // Formatted per its OWN type, not a blanket fmtCell — fmtCell's
+      // parseDate() happily "parses" a bare number or a numeric-looking
+      // string ("4321" -> "01-01-4321"), which is exactly the bug fmtNumCell
+      // exists to avoid for money/quantity cells (see that function's doc
+      // comment). Only the 3 genuine date fields get fmtCell; the rest are
+      // read as plain text/number to match stageFields.js's own field types.
+      const [rentalsBilled, outstanding, dateBilledTill, repairCharges, transportBilled,
+        adjustDeposit, depositAmount, lastBillingDate, accruedRental, accruedRentalDate,
+        reconcileCycle, remark] = OL_STAGE5_EXTRA_COLS;
+      result[`col_${rentalsBilled}`] = safeStr(row[rentalsBilled]);
+      result[`col_${outstanding}`] = fmtNumCell(row[outstanding]);
+      result[`col_${dateBilledTill}`] = fmtCell(row[dateBilledTill]);
+      result[`col_${repairCharges}`] = safeStr(row[repairCharges]);
+      result[`col_${transportBilled}`] = safeStr(row[transportBilled]);
+      result[`col_${adjustDeposit}`] = safeStr(row[adjustDeposit]);
+      result[`col_${depositAmount}`] = fmtNumCell(row[depositAmount]);
+      result[`col_${lastBillingDate}`] = fmtCell(row[lastBillingDate]);
+      result[`col_${accruedRental}`] = fmtNumCell(row[accruedRental]);
+      result[`col_${accruedRentalDate}`] = fmtCell(row[accruedRentalDate]);
+      result[`col_${reconcileCycle}`] = safeStr(row[reconcileCycle]);
+      result[`col_${remark}`] = safeStr(row[remark]);
+
+      result._inspectionEstimateTotal = _olInspectionEstimateTotal(row);
+
+      /* Stage 1's own intimation record (col_10-13), for reference while
+         reconciling — Final Billing Date in particular is the figure Billing
+         is meant to reconcile AGAINST, set back at intimation time and never
+         re-surfaced on this form since. Stage 5's own column range (29..44)
+         never reaches these, same reason the checklist data above needed its
+         own explicit read. */
+      result._stage1Data = {
+        intimationDate: fmtCell(row[10]),
+        offLeaseDate: fmtCell(row[11]),
+        // safeStr, not fmtCell — this is a Drive URL (Email Notification
+        // attachment), and fmtCell's parseDate() misreads digit-bearing
+        // strings as dates (the exact bug OL_STAGE5_EXTRA_COLS's read hit).
+        emailNotification: safeStr(row[12]),
+        finalBillingDate: fmtCell(row[13])
+      };
+    }
 
     /* Inspection Checklist (internal 3) has no manual form to fill for a
        container the Stage 3 (Gate In) form already marked "Repair Required?
@@ -1966,7 +2193,11 @@ async function _peekNextLeaseIdNum() {
   for (const r of col) {
     const v = safeStr(r[0]).trim();
     if (!v) continue;
-    const m = v.match(/^\s*lease\s*[-_ ]?\s*0*(\d+)\s*$/i);
+    // Matches "LEASE0055" AND "OF0062" — the counter has to see every
+    // existing ID regardless of which prefix it was minted under, or it
+    // would silently restart from OL_LEASE_ID_START the moment the prefix
+    // switched and hand out an OF-number that collides with an old LEASE row.
+    const m = v.match(/^\s*(?:lease|of)\s*[-_ ]?\s*0*(\d+)\s*$/i);
     if (!m) continue;
     const n = parseInt(m[1], 10);
     if (!isNaN(n) && n > maxN) maxN = n;
@@ -1987,7 +2218,7 @@ export async function getNextLeaseId() {
 /* =============================================
    SAVE A STAGE
 ============================================= */
-export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
+export async function saveOffLeaseStage(containerNo, stage, data, userEmail, knownRow) {
   const stageNum = parseInt(stage, 10);
   await checkActionPermission(`offlease${stageNum}`, userEmail); // per-stage access: offlease1..offlease8
 
@@ -1995,7 +2226,7 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
     const info = OL_STAGE_INFO[stage];
     if (!info) throw new AppError('Invalid stage');
@@ -2012,7 +2243,7 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
     if (stageNum === 1) {
       if (Object.prototype.hasOwnProperty.call(payload, 'col_1')) delete payload.col_1;
       const curLid = safeStr(row[1]).trim(); // B
-      if (curLid && /^\s*lease\s*[-_ ]?\s*0*\d+\s*$/i.test(curLid)) {
+      if (curLid && /^\s*(?:lease|of)\s*[-_ ]?\s*0*\d+\s*$/i.test(curLid)) {
         assignedLeaseId = curLid;
       } else {
         assignedLeaseId = _formatLeaseId(await _peekNextLeaseIdNum());
@@ -2122,19 +2353,18 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail) {
  * the way Stages 2 onward are — so it's the one case where the ~1-2s live
  * round trip is the right trade, not a cost worth avoiding.
  */
-export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail) {
+export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail, knownRow) {
   const stageNum = parseInt(stage, 10);
   await checkActionPermission(`offlease${stageNum}`, userEmail);
 
-  if (stageNum === 1) return saveOffLeaseStage(containerNo, stage, data, userEmail);
+  if (stageNum === 1) return saveOffLeaseStage(containerNo, stage, data, userEmail, knownRow);
 
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
   const info = OL_STAGE_INFO[stage];
   if (!info) throw new AppError('Invalid stage');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
 
   const curStatus = found.row[info.statusCol];
@@ -2172,7 +2402,12 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail)
   patch[`row.${info.statusCol - 1}`] = userEmail || '';
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseStage', [containerNo, stage, data, userEmail], { actor: userEmail });
+  // knownRow, not the raw caller-supplied one: the replay's own live-Sheets
+  // resolution must target the SAME row this Mongo patch just did, not
+  // re-derive it by first-match — otherwise the instant Mongo write and the
+  // few-seconds-later Sheets write could land on two different rows.
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseStage', [containerNo, stage, data, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
@@ -2354,7 +2589,7 @@ function _moveColumnValues(shaped, userEmail, stamp) {
  * path) sends the Stage 4 quotation email — a side effect belongs on the
  * one write the outbox guarantees runs, not on the instant preview.
  */
-export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEmail) {
+export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEmail, knownRow) {
   await checkActionPermission(`offlease${OL_STAGE2_INTERNAL}`, userEmail);
   const shaped = _prepareMoveToStage(payload);
 
@@ -2362,7 +2597,7 @@ export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEma
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const row = rows[rn - 2] || [];
@@ -2411,14 +2646,13 @@ export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEma
  * controller calls. Does not itself log the audit-trail entry — see the live
  * function's doc comment for why.
  */
-export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, userEmail) {
+export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, userEmail, knownRow) {
   await checkActionPermission(`offlease${OL_STAGE2_INTERNAL}`, userEmail);
   const shaped = _prepareMoveToStage(payload);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
   if (_isMovedOut(found.row)) return 'ALREADY_PROCESSED';
 
@@ -2428,7 +2662,8 @@ export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, use
   for (const [col, val] of Object.entries(values)) patch[`row.${col}`] = val;
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseMoveToStage', [containerNo, payload, userEmail], { actor: userEmail });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseMoveToStage', [containerNo, payload, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
@@ -2447,12 +2682,12 @@ export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, use
  * on to act from it) rather than Stage 2's own — deliberately different
  * from saveOffLeaseMoveToStage above.
  */
-export async function saveOffLeaseSendBack(containerNo, userEmail) {
+export async function saveOffLeaseSendBack(containerNo, userEmail, knownRow) {
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const row = rows[rn - 2] || [];
@@ -2494,12 +2729,11 @@ export async function saveOffLeaseSendBack(containerNo, userEmail) {
 
 /** Mongo-first fast path for Send Back — same trade-off as the other Fast
  *  paths in this file. */
-export async function saveOffLeaseSendBackFast(containerNo, userEmail) {
+export async function saveOffLeaseSendBackFast(containerNo, userEmail, knownRow) {
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
 
   const jumpTarget = _jumpTargetInternal(found.row);
@@ -2510,7 +2744,8 @@ export async function saveOffLeaseSendBackFast(containerNo, userEmail) {
   for (const c of OL_MOVE_ALL_COLS) patch[`row.${c}`] = '';
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseSendBack', [containerNo, userEmail], { actor: userEmail });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseSendBack', [containerNo, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
@@ -2548,13 +2783,13 @@ function _isOnHold(row) {
  * genuine, independently-callable function for the same reason
  * saveOffLeaseMoveToStage is (see that function's doc comment).
  */
-export async function saveOffLeaseHold(containerNo, userEmail, remarks = '') {
+export async function saveOffLeaseHold(containerNo, userEmail, remarks = '', knownRow) {
   await checkActionPermission('offlease1', userEmail);
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const row = rows[rn - 2] || [];
@@ -2585,13 +2820,12 @@ export async function saveOffLeaseHold(containerNo, userEmail, remarks = '') {
 
 /** Mongo-first fast path — same shape and trade-off as saveOffLeaseStageFast.
  *  This is the entry point the controller calls. */
-export async function saveOffLeaseHoldFast(containerNo, userEmail, remarks = '') {
+export async function saveOffLeaseHoldFast(containerNo, userEmail, remarks = '', knownRow) {
   await checkActionPermission('offlease1', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
   if (_isOnHold(found.row)) return 'ALREADY_PROCESSED';
 
@@ -2601,7 +2835,8 @@ export async function saveOffLeaseHoldFast(containerNo, userEmail, remarks = '')
     { key: found.key },
     { $set: { [`row.${OL_HOLD_TIMESTAMP_COL}`]: stamp, [`row.${OL_HOLD_BY_COL}`]: userEmail || '', [`row.${OL_HOLD_REMARKS_COL}`]: rmk, updatedAt: new Date() } }
   );
-  await enqueueSheetReplay('offlease.saveOffLeaseHold', [containerNo, userEmail, remarks], { actor: userEmail });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseHold', [containerNo, userEmail, remarks, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
@@ -2615,13 +2850,13 @@ export async function saveOffLeaseHoldFast(containerNo, userEmail, remarks = '')
  * unlike Move To Stage's Send Back, there is no other stage this could be
  * acted from.
  */
-export async function saveOffLeaseSendBackToStage1(containerNo, userEmail) {
+export async function saveOffLeaseSendBackToStage1(containerNo, userEmail, knownRow) {
   await checkActionPermission('offlease1', userEmail);
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const row = rows[rn - 2] || [];
@@ -2645,13 +2880,12 @@ export async function saveOffLeaseSendBackToStage1(containerNo, userEmail) {
 
 /** Mongo-first fast path for Send Back To Stage 1 — same trade-off as the
  *  other Fast paths in this file. */
-export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail) {
+export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail, knownRow) {
   await checkActionPermission('offlease1', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
   if (!_isOnHold(found.row)) throw new AppError('This record is not on hold — nothing to send back.');
 
@@ -2659,7 +2893,8 @@ export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail) {
   for (const c of OL_HOLD_ALL_COLS) patch[`row.${c}`] = '';
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseSendBackToStage1', [containerNo, userEmail], { actor: userEmail });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseSendBackToStage1', [containerNo, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
@@ -3562,14 +3797,14 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
   return { headers: displayHeaders, data: finalData, count: finalData.length };
 }
 
-export async function saveOffLeaseApprovalAction(containerNo, status, userEmail, remarks = '') {
+export async function saveOffLeaseApprovalAction(containerNo, status, userEmail, remarks = '', knownRow) {
   await checkActionPermission('offleaseapproval', userEmail);
 
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { headers, rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
@@ -3621,15 +3856,14 @@ export async function saveOffLeaseApprovalAction(containerNo, status, userEmail,
  * replay of the original function, which still runs it for real within one
  * outbox poll interval.
  */
-export async function saveOffLeaseApprovalActionFast(containerNo, status, userEmail, remarks = '') {
+export async function saveOffLeaseApprovalActionFast(containerNo, status, userEmail, remarks = '', knownRow) {
   await checkActionPermission('offleaseapproval', userEmail);
 
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const { headers } = await getSheetDataFromMongo(OL_SHEET);
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
 
   const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
@@ -3654,7 +3888,8 @@ export async function saveOffLeaseApprovalActionFast(containerNo, status, userEm
   }
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail, remarks], { actor: userEmail });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail, remarks, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
@@ -3675,13 +3910,13 @@ export async function saveOffLeaseApprovalActionFast(containerNo, status, userEm
  * Permission checked against Stage 1 ('offlease1'), same as Hold — the
  * destination is Stage 1's own pending queue, not the Approval desk.
  */
-export async function saveOffLeaseSendRejectedToStage1(containerNo, userEmail) {
+export async function saveOffLeaseSendRejectedToStage1(containerNo, userEmail, knownRow) {
   await checkActionPermission('offlease1', userEmail);
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
     const { headers, rows } = await getSheetData(OL_SHEET);
-    const rn = _findOlRowByContainer(rows, containerNo);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
     const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
@@ -3714,14 +3949,13 @@ export async function saveOffLeaseSendRejectedToStage1(containerNo, userEmail) {
 }
 
 /** Mongo-first fast path — same trade-off as the other Fast paths in this file. */
-export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmail) {
+export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmail, knownRow) {
   await checkActionPermission('offlease1', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const { headers } = await getSheetDataFromMongo(OL_SHEET);
   const docs = await getMongoRowsWithKeys(OL_SHEET);
-  const want = normKey(containerNo);
-  const found = docs.find((d) => normKey(d.row[0]) === want);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
 
   const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
@@ -3740,7 +3974,8 @@ export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmai
   for (const c of cols) patch[`row.${c}`] = '';
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
-  await enqueueSheetReplay('offlease.saveOffLeaseSendRejectedToStage1', [containerNo, userEmail], { actor: userEmail });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseSendRejectedToStage1', [containerNo, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }
