@@ -12,6 +12,7 @@ const DOMAIN_LABELS = {
   leases: 'Leases (Verify / Approve / Expiry)',
   offlease: 'Off-Lease Pipeline',
   accounts: 'Accounts / Invoice Ledger',
+  offleaseefficiency: 'Off-Lease Efficiency',
   all: 'All domains'
 };
 
@@ -31,7 +32,8 @@ const ENDPOINTS = [
   { domain: 'offlease', method: 'GET', path: '/offlease/:containerNo/detail' },
   { domain: 'offlease', method: 'POST', path: '/offlease/:containerNo/stage/:stage', write: true },
   { domain: 'offlease', method: 'POST', path: '/offlease/:containerNo/approval', write: true },
-  { domain: 'accounts', method: 'GET', path: '/accounts/:containerNo/outstanding' }
+  { domain: 'accounts', method: 'GET', path: '/accounts/:containerNo/outstanding' },
+  { domain: 'offleaseefficiency', method: 'GET', path: '/offlease/efficiency' }
 ];
 
 /** e.g. "leases:write" -> "Leases (Verify / Approve / Expiry) — Write" */

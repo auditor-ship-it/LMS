@@ -47,6 +47,29 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+/* Frozen/completed TAT (Stage 2 once STAGE-8+9 both matched) — a finished
+   fact, not an ongoing alarm, so it reads calmer than .tatLate even when it
+   finished past budget. */
+.tatDone {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--success-bg, #ecfdf5);
+  color: var(--success);
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tatDoneLate {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--warn-bg, #fff7e6);
+  color: var(--warn, #b7791f);
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 /* FMS chain (STAGE-8 -> 9 -> 10) in the Status column — an actual connected
    pipeline (node - line - node - line - node), same visual language as

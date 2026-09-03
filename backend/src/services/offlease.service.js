@@ -88,8 +88,9 @@ import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches } from './stage8.service.js';
+import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
+import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
 
 /* =============================================
@@ -1348,8 +1349,71 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
       console.error('[OL-ADD] mirror update failed (reconcile will correct):', e?.message || e);
     }
 
+    /* Notification email moved to Stage 1 (Off-Lease Intimation) completion,
+     * NOT here — a real user correction 2026-09-01: this point only creates
+     * the tracking row, and Lease ID isn't assigned until Stage 1 saves (see
+     * the "Column B (Lease ID) stays blank here" comment above), so a mail
+     * sent from here could never carry a real Lease ID. See
+     * saveOffLeaseStage's own notification block for the actual trigger. */
+
     return 'OK';
   });
+}
+
+/** Every base + Stage 1 column, per request 2026-09-01 ("send the all header
+ *  data") — widened from the original 9-field + Status spec. `row` is the
+ *  row as it stands right after Stage 1 (Off-Lease Intimation) has just
+ *  saved — Lease ID is real by this point (saveOffLeaseStage assigns it
+ *  before this fires), unlike at the moment the tracking row is first
+ *  created (see addToOffLeaseTracking's own comment on why it moved).
+ *  row[10..17] (OL Intimation Date through Stage 1 Status) are set by the
+ *  caller from the just-submitted payload / this same save's own
+ *  Timestamp/User/Status write, not read fresh here — see that call site's
+ *  comment. The trailing literal "Status: Off-Lease" line is kept alongside
+ *  the real "Stage 1 Status" column (which reads "Completed") — the original
+ *  spec asked for it explicitly and a later request to add more columns
+ *  didn't say to drop it. */
+async function _sendOffLeaseNotification(row) {
+  const fields = [
+    ['Container No', safeStr(row[0])],
+    ['Lease ID', safeStr(row[1])],
+    ['Size', safeStr(row[2])],
+    ['Type', safeStr(row[3])],
+    ['Client Code', safeStr(row[4])],
+    ['Client Name', safeStr(row[5])],
+    ['Location', safeStr(row[6])],
+    ['Deployed Date', safeStr(row[7])],
+    ['Valid Upto', safeStr(row[8])],
+    ['Rate', safeStr(row[9])],
+    ['OL Intimation Date', safeStr(row[10])],
+    ['OL Date', safeStr(row[11])],
+    ['Email Notification URL', safeStr(row[12])],
+    ['Final Billing Date', safeStr(row[13])],
+    ['Stage 1 Remark', safeStr(row[14])],
+    ['Stage 1 Timestamp', safeStr(row[15])],
+    ['Stage 1 User', safeStr(row[16])],
+    ['Stage 1 Status', safeStr(row[17])],
+    ['Status', 'Off-Lease']
+  ];
+
+  const subject = `Off-Lease Notification – ${fields[0][1] || 'Unknown Container'}`;
+
+  // Vertical (Field / Value per row), not the earlier horizontal layout —
+  // a wide 11-column table clipped in most inboxes' preview pane; a label
+  // column reads cleanly at any width.
+  const body = fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n';
+
+  const isUrl = (s) => /^https?:\/\//i.test(s);
+  const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
+  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s ? (isUrl(s) ? `<a href="${s}">${s}</a>` : s) : '-'}</td>`;
+  const html = `
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+    </table>
+  `;
+
+  await sendMail({ to: 'support@crystalgroup.in', subject, body, html });
+  console.log(`[OL-ADD-EMAIL] Off-Lease notification sent for ${fields[0][1]}`);
 }
 
 /* =============================================
@@ -1965,12 +2029,154 @@ export async function getOffLeaseStageCounts(user) {
 }
 
 /**
+ * Later of two Dates, ignoring whichever is null. Null if both are.
+ */
+function _laterStamp(a, b) {
+  if (a && b) return a.getTime() >= b.getTime() ? a : b;
+  return a || b || null;
+}
+
+/**
+ * Stage 2 (Transportation, internal 6) and Gate In (internal 7)'s TAT — special-
+ * cased out of the generic attachStageTat below because neither fits its
+ * "previous stage's own status column" rule:
+ *
+ *  - Stage 2's own status column is essentially never written (it is
+ *    released by the STAGE-10 delivery signal or a manual move, not a form
+ *    submission — see OL_STAGE2_INTERNAL's bypass comments in getOffLeaseData),
+ *    so there was never a real completion timestamp to freeze its TAT at —
+ *    the generic function only ever measured live elapsed time against
+ *    Date.now(), forever, even long after the container had actually moved
+ *    on. Explicit 2026-09-02 request: Stage 2's clock starts when the record
+ *    enters Stage 2 (Intimation Approval — the queue's own gate already
+ *    requires this, see getOffLeaseData's gatedByApproval check, so every
+ *    row reaching this list has already been approved) and STOPS the moment
+ *    STAGE-8 (movement booked) and STAGE-9 (transported) both have a
+ *    matching Offlease row for this container — frozen at that instant, not
+ *    recomputed against "now" afterward.
+ *  - Gate In inherited the exact same problem one hop further down the
+ *    chain: its "previous stage" (Stage 2) has no real completion timestamp
+ *    either, so its clock silently fell back to the container's original
+ *    off-lease entry date — weeks earlier — making it read as permanently,
+ *    massively overdue. Explicit request: Gate In's clock does not start at
+ *    all until STAGE-10 (site delivery) has a matching row for this
+ *    container; STAGE-10 carries no date of its own (see readStage10Rows'
+ *    doc comment in stage8.service.js), so the same STAGE-8/9 timestamp that
+ *    closed Stage 2 is reused as "when this delivery cycle happened" — the
+ *    established convention getDeliveredKeys() already uses for the same
+ *    reason.
+ *
+ * Matched via getMatchedFmsForContainer — the SAME exact container+client
+ * match (matchRow) the Stage 2 grid's own FMS status dots use, not
+ * getFmsForContainer/matchByContainer. BUG FOUND 2026-09-02 via CXRU1042578:
+ * matchByContainer silently drops the client check entirely when called with
+ * no cycle-start bound, so it can return a completely unrelated client's old
+ * movement for a reused container number — which briefly showed this Stage 2
+ * TAT badge as "Completed" while the row's own FMS dots correctly showed
+ * nothing matched. See getMatchedFmsForContainer's own doc comment for the
+ * full account.
+ */
+async function _attachTransportGateInTat(result, stageNum, budget) {
+  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
+  const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+
+  for (const item of result.data) {
+    const row = rows[item._rowNum - 2] || [];
+    const container = item.row?.[0];
+    const client = item.row?.[4];
+
+    let fms = null;
+    try { fms = await getMatchedFmsForContainer(container, client); } catch (e) { fms = null; }
+
+    // "Fetched" = STAGE-8 and STAGE-9 both have a matching Offlease row for
+    // this container — the moment BOTH exist is the later of their own two
+    // real timestamps (a stable, recorded value — never Date.now()/page-load
+    // time, so this stays identical across refreshes and re-logins).
+    const stage89At = (fms?.movement && fms?.transport)
+      ? _laterStamp(parseStamp(fms.movement.timestamp), parseStamp(fms.transport.lastUpdated))
+      : null;
+
+    if (stageNum === OL_STAGE2_INTERNAL) {
+      const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim().toLowerCase() : '';
+      const approvedAt = (apStatus === 'approved' && apTsCol >= 0) ? parseStamp(row[apTsCol]) : null;
+      // Falls back to Stage 1's own completion only if the approval columns
+      // are somehow missing — every row in this queue has already passed
+      // the approval gate, so this should only ever be the fallback path.
+      const stage1Raw = safeStr(row[OL_STAGE_INFO[1].statusCol - 2]).trim();
+      const start = approvedAt || parseStamp(stage1Raw);
+      if (!start) { item.tat = null; continue; }
+
+      if (stage89At) {
+        // Frozen at the completion instant — not recomputed against "now".
+        /* BACKDATED CASE, found 2026-09-02 via CXRU1042578: the external FMS
+           system's own STAGE-8/9 timestamps (Feb/Mar) can predate this app's
+           own Stage 2 entry (Aug approval) by months — the same "paperwork
+           catching up to physical reality" pattern already documented
+           extensively in stage8.service.js (matchByContainer's doc comment).
+           The container was genuinely already booked+transported in FMS
+           before this app's own off-lease record for it even reached
+           approval, so `rawElapsed` goes negative. Clamping to 0 for the
+           displayed duration is correct (there is no real "waiting time" to
+           show), but "Completed · 0m" alone reads as a bug rather than what
+           it is — flagged explicitly so the UI can say so instead. */
+        const rawElapsed = stage89At.getTime() - start.getTime();
+        const elapsed = Math.max(0, rawElapsed);
+        item.tat = {
+          startedAt: start.toISOString(),
+          completedAt: stage89At.toISOString(),
+          budget: budgetLabel(budget),
+          elapsed: humanize(elapsed),
+          elapsedMs: elapsed,
+          delayed: elapsed > budget,
+          overdueBy: elapsed > budget ? humanize(elapsed - budget) : '',
+          completed: true,
+          backdated: rawElapsed < 0
+        };
+      } else {
+        const elapsed = Date.now() - start.getTime();
+        item.tat = {
+          startedAt: start.toISOString(),
+          budget: budgetLabel(budget),
+          elapsed: humanize(elapsed),
+          elapsedMs: elapsed,
+          delayed: elapsed > budget,
+          overdueBy: elapsed > budget ? humanize(elapsed - budget) : '',
+          completed: false
+        };
+      }
+    } else {
+      // Gate In — do not calculate anything until STAGE-10 (site delivery)
+      // has a matching row; a container mid-transport, or not yet booked at
+      // all, has simply not reached this point yet.
+      if (!fms?.delivery || !stage89At) { item.tat = null; continue; }
+      const elapsed = Date.now() - stage89At.getTime();
+      item.tat = {
+        startedAt: stage89At.toISOString(),
+        budget: budgetLabel(budget),
+        elapsed: humanize(elapsed),
+        elapsedMs: elapsed,
+        delayed: elapsed > budget,
+        overdueBy: elapsed > budget ? humanize(elapsed - budget) : '',
+        completed: false
+      };
+    }
+  }
+  result.tatBudget = budgetLabel(budget);
+  return result;
+}
+
+/**
  * Attaches a `tat` to every row of a stage list, in place.
  *
  * The clock starts when the stage became actionable, not when the container
  * entered off-lease: for Stage 1 that is the Deployed sheet's Off-Lease stamp,
  * and for every later stage it is the previous stage's completion. Measured
  * against now, because these rows are by definition still pending.
+ *
+ * Stage 2 (Transportation) and Gate In are handled separately, by
+ * _attachTransportGateInTat above — see its doc comment for why the rule
+ * below does not fit either of them.
  *
  * The Deployed sheet is read ONCE and indexed, rather than per row — a list of
  * 20 containers would otherwise mean 20 reads of the same data.
@@ -1979,6 +2185,10 @@ export async function attachStageTat(result, stage) {
   const stageNum = Number(stage);
   const budget = SLA_MS[stageNum];
   if (!budget || !result?.data?.length) return result;
+
+  if (stageNum === OL_STAGE2_INTERNAL || stageNum === OL_STAGE3_INTERNAL) {
+    return _attachTransportGateInTat(result, stageNum, budget);
+  }
 
   const prevNum = _prevActiveStage(stageNum);
   const prevInfo = prevNum ? OL_STAGE_INFO[prevNum] : null;
@@ -2218,6 +2428,28 @@ export async function getNextLeaseId() {
 /* =============================================
    SAVE A STAGE
 ============================================= */
+/**
+ * Stage-level Remark/Remarks fields upgraded to the same rich-text editor the
+ * off-lease dashboard's own comment thread already uses (offleaseRemarks.
+ * service.js's RichTextEditor + sanitizeRemarkHtml) — col_14 (Stage 1),
+ * col_118 (Stage 6/Transportation), col_316 (Stage 5/Billing Reconciliation),
+ * col_125 (Stage 8/FMS Closure). Sanitized on the way in exactly like that
+ * thread, since these are rendered back out as HTML too and a stored
+ * <script>/onerror would otherwise execute in every viewer who opens this
+ * stage. Gate In (internal 7) has no form fields at all today and Inspection
+ * Checklist (internal 3) only has PER-ITEM remarks, not a stage-level one —
+ * neither is in this set.
+ */
+const OL_RICHTEXT_COLS = new Set([14, 118, 316, 125]);
+function _sanitizeRichTextPayload(payload) {
+  for (const col of OL_RICHTEXT_COLS) {
+    const key = `col_${col}`;
+    if (Object.prototype.hasOwnProperty.call(payload, key) && payload[key] != null) {
+      payload[key] = sanitizeRemarkHtml(payload[key]);
+    }
+  }
+}
+
 export async function saveOffLeaseStage(containerNo, stage, data, userEmail, knownRow) {
   const stageNum = parseInt(stage, 10);
   await checkActionPermission(`offlease${stageNum}`, userEmail); // per-stage access: offlease1..offlease8
@@ -2240,6 +2472,7 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
        always ignored, so nobody can force a wrong ID. */
     let assignedLeaseId = '';
     const payload = { ...(data || {}) };
+    _sanitizeRichTextPayload(payload);
     if (stageNum === 1) {
       if (Object.prototype.hasOwnProperty.call(payload, 'col_1')) delete payload.col_1;
       const curLid = safeStr(row[1]).trim(); // B
@@ -2328,6 +2561,40 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
     if (stageNum === 4 && String(payload.col_164 || '').trim().toLowerCase() === 'yes') {
       try { await _sendOffLeaseQuotationEmail(rn, payload, row); }
       catch (e) { console.error('[OL-STAGE4-EMAIL-SEND]', e?.message || e); }
+    }
+
+    /* Off-Lease notification to support@crystalgroup.in — fires once, right
+     * here, the moment Stage 1 (Off-Lease Intimation) is actually filled and
+     * saved. Moved here 2026-09-01 (was originally on the "Off-Lease" button
+     * click itself, addToOffLeaseTracking) specifically so Lease ID is real:
+     * the early ALREADY_PROCESSED return above means this code is only ever
+     * reached on Stage 1's genuine FIRST completion for a row, never a
+     * resubmit — same duplicate-prevention shape as before, just gated on
+     * the stage's own status column instead of the tracking row's existence. */
+    if (stageNum === 1) {
+      try {
+        const notifyRow = [...row];
+        notifyRow[1] = assignedLeaseId;
+        // Every col_10..col_14 field (OL Intimation Date, OL Date, Email
+        // Notification, Final Billing Date, Remark) is uploaded/typed as
+        // PART of this same Stage 1 submission — `row` was read BEFORE this
+        // save happened, so all five are still blank/stale there. Overlay
+        // whatever this submission actually sent; only fall back to the
+        // pre-save row for a field this particular submission left out.
+        for (let c = info.startCol; c <= info.statusCol - 3; c++) {
+          const key = `col_${c}`;
+          if (Object.prototype.hasOwnProperty.call(payload, key)) notifyRow[c] = safeStr(payload[key]);
+        }
+        // The auto-written Timestamp/User/Status trio (statusCol-2/-1/0) —
+        // never in payload (saveOffLeaseStage writes these itself, see the
+        // cellUpdates block above), so read the same values it just used.
+        notifyRow[info.statusCol - 2] = stamp;
+        notifyRow[info.statusCol - 1] = userEmail || '';
+        notifyRow[info.statusCol] = 'Completed';
+        await _sendOffLeaseNotification(notifyRow);
+      } catch (e) {
+        console.error('[OL-STAGE1-EMAIL]', e?.message || e);
+      }
     }
 
     if (assignedLeaseId) return `OK:${assignedLeaseId}`;
@@ -3089,7 +3356,7 @@ function _clientNameFallback(leaseInfo) {
  *   (saveOffLeaseMoveToStage(Fast)): a container that never goes through
  *   the FMS-tracked transport chain at all.
  */
-function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSkip = false, delivered = false) {
+export function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSkip = false, delivered = false) {
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const approval = apCol >= 0 ? safeStr(row[apCol]).trim() : '';
   const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';

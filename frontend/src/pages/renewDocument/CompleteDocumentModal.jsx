@@ -66,7 +66,7 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             <input type="date" value={form.renewedDate} onChange={set('renewedDate')} required />
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Valid Till *</span>
+            <span className={styles.label}>Agreement Valid Till *</span>
             <input type="date" value={form.validTill} onChange={set('validTill')} required />
           </label>
         </div>

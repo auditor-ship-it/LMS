@@ -27,9 +27,17 @@ const R_SHEET = SHEETS.OFF_LEASE_REMARKS;
 /* `Remark ID` is column A and is what edit/delete target. Rows are append-only
    and a container can hold many remarks, so position is not a stable handle —
    deleting one row shifts every row after it, and a concurrent delete would
-   otherwise make an edit land on someone else's remark. */
+   otherwise make an edit land on someone else's remark.
+
+   `Stage` (col I) added 2026-09-02, APPENDED rather than inserted alongside
+   the other identity columns — every existing row simply reads blank for it,
+   no migration needed, and every fixed-index read below (r[0]..r[7]) stays
+   correct for rows written before this column existed. Blank = the original
+   dashboard-wide "running commentary on the record" thread (see this file's
+   header comment); a real internal stage number = a remark scoped to that
+   one stage, written from StageDetailModal instead of the dashboard. */
 export const R_HEADERS = [
-  'Remark ID', 'Container No', 'Lease ID', 'Remark', 'Remark Text', 'Timestamp', 'Entered By', 'Edited On'
+  'Remark ID', 'Container No', 'Lease ID', 'Remark', 'Remark Text', 'Timestamp', 'Entered By', 'Edited On', 'Stage'
 ];
 
 /** Anyone who can work ANY off-lease stage may comment. Deliberately not a new
@@ -105,6 +113,7 @@ async function readAll() {
         timestamp: safeStr(r[5]),
         enteredBy: safeStr(r[6]),
         editedOn: safeStr(r[7]),
+        stage: safeStr(r[8]),
         _rowNum: i + 2
       }))
       .filter((r) => r.containerNo.trim() !== '');
@@ -136,10 +145,14 @@ async function readAllCached() {
 /**
  * { "CONTAINER::LEASE": { latest, count } } for the dashboard, which needs one
  * lookup per record and must not read the sheet once per row.
+ *
+ * Dashboard-wide remarks only (blank Stage) — a remark added from a stage's
+ * own detail modal belongs to that stage, not to this record-wide thread, and
+ * must not silently become "the latest remark" shown on the dashboard cell.
  */
 export async function getRemarkIndex() {
   const index = {};
-  for (const r of await readAllCached()) {
+  for (const r of (await readAllCached()).filter((r) => !r.stage.trim())) {
     const k = key(r.containerNo, r.leaseId);
     const cur = index[k];
     // Append-only, so the last row for a key is the newest.
@@ -148,10 +161,20 @@ export async function getRemarkIndex() {
   return index;
 }
 
-/** The full thread for one record, newest first. */
-export async function getRemarkThread(containerNo, leaseId) {
+/** The full thread for one record, newest first.
+ *
+ * `stage`, when given (an internal stage number, as a string or number), scopes
+ * this to just that stage's own remarks — StageDetailModal's use. Omitted
+ * (undefined/null/''), every remark for the record is returned regardless of
+ * stage — the dashboard's own use, unchanged from before the Stage column
+ * existed. */
+export async function getRemarkThread(containerNo, leaseId, stage) {
   const k = key(containerNo, leaseId);
-  return (await readAllCached()).filter((r) => key(r.containerNo, r.leaseId) === k).reverse();
+  const stageWanted = stage === undefined || stage === null ? '' : safeStr(stage).trim();
+  return (await readAllCached())
+    .filter((r) => key(r.containerNo, r.leaseId) === k)
+    .filter((r) => !stageWanted || r.stage.trim() === stageWanted)
+    .reverse();
 }
 
 /* ----------------------------------------------------------------- writing */
@@ -177,7 +200,7 @@ function newRemarkId() {
   return `R${Date.now().toString(36)}${remarkSeq.toString(36)}${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
 }
 
-export async function addOffLeaseRemark({ containerNo, leaseId, html }, userEmail) {
+export async function addOffLeaseRemark({ containerNo, leaseId, html, stage }, userEmail) {
   await assertCanRemark(userEmail);
 
   const container = safeStr(containerNo).trim().toUpperCase();
@@ -185,7 +208,8 @@ export async function addOffLeaseRemark({ containerNo, leaseId, html }, userEmai
 
   const { clean, text } = prepareBody(html);
   const id = newRemarkId();
-  const row = [id, container, safeStr(leaseId).trim(), clean, text, dmyTime(new Date()), userEmail || '', ''];
+  const stageVal = stage === undefined || stage === null ? '' : safeStr(stage).trim();
+  const row = [id, container, safeStr(leaseId).trim(), clean, text, dmyTime(new Date()), userEmail || '', '', stageVal];
 
   return withSheetLock(R_SHEET, async () => {
     /* Append first, create only on failure — creating eagerly costs a full
@@ -201,7 +225,7 @@ export async function addOffLeaseRemark({ containerNo, leaseId, html }, userEmai
     invalidateIndex();
     return {
       message: 'SAVED',
-      remark: { id, containerNo: container, leaseId: row[2], html: clean, text, timestamp: row[5], enteredBy: row[6] }
+      remark: { id, containerNo: container, leaseId: row[2], html: clean, text, timestamp: row[5], enteredBy: row[6], stage: stageVal }
     };
   });
 }

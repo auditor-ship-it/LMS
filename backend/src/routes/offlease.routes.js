@@ -59,6 +59,7 @@ router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprov
 
 /* Dashboard: pipeline overview (all containers) + single-container lookup */
 router.get('/dashboard', asyncHandler(offLeaseController.getDashboardData));
+router.get('/efficiency', asyncHandler(offLeaseController.getEfficiencyData));
 router.get('/:containerNo/detail', asyncHandler(offLeaseController.getContainerDetail));
 router.get('/:containerNo/outstanding', asyncHandler(offLeaseController.getOutstanding));
 

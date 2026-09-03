@@ -384,11 +384,26 @@ export function LeaseExpiryPage() {
               />
             </div>
 
+            {/* WORKFLOW CHANGE 2026-09-03, explicit request: "Renew" used to
+                write status 'Renewed' — landing the container in Renew &
+                Document's "Renewed" tab, which required a separate "Update
+                Period" step before it could move into "Documents Pending".
+                That intermediate stop is now skipped entirely: Renew writes
+                'Documents Pending' directly, since the Documents tab's own
+                form already collects Renewed Date / Valid Till (it doesn't
+                need the Renewed tab to have run first — completeDocStage
+                only checks the CURRENT status is 'documents pending', not
+                how it got there). Renew & Document's own "Renewed" tab/KPI
+                stays in the UI but will now always read 0 for new activity;
+                My Task's "Renew Pending" tile already sources from the
+                'documents' filter (tasks.service.js), so it is unaffected
+                and, if anything, now reflects a freshly-renewed container
+                sooner. */}
             {canActExpiry && selectedItems.length > 0 && (
               <div className={styles.bulkBar}>
                 <span className={styles.bulkCount}>{selectedItems.length} selected</span>
                 <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
-                <Button size="sm" variant="primary" loading={bulkBusy === 'Renewed'} disabled={!!bulkBusy} onClick={() => handleBulkAction('Renewed')}>
+                <Button size="sm" variant="primary" loading={bulkBusy === 'Documents Pending'} disabled={!!bulkBusy} onClick={() => handleBulkAction('Documents Pending')}>
                   Renew ({selectedItems.length})
                 </Button>
                 <Button size="sm" variant="secondary" disabled={!!bulkBusy} onClick={handleBulkOffLease}>
@@ -439,7 +454,7 @@ export function LeaseExpiryPage() {
             canAct={canActExpiry}
             busyKey={busyKey}
             onBack={() => setSelectedIdx(null)}
-            onRenew={() => runAction(selected, 'Renewed')}
+            onRenew={() => runAction(selected, 'Documents Pending')}
             onOffLease={() => { setOffLeaseError(''); setOffLeaseItem(selected); }}
           />
         )}
@@ -509,7 +524,7 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
               {inProgress ? (
                 <span className={styles.viewOnlyIcon}>Sent for renewal — continue from Renew &amp; Document</span>
               ) : dueSoon ? (
-                <Button size="lg" variant="primary" loading={busyKey === `${containerNo}-Renewed`} onClick={onRenew}>Renew</Button>
+                <Button size="lg" variant="primary" loading={busyKey === `${containerNo}-Documents Pending`} onClick={onRenew}>Renew</Button>
               ) : (
                 <span className={styles.viewOnlyIcon}>Not due yet — Renew reappears within 15 days of expiry ({formatDays(item.daysLeft)} left)</span>
               )}

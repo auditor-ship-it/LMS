@@ -1,0 +1,18 @@
+[05:36:08.818] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:09.038] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 13 } has been aborted.
+[05:36:09.252] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:09.480] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 14 } has been aborted.
+[05:36:09.738] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:09.971] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 15 } has been aborted.
+[05:36:10.182] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:10.436] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 16 } has been aborted.
+[05:36:10.672] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:10.937] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 17 } has been aborted.
+[05:36:11.203] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:11.468] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 18 } has been aborted.
+[05:36:11.726] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:11.945] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 19 } has been aborted.
+[05:36:12.204] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:12.425] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 20 } has been aborted.
+[05:36:12.643] [ERROR] [ERROR] MongoDB query failed | Collection: Operation sheet | Operation: delete | Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.
+[05:36:12.900] [ERROR] [ERROR] MongoDB query failed | Collection: 1 | Operation: abortTransaction | Transaction with { txnNumber: 21 } has been aborted.
