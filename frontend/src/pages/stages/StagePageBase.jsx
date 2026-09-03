@@ -331,14 +331,35 @@ export function StagePageBase({ stageNumber, embedded }) {
             ...(readOnly ? [<td key="status"><FmsDots item={item} /></td>] : []),
             ...(data?.tatBudget
               ? [<td key="tat">{item?.tat
-                ? (
-                  <span
-                    className={item.tat.delayed ? styles.tatLate : styles.tatOk}
-                    title={`Waiting since ${formatActionTimestamp(item.tat.startedAt)}`}
-                  >
-                    {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
-                  </span>
-                )
+                ? item.tat.completed
+                  ? (
+                    /* Stage 2 (Transportation) once STAGE-8 + STAGE-9 have
+                       both matched — the clock is frozen, not still running,
+                       so this reads "Completed", never "over". A backdated
+                       row (the FMS movement/transport was recorded months
+                       before this app's own Stage 2 entry — physical
+                       transport happening ahead of the paperwork) has no real
+                       elapsed time to show, so it says so plainly instead of
+                       a bare "0m" that reads like a bug. */
+                    <span
+                      className={item.tat.backdated ? styles.tatDone : (item.tat.delayed ? styles.tatDoneLate : styles.tatDone)}
+                      title={item.tat.backdated
+                        ? `FMS already had this movement recorded on ${formatActionTimestamp(item.tat.completedAt)}, before this record's own Stage 2 entry on ${formatActionTimestamp(item.tat.startedAt)} — transported ahead of the paperwork.`
+                        : `Started ${formatActionTimestamp(item.tat.startedAt)} · Completed ${formatActionTimestamp(item.tat.completedAt)}`}
+                    >
+                      {item.tat.backdated
+                        ? 'Completed · already on record'
+                        : `Completed · ${item.tat.elapsed}${item.tat.delayed ? ` (${item.tat.overdueBy} late)` : ''}`}
+                    </span>
+                  )
+                  : (
+                    <span
+                      className={item.tat.delayed ? styles.tatLate : styles.tatOk}
+                      title={`Waiting since ${formatActionTimestamp(item.tat.startedAt)}`}
+                    >
+                      {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
+                    </span>
+                  )
                 : '—'}</td>]
               : [])
           ]}

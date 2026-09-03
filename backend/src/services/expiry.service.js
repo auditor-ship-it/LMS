@@ -49,10 +49,11 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { checkActionPermission } from './permissions.service.js';
 import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
+import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
 import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
+import { sendMail } from './email.service.js';
 
 /* =============================================
    getExpiryDataByFilter — LMS.js 1358-1406
@@ -120,7 +121,7 @@ export async function _expiryOrderNoMap() {
   });
 }
 
-const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
+export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
 const DEPLOYED_RAW_TTL_SECS = 30;
 
 /** The Deployed sheet's raw values, shared across every filterType and
@@ -385,6 +386,12 @@ export async function uploadAndSaveDeployedDocument(base64Data, mimeType, fileNa
       await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, [
         { range: `'${SHEETS.DEPLOYED}'!${colLetter(col0)}${targetRow}`, values: [[url || '']] }
       ]);
+      // Same fix as renewLeaseWithAgreement/updateLeasePeriod/completeDocStage
+      // — a directly-reachable write (not just an async replay target), so
+      // without this the Documents tab's own PO/Agreement link column could
+      // read stale for up to 30s right after the upload it's meant to show.
+      cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+      cacheRemoveByPrefix('mytasks_v1'); // see saveExpiryActionFast's comment below — same sidebar-badge staleness class
       return { success: true, url, savedTo: col0 === 24 ? 'Y' : 'Z' };
     });
     return result;
@@ -449,6 +456,16 @@ export async function completeDocumentStageFast(containerNo, callerEmail, knownR
 
   await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { 'row.21': '', 'row.22': '', updatedAt: new Date() } });
   cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+  // BUG FOUND AND FIXED 2026-09-03: this changes column W, the exact thing
+  // tasks.service.js's getMyTasks() counts for the sidebar's "Renew &
+  // Document" badge (renewPending) — but that whole counts object sits
+  // behind its OWN 90s cache (mytasks_v1:<scope>), completely separate from
+  // DEPLOYED_RAW_CACHE_KEY above, and nothing was busting it. Confirmed live:
+  // the page's own KPI showed 8 while the sidebar badge still showed a
+  // stale 6. Same fix pattern as the two-layer mongo_raw_v1 cache bug found
+  // earlier today — a write like this must bust every cache layer sitting
+  // between it and something that reads it, not just the nearest one.
+  cacheRemoveByPrefix('mytasks_v1');
   // Pass the RESOLVED row through to the replay (derived from found.key when
   // knownRow wasn't given), not containerNo alone — so the live write a few
   // seconds later targets the exact same row this Fast patch just did, even
@@ -517,6 +534,7 @@ export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail
     { $set: { 'row.21': dmy, 'row.22': status || '', updatedAt: new Date() } }
   );
   cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+  cacheRemoveByPrefix('mytasks_v1'); // see completeDocumentStageFast's identical note above — this also changes column W
   // Resolved row through to the replay — see completeDocumentStageFast's
   // identical note above.
   const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
@@ -710,6 +728,16 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
 
     await batchUpdateValues(updates);
     await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
+    /* BUG FOUND AND FIXED 2026-09-03: this write clears V/W (status) so the
+       container drops out of the Documents tab back to the general Pending
+       list — but unlike this file's own completeDocumentStageFast/
+       saveExpiryActionFast, it never busted the 30s _deployedRawValues()
+       cache. The write succeeded and the Mongo mirror was patched, but the
+       Renew & Document page's own post-submit reload (within that same 30s
+       window, which it always is) kept reading the pre-write snapshot —
+       reads as "nothing happened" until the cache aged out on its own. */
+    cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+    cacheRemoveByPrefix('mytasks_v1'); // see completeDocumentStageFast's identical note above — this also changes column W
 
     /* ★ Renewal Log — one row per renewal, whichever screen it came from,
        with the OLD (pre-overwrite) agreement/PO alongside the new. */
@@ -746,5 +774,43 @@ async function _logRenewal(info) {
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
       info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
     ]);
+    // Same try/catch as the log write above — a mail failure must not be
+    // mistaken for the renewal itself failing, and this only ever fires
+    // once the append has actually succeeded.
+    await _sendRenewalNotification(stamp, info);
   } catch (e) { console.error('[RENEWAL-LOG]', e.message); }
+}
+
+/** Vertical table, same convention as offlease.service.js's
+ *  _sendOffLeaseNotification — one row per RENEWAL_LOG_HEADERS column,
+ *  values exactly as just appended above. */
+async function _sendRenewalNotification(stamp, info) {
+  const fields = [
+    ['Timestamp', stamp],
+    ['Container No', info.container || ''],
+    ['Client Name', info.clientName || ''],
+    ['PO No', info.poNo || ''],
+    ['PO File', info.poFileUrl || ''],
+    ['Agreement File', info.agreementUrl || ''],
+    ['Agreement Valid Till', info.validTill || ''],
+    ['Updated By', info.userEmail || ''],
+    ['Old PO No', info.oldPoNo || ''],
+    ['Old PO File', info.oldPoFileUrl || ''],
+    ['Old Agreement File', info.oldAgreementUrl || '']
+  ];
+
+  const subject = `Renew & Document Notification – ${info.container || 'Unknown Container'}`;
+  const body = fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n';
+
+  const isUrl = (s) => /^https?:\/\//i.test(s);
+  const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
+  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s ? (isUrl(s) ? `<a href="${s}">${s}</a>` : s) : '-'}</td>`;
+  const html = `
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+    </table>
+  `;
+
+  await sendMail({ to: 'support@crystalgroup.in', subject, body, html });
+  console.log(`[RENEWAL-LOG-EMAIL] sent for ${info.container}`);
 }

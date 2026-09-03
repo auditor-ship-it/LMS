@@ -6,23 +6,6 @@
   margin-bottom: 16px;
 }
 
-.tabRow { display: flex; gap: 20px; border-bottom: 1.5px solid var(--line); margin-bottom: 12px; }
-.tab {
-  padding: 8px 0;
-  margin-bottom: -1.5px;
-  border: none;
-  border-bottom: 2.5px solid transparent;
-  background: none;
-  color: var(--text-2);
-  font-family: var(--f-display);
-  font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
-}
-.tab:hover { color: var(--text); }
-.tabActive { color: var(--accent); border-color: var(--accent); }
-
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
 .viewOnly { font-size: 12px; color: var(--text-3); }
 

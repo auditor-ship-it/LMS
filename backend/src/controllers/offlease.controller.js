@@ -5,6 +5,7 @@ import { getMoveHistory } from '../services/offleaseMoveHistory.service.js';
 import * as stage8Service from '../services/stage8.service.js';
 import * as stage3FormService from '../services/stage3Form.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
+import { getOffLeaseEfficiencyData } from '../services/offleaseEfficiency.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
@@ -373,6 +374,14 @@ export async function getContainerDetail(req, res) {
   res.json(detail);
 }
 
+/** Efficiency report — per-stage SLA/TAT performance, bottleneck ranking,
+ *  monthly throughput, owner performance. Read-only aggregate, no per-user
+ *  scoping (same as the Dashboard) — every field is a count/average, not a
+ *  specific record, so there's nothing here a broader audience shouldn't see. */
+export async function getEfficiencyData(req, res) {
+  res.json(await getOffLeaseEfficiencyData());
+}
+
 export async function getDashboardData(req, res) {
   const data = await offLeaseService.getOffLeaseDashboardData(req.user);
 
@@ -417,7 +426,9 @@ export async function getRemarkThread(req, res) {
   const visible = await offLeaseService.isOffLeaseContainerVisibleToUser(req.params.containerNo, req.user);
   if (!visible) throw notFound(`Container not found: ${req.params.containerNo}`);
 
-  res.json({ remarks: await remarksService.getRemarkThread(req.params.containerNo, req.query.leaseId) });
+  // ?stage= scopes this to one stage's own remarks (StageDetailModal);
+  // omitted, every remark for the record comes back (the dashboard thread).
+  res.json({ remarks: await remarksService.getRemarkThread(req.params.containerNo, req.query.leaseId, req.query.stage) });
 }
 
 export async function addRemark(req, res) {
@@ -425,7 +436,8 @@ export async function addRemark(req, res) {
   res.json(await remarksService.addOffLeaseRemark({
     containerNo: req.params.containerNo,
     leaseId: req.body?.leaseId,
-    html: req.body?.html
+    html: req.body?.html,
+    stage: req.body?.stage
   }, req.user.email));
 }
 

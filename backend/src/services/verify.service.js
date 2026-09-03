@@ -41,7 +41,9 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
 import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
-import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
+import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
+import { sendMail } from './email.service.js';
+import { DEPLOYED_RAW_CACHE_KEY } from './expiry.service.js';
 
 /* getVerifyData cache — added 2026-08-26. Verify Lease was previously live
    on every call (an explicit, deliberate choice: manual spreadsheet edits
@@ -148,6 +150,13 @@ export async function updateLeasePeriod(containerNo, newDateString, userEmail, k
     // header comment for why GET /api/expiry would otherwise show stale data
     // for up to 5 minutes after this write.
     await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
+    // BUG FOUND AND FIXED 2026-09-03: patching the Mongo mirror isn't enough
+    // on its own — getExpiryDataByFilter reads through _deployedRawValues()'s
+    // OWN 30s cache sitting in front of it, so without this the very next
+    // read (this page's own post-submit reload) still saw the pre-write
+    // snapshot for up to 30s. Same fix as renewLeaseWithAgreement below.
+    cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+    cacheRemoveByPrefix('mytasks_v1'); // this write also sets column W — see completeDocumentStageFast's identical note in expiry.service.js
 
     return 'OK';
   });
@@ -232,13 +241,32 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
       updates.push({ range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [['']] });
       updates.push({ range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] });
     } else {
-      /* date updated but agreement still pending -> shows in "Renew Pending" */
+      /* date updated but agreement still pending -> W = 'Documents Pending',
+         which hands this container from Renew & Document's "Renewed" tab
+         into its "Documents" tab (comment corrected 2026-09-03 — this used
+         to say "shows in Renew Pending", which was stale/wrong: the code
+         has always written 'Documents Pending' here, not 'Renewed'). */
       updates.push({ range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[dmyTime(new Date())]] });
       updates.push({ range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['Documents Pending']] });
     }
 
     await batchUpdateValues(updates);
     await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
+    // BUG FOUND AND FIXED 2026-09-03: this is the exact "click Update in the
+    // Renewed tab, container doesn't move to Documents Pending" report — the
+    // Mongo mirror was patched correctly, but getExpiryDataByFilter reads
+    // through _deployedRawValues()'s own 30s cache sitting in front of it,
+    // which this write never busted. The transition WAS happening; it just
+    // didn't show up until that cache aged out on its own (up to 30s later),
+    // which read as "nothing happened" on the page's own immediate reload.
+    cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+    // BUG FOUND AND FIXED 2026-09-03: this also changes column W, which the
+    // sidebar's "Renew & Document" badge counts via tasks.service.js's
+    // getMyTasks() — that whole counts object sits behind its OWN 90s cache
+    // (mytasks_v1:<scope>), untouched by the bust above. Confirmed live: the
+    // page's own KPI correctly showed 8 while the sidebar badge still read a
+    // stale 6.
+    cacheRemoveByPrefix('mytasks_v1');
 
     /* Renewal Log — one row per renewal, whichever screen it came from. */
     await _logRenewal({
@@ -295,9 +323,49 @@ async function _logRenewal(info) {
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
       info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
     ]);
+    // Same try/catch as the log write above — a mail failure must not be
+    // mistaken for the renewal itself failing, and this only ever fires
+    // once the append has actually succeeded.
+    await _sendRenewalNotification(stamp, info);
   } catch (e) {
     console.error('[RENEWAL-LOG]', e?.message || e);
   }
+}
+
+/** Vertical table, same convention as offlease.service.js's
+ *  _sendOffLeaseNotification / expiry.service.js's own copy of this
+ *  function — kept duplicated here rather than shared, matching how
+ *  _logRenewal/RENEWAL_LOG_HEADERS above are already duplicated between the
+ *  two files that can trigger a renewal completion. */
+async function _sendRenewalNotification(stamp, info) {
+  const fields = [
+    ['Timestamp', stamp],
+    ['Container No', info.container || ''],
+    ['Client Name', info.clientName || ''],
+    ['PO No', info.poNo || ''],
+    ['PO File', info.poFileUrl || ''],
+    ['Agreement File', info.agreementUrl || ''],
+    ['Agreement Valid Till', info.validTill || ''],
+    ['Updated By', info.userEmail || ''],
+    ['Old PO No', info.oldPoNo || ''],
+    ['Old PO File', info.oldPoFileUrl || ''],
+    ['Old Agreement File', info.oldAgreementUrl || '']
+  ];
+
+  const subject = `Renew & Document Notification – ${info.container || 'Unknown Container'}`;
+  const body = fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n';
+
+  const isUrl = (s) => /^https?:\/\//i.test(s);
+  const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
+  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s ? (isUrl(s) ? `<a href="${s}">${s}</a>` : s) : '-'}</td>`;
+  const html = `
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+    </table>
+  `;
+
+  await sendMail({ to: 'support@crystalgroup.in', subject, body, html });
+  console.log(`[RENEWAL-LOG-EMAIL] sent for ${info.container}`);
 }
 
 /* ===================== VERIFY LEASE SCREEN ===================== */

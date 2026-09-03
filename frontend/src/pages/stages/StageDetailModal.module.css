@@ -637,6 +637,74 @@
   font-weight: 600;
 }
 
+/* Stage-scoped remarks thread — see StageRemarks in StageDetailModal.jsx. */
+.stageRemarks {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.stageRemarksHead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.stageRemarksHead .sectionTitle { margin: 0; }
+.stageRemarksAdd {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.stageRemarksAdd:hover { filter: brightness(0.95); }
+.stageRemarksAddIcon { width: 12px; height: 12px; flex: none; }
+
+.stageRemarksMeta { font-size: 11px; color: var(--text-3); margin: 0; }
+.stageRemarksEmpty { margin: 0; font-size: 12.5px; color: var(--text-3); }
+
+.stageRemarkItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.stageRemarkItem:last-child { border-bottom: none; }
+.stageRemarkBody { font-size: 13px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+/* The remark is stored markup — the global reset strips list/margin styling,
+   so its tags need explicit rules here, same as OrderBookView's own thread. */
+.stageRemarkBody p { margin: 0 0 4px; }
+.stageRemarkBody p:last-child { margin-bottom: 0; }
+.stageRemarkBody ul, .stageRemarkBody ol { margin: 0 0 4px; padding-left: 18px; }
+.stageRemarkBody ul { list-style: disc; }
+.stageRemarkBody ol { list-style: decimal; }
+.stageRemarkBody b, .stageRemarkBody strong { font-weight: 800; }
+
+.stageRemarkFoot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.stageRemarkAction {
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--accent);
+  cursor: pointer;
+}
+.stageRemarkAction:first-of-type { margin-left: auto; }
+.stageRemarkAction:hover:not(:disabled) { text-decoration: underline; }
+.stageRemarkAction:disabled { opacity: 0.5; cursor: not-allowed; }
+.stageRemarkDanger { color: var(--error); }
+
+.stageRemarksEditor { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.stageRemarksActions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* Shown in place of the form once a report stage has been saved. */
 .savedPanel {
   padding: 26px 22px;

@@ -547,6 +547,38 @@ export function isDeliveredSince(deliveredMap, containerKey, sinceMs) {
 }
 
 /**
+ * The FMS chain for ONE container + client, using the exact same
+ * container+client match (matchRow) enrichWithStage8Movements uses per row
+ * for the Stage 2 grid's FMS status dots — so anything that GATES on this
+ * (e.g. offlease.service.js's Stage 2/Gate In TAT) can never disagree with
+ * what those dots show on screen for the same row.
+ *
+ * Deliberately NOT getFmsForContainer/matchByContainer: that function drops
+ * the client check ENTIRELY when no cycle-start bound is given (see
+ * matchByContainer's `sinceMs == null` branch, which returns "the last row
+ * for this container number, any client") — acceptable for a best-effort
+ * historical reference panel, wrong for anything deciding "is this actually
+ * done". BUG FOUND 2026-09-02 via CXRU1042578 (client "Hatsun Agro Product
+ * Ltd"): the new Stage 2 TAT badge showed "Completed" off a STAGE-8 row
+ * belonging to "Crystal Warehouse Kolkata" and a STAGE-9 row belonging to
+ * "Qwik Supply Chain Pvt Ltd" — two entirely unrelated clients that merely
+ * reused the same container number — while the row's own FMS dots correctly
+ * showed nothing matched for THIS client. Same failure class already
+ * documented for MYRU4513729/GESU9440432/TRIU6681671 elsewhere in this file,
+ * just reached through the one lookup here that skips the client check.
+ */
+export async function getMatchedFmsForContainer(containerNo, clientName) {
+  const [rows8, rows9, rows10] = await Promise.all([
+    readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()
+  ]);
+  const movement = matchRow(rows8, containerNo, clientName);
+  const transport = matchRow(rows9, containerNo, clientName);
+  const doKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo, transport?.doNumber].filter(Boolean);
+  const delivery = matchByDo(rows10, doKeys);
+  return { movement, transport, delivery };
+}
+
+/**
  * Appends STAGE-8/9/10 movement columns to a getOffLeaseData() result, in
  * place. Rows with no matching Offlease movement keep the record but show
  * blanks — dropping them would hide containers that are genuinely pending

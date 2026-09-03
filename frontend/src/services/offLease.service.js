@@ -24,12 +24,12 @@ export async function fetchOffLeaseDashboard() {
   return getOffLeaseDashboardData();
 }
 
-/* Dashboard live remarks. */
-export async function fetchRemarkThread(containerNo, leaseId) {
-  return getRemarkThread(containerNo, leaseId);
+/* Dashboard live remarks — `stage` optional, scopes to a stage's own thread. */
+export async function fetchRemarkThread(containerNo, leaseId, stage) {
+  return getRemarkThread(containerNo, leaseId, stage);
 }
-export async function postRemark(containerNo, leaseId, html) {
-  return addRemark(containerNo, leaseId, html);
+export async function postRemark(containerNo, leaseId, html, stage) {
+  return addRemark(containerNo, leaseId, html, stage);
 }
 export async function editRemark(containerNo, remarkId, html) {
   return updateRemark(containerNo, remarkId, html);

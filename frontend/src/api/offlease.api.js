@@ -49,18 +49,26 @@ export const getStageCounts = () => apiClient.get('/offlease/stage-counts').then
 /** GET /api/offlease/dashboard — pipeline overview (KPI counts + every active container's current stage). */
 export const getOffLeaseDashboardData = () => apiClient.get('/offlease/dashboard').then((r) => r.data);
 
+/** GET /api/offlease/efficiency — per-stage SLA/TAT performance, bottleneck ranking, throughput, owner performance. */
+export const getOffLeaseEfficiencyData = () => apiClient.get('/offlease/efficiency').then((r) => r.data);
+
 /* ---- Dashboard live remarks ---- */
 
-/** GET /api/offlease/:containerNo/remarks — full thread, newest first. */
-export const getRemarkThread = (containerNo, leaseId) =>
+/** GET /api/offlease/:containerNo/remarks — full thread, newest first.
+ *  `stage` (internal stage number) scopes this to one stage's own remarks —
+ *  StageDetailModal's use; omitted, every remark for the record comes back —
+ *  the dashboard's own use. */
+export const getRemarkThread = (containerNo, leaseId, stage) =>
   apiClient
-    .get(`/offlease/${encodeURIComponent(containerNo)}/remarks`, { params: { leaseId: leaseId || '' } })
+    .get(`/offlease/${encodeURIComponent(containerNo)}/remarks`, { params: { leaseId: leaseId || '', stage: stage ?? '' } })
     .then((r) => r.data.remarks || []);
 
 /** POST /api/offlease/:containerNo/remarks — appends one remark. `html` is
- *  sanitised server-side; whatever comes back is what was stored. */
-export const addRemark = (containerNo, leaseId, html) =>
-  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/remarks`, { leaseId, html }).then((r) => r.data.remark);
+ *  sanitised server-side; whatever comes back is what was stored. `stage`
+ *  (internal stage number) tags it as belonging to that stage — omitted, it
+ *  joins the dashboard-wide thread instead, same as before `stage` existed. */
+export const addRemark = (containerNo, leaseId, html, stage) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/remarks`, { leaseId, html, stage }).then((r) => r.data.remark);
 
 /** PUT/DELETE /api/offlease/:containerNo/remarks/:remarkId — author (or a
  *  roles admin) only; the server rejects anyone else. */

@@ -4,9 +4,10 @@ import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
+import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitSendBack } from '../../services/stage.service.js';
-import { lookupContainer } from '../../services/offLease.service.js';
+import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { exportLookupToPdf } from '../offLease/lookupExport.js';
@@ -14,6 +15,7 @@ import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { BASE_FIELDS, STAGE_FIELDS, cabinExpectedQty, normaliseSize, isFaultStatus, SOUND_STATUSES } from './stageFields.js';
 import { stageCaption } from '../../constants/stages.js';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './StageDetailModal.module.css';
 
 /** Invoice numbers are spelled with different separators and case across the
@@ -484,6 +486,16 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   disabled={readOnly || busy}
                   onChange={setField}
                 />
+              )}
+
+              {/* Commentary scoped to THIS stage — distinct from the
+                  dashboard's own record-wide thread (OrderBookView's
+                  RemarkCell). Shown even for identityOnly/read-only stages
+                  (Gate In has no form fields at all, but a remark is still
+                  useful there) — remarking is a separate concern from
+                  editing the stage's own data. */}
+              {!identityOnly && containerNo && (
+                <StageRemarks containerNo={containerNo} leaseId={data?.col_1} stageNumber={stageNumber} />
               )}
 
               {saveError && <div className={styles.error}>{saveError}</div>}
@@ -1514,6 +1526,147 @@ function CabinTable({ fields, size, values, disabled, onChange }) {
         </tbody>
       </table>
     </>
+  );
+}
+
+/**
+ * Remarks scoped to ONE stage — a separate thread from the dashboard's own
+ * record-wide commentary (OrderBookView's RemarkCell), tagged with this
+ * stageNumber (offleaseRemarks.service.js's `stage` column, added 2026-09-02).
+ * Modeled on that same component's composer (RichTextEditor + Cancel/Save)
+ * but shown in full rather than behind a hover rail — a modal has the room a
+ * dashboard cell does not.
+ */
+function StageRemarks({ containerNo, leaseId, stageNumber }) {
+  const [thread, setThread] = useState(null);
+  const [threadBusy, setThreadBusy] = useState(false);
+  const [threadError, setThreadError] = useState('');
+  const [open, setOpen] = useState(false);
+  const [html, setHtml] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setThread(null);
+    setThreadBusy(true);
+    setThreadError('');
+    fetchRemarkThread(containerNo, leaseId, stageNumber)
+      .then((r) => { if (!cancelled) setThread(r); })
+      .catch((e) => { if (!cancelled) setThreadError(apiErrorMessage(e)); })
+      .finally(() => { if (!cancelled) setThreadBusy(false); });
+    return () => { cancelled = true; };
+  }, [containerNo, leaseId, stageNumber]);
+
+  const beginEdit = (r) => {
+    setEditingId(r.id);
+    setHtml(r.html);
+    setError('');
+    setOpen(true);
+  };
+
+  const save = async () => {
+    setError('');
+    setBusy(true);
+    try {
+      const saved = editingId
+        ? await editRemark(containerNo, editingId, html)
+        : await postRemark(containerNo, leaseId, html, stageNumber);
+      setOpen(false);
+      setEditingId(null);
+      setHtml('');
+      setThread((t) => {
+        const list = t || [];
+        return editingId
+          ? list.map((r) => (r.id === editingId ? { ...r, html: saved?.html ?? html } : r))
+          : [{ ...saved, id: saved?.id }, ...list];
+      });
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (r) => {
+    setThreadError('');
+    setBusy(true);
+    try {
+      await removeRemark(containerNo, r.id);
+      setThread((t) => (t || []).filter((x) => x.id !== r.id));
+    } catch (e) {
+      setThreadError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={styles.stageRemarks}>
+      <div className={styles.stageRemarksHead}>
+        <span className={styles.sectionTitle}>Remarks for this stage</span>
+        {!open && (
+          <button
+            type="button"
+            className={styles.stageRemarksAdd}
+            onClick={() => { setEditingId(null); setHtml(''); setError(''); setOpen(true); }}
+          >
+            <Icon name="edit" className={styles.stageRemarksAddIcon} />
+            Add a remark
+          </button>
+        )}
+      </div>
+
+      {threadBusy && !thread && <p className={styles.stageRemarksMeta}>Loading…</p>}
+      {threadError && <p className={styles.error}>{threadError}</p>}
+      {thread && !thread.length && !open && <p className={styles.stageRemarksEmpty}>No remarks on this stage yet.</p>}
+
+      {thread?.map((r) => (
+        <div className={styles.stageRemarkItem} key={r.id}>
+          <div className={styles.stageRemarkBody} dangerouslySetInnerHTML={{ __html: r.html }} />
+          <div className={styles.stageRemarkFoot}>
+            <span className={styles.stageRemarksMeta}>
+              {[formatActionTimestamp(r.timestamp), r.enteredBy].filter(Boolean).join(' · ')}
+              {r.editedOn && ' · edited'}
+            </span>
+            <button type="button" className={styles.stageRemarkAction} onClick={() => beginEdit(r)}>Edit</button>
+            <button
+              type="button"
+              className={`${styles.stageRemarkAction} ${styles.stageRemarkDanger}`}
+              onClick={() => remove(r)}
+              disabled={busy}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {open && (
+        <div className={styles.stageRemarksEditor}>
+          <RichTextEditor
+            value={html}
+            onChange={setHtml}
+            placeholder={editingId ? 'Edit this remark…' : 'Add a remark…'}
+            disabled={busy}
+            autoFocus
+          />
+          {error && <p className={styles.error}>{error}</p>}
+          <div className={styles.stageRemarksActions}>
+            <Button
+              size="sm" variant="secondary" disabled={busy}
+              onClick={() => { setOpen(false); setEditingId(null); setHtml(''); setError(''); }}
+            >
+              Cancel
+            </Button>
+            <Button size="sm" variant="primary" loading={busy} onClick={save}>
+              {editingId ? 'Update' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

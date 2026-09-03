@@ -36,13 +36,18 @@ import { logger } from '../utils/logger.js';
 const COLLECTION = '_api_keys';
 const KEY_PREFIX = 'lms_pub_';
 
-/** The data domains a key's scope can name — see routes/public.routes.js for what each maps to. */
-export const API_DOMAINS = ['leases', 'offlease', 'accounts'];
+/** The data domains a key's scope can name — see routes/public.routes.js for what each maps to.
+ *  Lowercase only: normalizeScopes() below lowercases every incoming scope
+ *  token before checking it against this list, so a mixed-case key here
+ *  could never actually be granted. */
+export const API_DOMAINS = ['leases', 'offlease', 'accounts', 'offleaseefficiency'];
 
 /** Domains with an actual write endpoint wired in public.routes.js. `accounts`
- *  is read-only everywhere in this app (it's a proxy to the external
- *  Accounts & Collection API, LMS never writes ledger data) — see
- *  sales-crm-read-only.md for the same posture on a different domain. */
+ *  and `offleaseefficiency` are read-only everywhere in this app — the
+ *  former is a proxy to the external Accounts & Collection API (LMS never
+ *  writes ledger data, see sales-crm-read-only.md for the same posture on a
+ *  different domain), the latter is a pure reporting aggregate
+ *  (offleaseEfficiency.service.js writes nothing at all). */
 export const WRITE_CAPABLE_DOMAINS = ['leases', 'offlease'];
 
 let indexEnsured = false;

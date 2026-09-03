@@ -85,4 +85,8 @@ router.post('/offlease/:containerNo/approval', requirePublicApiKey('offlease', {
 // ?clientName= optional, same as the internal endpoint.
 router.get('/accounts/:containerNo/outstanding', requirePublicApiKey('accounts'), asyncHandler(reuse(offLeaseController.getOutstanding)));
 
+/* ---------------- off-lease efficiency (read-only — see WRITE_CAPABLE_DOMAINS) ---------------- */
+// No params — same aggregate every internal caller of GET /offlease/efficiency sees.
+router.get('/offlease/efficiency', requirePublicApiKey('offleaseefficiency'), asyncHandler(reuse(offLeaseController.getEfficiencyData)));
+
 export default router;

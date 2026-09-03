@@ -3,6 +3,7 @@ import { NAV_TREE } from '../../constants/nav.js';
 import { useSidebarState } from '../../hooks/useSidebarState.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { useAsync } from '../../hooks/useAsync.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { fetchMyTasks } from '../../services/myTask.service.js';
 import { Icon } from '../ui/Icon.jsx';
 import styles from './Sidebar.module.css';
@@ -61,7 +62,17 @@ function Branch({ item, visibleChildren, onNavigate }) {
  */
 export function Sidebar({ open, onNavigate }) {
   const { canView } = usePermission();
-  const { data: counts } = useAsync(fetchMyTasks, []);
+  const { data: counts, reload: reloadCounts } = useAsync(fetchMyTasks, []);
+  // BUG FOUND AND FIXED 2026-09-03: unlike every other page, Sidebar never
+  // refetched after its initial mount — it's part of the persistent app
+  // shell (mounted once per session, not remounted on navigation), so its
+  // nav badges (e.g. "Renew & Document") were effectively a snapshot frozen
+  // at login and never updated again, no matter what actions happened
+  // elsewhere in the app for the rest of the session. Confirmed live: the
+  // Renew & Document page's own KPI correctly showed 8 while this sidebar's
+  // badge still read a stale 6 from first load. Subscribing here, same
+  // pattern every page already uses for its own data.
+  useAutoRefresh('deployed-sheet', reloadCounts);
   const visible = (item) => (item.sidebarKey ? canView(item.sidebarKey) : true);
 
   const visibleItems = NAV_TREE.items.filter((item) => item.children || visible(item));

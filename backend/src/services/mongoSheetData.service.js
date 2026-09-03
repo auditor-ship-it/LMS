@@ -1,6 +1,6 @@
 import { getCollection } from './mongo.service.js';
 import { logger } from '../utils/logger.js';
-import { cacheGetOrLoad } from '../utils/memoryCache.js';
+import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
 
 const META_ID = '__meta__';
 
@@ -82,14 +82,21 @@ export async function getMongoRowsWithKeys(sheetName) {
  * which the frontend then showed as a generic "quota exhausted" failure —
  * a performance regression, not an actual Sheets/quota problem.
  *
- * Short TTL (8s), no explicit write-side busting: this is a broad,
- * general-purpose cache for the many lower-stakes/diagnostic/report call
- * sites that don't already have their own dedicated cache. Call sites where
- * "write, then read, must show it instantly" actually matters already have
- * — and keep — their own purpose-built cache with explicit busting
- * (_deployedRawValues, getApproveData, getOffLeaseDashboardData, ...); nothing
- * about those changes. 8s bounds the staleness this adds to everything else
- * to something far smaller than the multi-second delay it removes. */
+ * Short TTL (8s), a broad general-purpose cache for the many lower-stakes/
+ * diagnostic/report call sites that don't already have their own dedicated
+ * cache. Call sites where "write, then read, must show it instantly" already
+ * matters keep their own purpose-built cache with its own explicit busting
+ * (_deployedRawValues, getApproveData, getOffLeaseDashboardData, ...) — that
+ * part is unchanged. BUG FOUND AND FIXED 2026-09-03: this cache ALSO sits
+ * directly in front of every one of those purpose-built caches' own reload
+ * (they all call getSheetDataFromMongo internally), so busting only the
+ * outer, purpose-built cache was not enough — this inner one, being
+ * general/shared, was very likely still warm from an unrelated recent read
+ * and would still serve up to 8s of stale data regardless. patchMongoMirrorRow
+ * now busts this cache too on every successful patch, which fixes every one
+ * of its callers at once rather than requiring each to separately know about
+ * and invalidate both layers. 8s remains the bound for anything that reaches
+ * this cache WITHOUT going through a patchMongoMirrorRow write in between. */
 const MONGO_RAW_CACHE_TTL_SECS = 8;
 
 export async function getSheetDataFromMongo(sheetName) {
@@ -164,6 +171,22 @@ export async function patchMongoMirrorRow(sheetName, targetRow, updates, opts = 
     const key = opts.key ?? `row_${targetRow - 2}`;
     const res = await getCollection(sheetName).updateOne({ key }, { $set: { ...patch, updatedAt: new Date() } });
     logger.debug(`[DB] Collection: ${sheetName} | Operation: update (mirror patch) | Key: ${key} | Cells: ${Object.keys(patch).length} | Matched: ${res.matchedCount}`);
+    /* BUG FOUND AND FIXED 2026-09-03: getSheetDataFromMongo above has its OWN
+       8s cache (mongo_raw_v1:<sheetName>), completely separate from whatever
+       purpose-built cache a caller like _deployedRawValues (expiry.service.js)
+       already busts after its own write. Busting only the outer cache was
+       not enough — if this inner one was still warm from an unrelated recent
+       read (very likely, since it's shared/general-purpose), the very next
+       read after a write could still see the pre-write snapshot for up to
+       8 more seconds even though the outer cache was correctly cleared.
+       Confirmed live: Renew & Document's "Update" action busted
+       DEPLOYED_RAW_CACHE_KEY correctly, but the container still showed
+       un-migrated on the immediate reload. Busting THIS cache here, in the
+       one function every one of these write paths already calls, fixes it
+       for all of them at once — including any future caller of
+       patchMongoMirrorRow — rather than requiring every call site to know
+       about and bust two separate cache layers individually. */
+    cacheRemove(`mongo_raw_v1:${sheetName}`);
   } catch (e) {
     logger.error(`[MIRROR-PATCH] ${sheetName} row ${targetRow} patch failed (non-fatal — scheduled reconcile will catch up within 5 min):`, e?.message || e);
   }
