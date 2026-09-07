@@ -6,7 +6,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitSendBack } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchNextLeaseId, submitStage, submitStage1Invoice, submitMoveToStage, submitSendBack } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -49,9 +49,14 @@ function parseCostFigure(v) {
  * only the visible field keys back to POST /offlease/:containerNo/stage/:stage.
  */
 // The heading comes from stageCaption(stageNumber), so no label prop is needed.
-export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, onClose, onSaved }) {
+export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, fieldContext, onClose, onSaved }) {
   const { canAct } = usePermission();
-  const fields = STAGE_FIELDS[stageNumber] || [];
+  /* fieldContext ('invoice', from the Stage 1.1 tab) narrows the field list
+     to just that context's own fields (context: 'invoice' in
+     stageFields.js) — everything else in the stage stays out of that form.
+     The default (no fieldContext) shows every field EXCEPT ones scoped to
+     another context, i.e. today's normal per-stage form, unchanged. */
+  const fields = (STAGE_FIELDS[stageNumber] || []).filter((f) => (fieldContext ? f.context === fieldContext : !f.context));
   const { data, loading, error, reload } = useAsync(() => fetchStageDetail(containerNo, stageNumber, rowNum), [containerNo, stageNumber, rowNum]);
   const { data: leaseIdPreview } = useAsync(
     () => (stageNumber === 1 ? fetchNextLeaseId() : Promise.resolve(null)),
@@ -272,7 +277,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
 
     setSaving(true);
     try {
-      const message = await submitStage(containerNo, stageNumber, payload, rowNum);
+      const message = fieldContext === 'invoice'
+        ? await submitStage1Invoice(containerNo, payload, rowNum)
+        : await submitStage(containerNo, stageNumber, payload, rowNum);
       if (message === 'ALREADY_PROCESSED') {
         setSaveError('This record was already processed by someone else — refreshing…');
         await reload();

@@ -31,6 +31,11 @@ router.delete('/:containerNo/remarks/:remarkId', asyncHandler(offLeaseController
 router.get('/:containerNo/stage/:stage', asyncHandler(offLeaseController.getStageDetail));
 router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveStage));
 
+/* Stage 1.1 (Invoice) tab's own save — Stage 1 is already Completed by the
+   time a row reaches this queue, so it can't reuse the generic stage save
+   above (see saveOffLeaseStage1Invoice's doc comment). */
+router.post('/:containerNo/stage1-invoice', asyncHandler(offLeaseController.saveStage1Invoice));
+
 /* Stage 2 (Transportation) "Move To Stage" / Send Back — manual alternate-
    disposition move. Declared here, not under /:containerNo/stage/:stage,
    since neither is a normal stage-column save (see saveOffLeaseMoveToStage's

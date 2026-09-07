@@ -1,65 +1,207 @@
-/* Stage pipeline — connected nodes, each carrying its own overdue %. */
-.stepper { display: flex; align-items: center; overflow-x: auto; padding-bottom: 4px; }
+/* "Off-Lease" hero — cumulative efficiency, big ring on the left, matching
+   the reference dashboard's "Service" hero card layout. High/green is good
+   here (Target/Actual efficiency, capped at 100%). */
+.heroAll {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px;
+}
+.heroRing {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 3.5px solid currentColor;
+  background: color-mix(in srgb, currentColor 12%, var(--surface));
+}
+.heroPct { font-family: var(--f-display); font-size: 28px; font-weight: 800; }
+.heroMeta { display: flex; flex-direction: column; gap: 6px; text-align: left; }
+.heroLabel { font-family: var(--f-display); font-size: 20px; font-weight: 800; color: var(--text); }
+.heroSub { font-size: 13px; color: var(--text-2); }
+.heroChipRow { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.heroChip {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.infoDot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-3);
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  font-style: italic;
+  cursor: help;
+}
+
+.card { margin-bottom: 16px; }
+
+.actionError { color: var(--error); font-size: 12.5px; font-weight: 600; margin: 0 0 12px; }
+
+.sectionLabel {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 14px;
+}
+
+.sectionHint {
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* Stage pipeline — connected ring cards, chevron separators, matching the
+   reference's "STAGES EFFICIENCY" row. */
+.stepper { display: flex; align-items: stretch; overflow-x: auto; padding-bottom: 4px; gap: 2px; }
 .stepWrap { display: inline-flex; align-items: center; flex-shrink: 0; }
-.stepLine { width: 20px; height: 2px; background: var(--line); flex-shrink: 0; }
+.stepChevron { color: var(--text-3); font-size: 18px; margin: 0 2px; }
 .step {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  min-width: 84px;
-  /* Button reset — this is a <button> now (clickable), styled to read
-     exactly as the plain node it was before. */
-  border: none;
-  background: none;
-  padding: 6px 4px;
-  border-radius: var(--r-md);
+  gap: 8px;
+  min-width: 112px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 16px 10px;
+  border-radius: var(--r-lg, 14px);
   font-family: inherit;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-  position: relative;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.step:hover { background: var(--surface-2); }
+.step:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
+.step:disabled { cursor: default; opacity: 0.55; }
 .step:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .stepPct {
-  width: 44px;
-  height: 44px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-family: var(--f-display);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 800;
-  border: 1.5px solid currentColor;
+  border: 2px solid currentColor;
   background: color-mix(in srgb, currentColor 12%, var(--surface));
 }
 .stepPctMuted { color: var(--text-3); border-color: var(--line); background: var(--surface-2); }
-.stepLabel { font-size: 10.5px; color: var(--text-2); text-align: center; line-height: 1.25; white-space: nowrap; }
-.stepNoHistory {
-  font-size: 9px;
+.stepLabel { font-size: 11.5px; font-weight: 600; color: var(--text); text-align: center; line-height: 1.25; }
+.stepBadgeLate {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--error);
+  background: var(--error-bg);
+  border-radius: var(--r-full);
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.stepBadgeGood {
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--success);
+  background: var(--success-bg, #ecfdf5);
+  border-radius: var(--r-full);
+  padding: 2px 8px;
+}
+
+/* Data Quality panel */
+.dqGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.dqStat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.dqStatValue { font-family: var(--f-display); font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.dqStatLabel { font-size: 11px; color: var(--text-2); }
+.dqTone_good { color: var(--success); }
+.dqTone_warn { color: var(--warn, #b7791f); }
+.dqTone_bad { color: var(--error); }
+.dqTone_mute { color: var(--text-2); }
+
+.limitList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.limitList li { margin-bottom: 6px; }
+
+.tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+.table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+.table thead th {
+  text-align: left;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--f-display);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+.table tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  vertical-align: middle;
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover td { background: var(--surface-2); }
+.clickableRow { cursor: pointer; }
+
+.stageName { font-weight: 700; }
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+
+.rateGood { color: var(--success); font-weight: 700; }
+.rateWarn { color: var(--warn, #b7791f); font-weight: 700; }
+.rateBad { color: var(--error); font-weight: 700; }
+
+.reworkTag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.3px;
-  color: var(--text-3);
-  background: var(--surface-2);
-  border-radius: var(--r-full);
-  padding: 1px 6px;
-}
-.stepBadge {
-  position: absolute;
-  top: 2px;
-  right: 8px;
-  background: var(--error);
-  color: var(--text-inv, #fff);
-  font-size: 9px;
-  font-weight: 800;
-  border-radius: var(--r-full);
-  padding: 1px 5px;
-  font-variant-numeric: tabular-nums;
 }
 
-/* Stage bottleneck drill-down modal. */
+/* Stage bottleneck drill-down modal (ring -> stat rows -> client list) */
 .modalHero { display: flex; align-items: center; gap: 18px; margin-bottom: 18px; }
 .modalRing {
   position: relative;
@@ -96,7 +238,7 @@
   color: var(--text-3);
 }
 
-.bottleneckList { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; }
+.bottleneckList { display: flex; flex-direction: column; gap: 10px; max-height: 320px; overflow-y: auto; }
 .bottleneckRow {
   display: flex;
   flex-direction: column;
@@ -109,6 +251,7 @@
   text-align: left;
   cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  width: 100%;
 }
 .bottleneckRow:hover { background: var(--surface-2); border-color: var(--accent); }
 .bottleneckRowHead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
@@ -119,6 +262,17 @@
 .bottleneckBarTrack { flex: 1; height: 6px; border-radius: var(--r-full); background: var(--surface-2); overflow: hidden; }
 .bottleneckBarFill { height: 100%; border-radius: var(--r-full); background: var(--error); }
 .bottleneckPct { font-size: 11px; font-weight: 800; color: var(--text-2); width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.peopleRow { display: flex; flex-wrap: wrap; gap: 8px; }
+.personChip {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
 
 .modalBack {
   display: inline-flex;
@@ -153,94 +307,40 @@
   border-radius: 1px;
 }
 
-/* "All Stages" — blended overdue % across every stage, its own card with a
-   big circle so it reads as the headline number, not one more step
-   competing with the per-stage pipeline below it. Plain display, not
-   clickable — it stopped filtering anything once the Containers table (the
-   only thing "clear stage filter" ever affected) was removed. */
-.heroAll {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 4px;
+/* Container drill-down modal (per-stage formula breakdown) */
+.stageDrillList { display: flex; flex-direction: column; gap: 10px; max-height: 380px; overflow-y: auto; }
+.stageDrillRow {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
 }
-.heroRing {
-  position: relative;
-  width: 108px;
-  height: 108px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  border: 3.5px solid currentColor;
-  background: color-mix(in srgb, currentColor 12%, var(--surface));
-}
-.heroPct { font-family: var(--f-display); font-size: 28px; font-weight: 800; }
-.heroBadge {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  background: var(--error);
-  color: var(--text-inv, #fff);
-  font-size: 12px;
-  font-weight: 800;
-  border-radius: var(--r-full);
-  padding: 2px 8px;
-  border: 2px solid var(--surface);
-}
-.heroMeta { display: flex; flex-direction: column; gap: 4px; text-align: left; }
-.heroLabel { font-family: var(--f-display); font-size: 18px; font-weight: 800; color: var(--text); }
-.heroSub { font-size: 13px; color: var(--text-2); }
-
-.card { margin-bottom: 16px; }
-
-.sectionHint {
-  margin: -4px 0 12px;
-  font-size: 12px;
+.stageDrillHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.stageDrillName { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.stageDrillFormula {
+  margin-top: 6px;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
   color: var(--text-2);
 }
-
-.tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
-
-.table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
-
-.table thead th {
-  text-align: left;
-  padding: 9px 14px;
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-family: var(--f-display);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--line);
+.stageDrillReason {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-style: italic;
 }
 
-.table tbody td {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  color: var(--text);
-  vertical-align: middle;
-}
-.table tbody tr:last-child td { border-bottom: none; }
-.table tbody tr:hover td { background: var(--surface-2); }
-
-.stageName { font-weight: 700; }
-.owner { color: var(--text-2); }
-.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
-
-.rateGood { color: var(--success); font-weight: 700; }
-.rateWarn { color: var(--warn, #b7791f); font-weight: 700; }
-.rateBad { color: var(--error); font-weight: 700; }
-
-.overdueTag {
+.statusPill {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: var(--r-full);
-  background: var(--error-bg);
-  color: var(--error);
+  font-size: 10.5px;
   font-weight: 800;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
+.pillGood { background: var(--success-bg, #ecfdf5); color: var(--success); }
+.pillWarn { background: var(--warn-bg, #fff7e6); color: var(--warn, #b7791f); }
+.pillBad { background: var(--error-bg); color: var(--error); }
+.pillAccent { background: var(--accent-soft); color: var(--accent); }
+.pillMute { background: var(--surface-2); color: var(--text-2); }

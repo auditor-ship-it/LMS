@@ -16,9 +16,16 @@ import styles from './StatCard.module.css';
  * sub-filter — rather than plain trend text. Kept as a sibling of the
  * label/value button (not nested inside it) so each chip's own onClick
  * fires without also triggering the card's main onClick.
+ *
+ * `split` (instead of `icon`/`label`/`value`/`onClick`) renders TWO
+ * equally-weighted label/value halves side by side in one card, each with
+ * its own optional onClick — for a card that genuinely represents two
+ * distinct counts (e.g. Lease Expiry + Active Off-Lease) rather than one
+ * number with a footnote. `split` is `[{icon, label, value, loading,
+ * onClick}, {...}]`, always exactly two entries.
  */
 export function StatCard({
-  icon, label, value, loading, trend, trendDirection = 'flat', footnote, footnoteSegments, tint, active, onClick
+  icon, label, value, loading, trend, trendDirection = 'flat', footnote, footnoteSegments, tint, active, onClick, split
 }) {
   const cls = [
     styles.card,
@@ -29,6 +36,33 @@ export function StatCard({
   ].filter(Boolean).join(' ');
   const HitTag = onClick ? 'button' : 'div';
   const hasSegments = Array.isArray(footnoteSegments) && footnoteSegments.length > 0;
+
+  if (split) {
+    return (
+      <div className={cls}>
+        <div className={styles.splitRow}>
+          {split.map((half, i) => {
+            const HalfTag = half.onClick ? 'button' : 'div';
+            return (
+              <HalfTag
+                key={half.label}
+                type={half.onClick ? 'button' : undefined}
+                className={[styles.hitArea, styles.splitHalf, half.onClick ? styles.hoverable : ''].filter(Boolean).join(' ')}
+                onClick={half.onClick}
+              >
+                <span className={styles.klabel}>
+                  {half.icon && <Icon name={half.icon} size="sm" />}
+                  {half.label}
+                </span>
+                <span className={styles.kval}>{half.loading ? <SkeletonValue /> : half.value}</span>
+                {half.footnote && <span className={styles.kfoot}>{half.footnote}</span>}
+              </HalfTag>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cls}>

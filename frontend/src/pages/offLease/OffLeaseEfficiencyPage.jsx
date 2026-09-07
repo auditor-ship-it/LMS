@@ -1,47 +1,83 @@
-import { useState } from 'react';
-import { Card, LoadingState, ErrorState, EmptyState, Modal } from '../../components/ui/index.js';
+import { useState, useMemo } from 'react';
+import { Card, Button, LoadingState, ErrorState, EmptyState, Modal } from '../../components/ui/index.js';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { getOffLeaseEfficiencyData } from '../../api/offlease.api.js';
+import { exportEfficiencyToPdf } from './efficiencyExport.js';
+import { apiErrorMessage } from '../../shared/auth/index.js';
 import styles from './OffLeaseEfficiencyPage.module.css';
 
 /**
- * Off-Lease Efficiency — an analytical view over the whole pipeline, built
- * around ONE question: where are the gaps, and who owns them.
+ * Off-Lease Efficiency — Target/Actual Efficiency % (see
+ * offleaseEfficiency.service.js's own header comment for the full formula
+ * and data-model notes). UI REWORKED 2026-09-04 to match a reference
+ * dashboard's layout (hero ring + stage-ring row + stage-drill-down ->
+ * client-bottleneck-list -> client-metrics-drill three-level flow) — same
+ * visual pattern, this app's own real Target/Actual data throughout, not
+ * the reference's numbers.
  *
- * Structure (per the 2026-09-02c trim — the per-container "Containers" table
- * and its owner/overdue-only filter bar were removed outright: the filters
- * existed ONLY to narrow that table, so once it was gone they filtered
- * nothing and stayed on screen as dead controls):
- *  1. Overall Efficiency — one blended ring across every stage combined.
- *  2. Stage pipeline — each stage's OVERDUE % (not on-time %; explicitly
- *     requested as the headline number). Click a stage to open its
- *     bottleneck drill-down: who/what (by client) is behind the delay, and
- *     for each of those, the full time-in-stage statistics (average,
- *     median, 90th percentile, worst case, overrun past target).
- *  3. Bottleneck table — one compact, ranked table (most overdue-in-progress
- *     first) naming the stage, its owner, and its numbers — sits directly
- *     under the chart so "who's causing the delay" is visible with zero
- *     scrolling.
- *
- * Read-only, backed by GET /offlease/efficiency (offleaseEfficiency.service.js).
+ * Backed by GET /offlease/efficiency (offleaseEfficiency.service.js's
+ * getOffLeaseEfficiencyReport) — the SAME endpoint the external "Company
+ * Efficiency Dashboard" consumes via the public API-key route.
  */
 export function OffLeaseEfficiencyPage() {
   const { data, loading, error, reload } = useAsync(getOffLeaseEfficiencyData, []);
   usePolling(() => reload({ silent: true }));
+  useAutoRefresh('off-lease', () => reload({ silent: true }));
 
-  // Which stage's bottleneck drill-down modal is open; null = none.
-  const [bottleneckStageNum, setBottleneckStageNum] = useState(null);
+  const [drillStageNum, setDrillStageNum] = useState(null);
+  const [drillContainer, setDrillContainer] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+
+  /** Exports exactly what's on screen — same GET /offlease/efficiency
+   *  payload this page itself renders, so the PDF can never show a number
+   *  the dashboard didn't. */
+  const handleDownloadPdf = () => {
+    if (!data) return;
+    setDownloadError('');
+    setDownloading(true);
+    try {
+      exportEfficiencyToPdf(data);
+    } catch (e) {
+      setDownloadError(apiErrorMessage(e));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const overall = data?.overall || null;
   const stages = data?.stages || [];
-  const bottlenecks = data?.bottlenecks || [];
-  const bottleneckStage = stages.find((s) => s.stage === bottleneckStageNum) || null;
+  const dataQuality = data?.dataQuality || null;
+  const containers = data?.containers || [];
+  const drillStage = stages.find((s) => s.stage === drillStageNum) || null;
+
+  const sortedContainers = useMemo(
+    () => [...containers].sort((a, b) => {
+      const ea = a.cumulative?.cumulativeEfficiencyPercentage;
+      const eb = b.cumulative?.cumulativeEfficiencyPercentage;
+      if (ea == null && eb == null) return 0;
+      if (ea == null) return 1;
+      if (eb == null) return -1;
+      return ea - eb;
+    }),
+    [containers]
+  );
 
   return (
     <>
-      <PageHeader title="Off-Lease Efficiency" subtitle="Where the pipeline is falling behind, and who owns the gap" />
+      <PageHeader
+        title="Off-Lease Efficiency"
+        subtitle="Target vs. Actual time — how the pipeline is performing against SOP, per stage and per container"
+        actions={
+          <Button variant="secondary" size="sm" loading={downloading} disabled={!data} onClick={handleDownloadPdf}>
+            Download PDF
+          </Button>
+        }
+      />
+      {downloadError && <p className={styles.actionError}>{downloadError}</p>}
 
       {loading && <LoadingState />}
       {!loading && error && <ErrorState message={error} onRetry={reload} />}
@@ -49,157 +85,177 @@ export function OffLeaseEfficiencyPage() {
       {!loading && !error && (
         <>
           {overall && (
-            <Card title="Overall Efficiency" className={styles.card}>
-              <p className={styles.sectionHint}>Blended overdue % across every stage combined.</p>
+            <Card className={styles.card}>
               <div className={styles.heroAll}>
-                <span className={`${styles.heroRing} ${overall.overduePct != null ? overdueClass(overall.overduePct, styles) : styles.stepPctMuted}`}>
-                  <span className={styles.heroPct}>{overall.overduePct != null ? `${overall.overduePct}%` : '—'}</span>
-                  {overall.runningOverdueCount > 0 && <span className={styles.heroBadge}>{overall.runningOverdueCount}</span>}
+                <span className={`${styles.heroRing} ${overall.cumulativeEfficiencyPercentage != null ? efficiencyClass(overall.cumulativeEfficiencyPercentage, styles) : styles.stepPctMuted}`}>
+                  <span className={styles.heroPct}>{overall.cumulativeEfficiencyPercentage != null ? `${overall.cumulativeEfficiencyPercentage}%` : '—'}</span>
                 </span>
-                <span className={styles.heroMeta}>
-                  <span className={styles.heroLabel}>All Stages</span>
+                <div className={styles.heroMeta}>
+                  <span className={styles.heroLabel}>Off-Lease</span>
                   <span className={styles.heroSub}>
-                    {overall.completedCount} completed &middot; {overall.runningCount} in progress
-                    {overall.runningOverdueCount > 0 ? ` · ${overall.runningOverdueCount} overdue right now` : ''}
+                    target 100% &middot; {overall.totalCases.toLocaleString()} containers &middot; {overall.invalidDataCases.toLocaleString()} need data review
                   </span>
-                </span>
+                  <span className={styles.heroChipRow}>
+                    <span className={styles.heroChip}>{overall.onTimeRate != null ? `${overall.onTimeRate}%` : '—'} of stages on time</span>
+                    <span className={styles.infoDot} title="Cumulative % = total target time ÷ total actual time across every completed stage. On-time % = share of completed stage instances that finished within their target, counted one-for-one.">i</span>
+                  </span>
+                </div>
               </div>
             </Card>
           )}
 
-          <Card title="Stage-Wise Overdue %" className={styles.card}>
-            <p className={styles.sectionHint}>
-              Overdue instances (completed late, or currently sitting past budget) against everything that has been through that stage.
-              Click a stage to see WHO/WHAT is behind the delay. Each stage's budget is its own historical median completion time — a
-              stage with no completions yet (marked <em>no history</em>) falls back to a default 1h/2d budget until real data exists to calibrate from.
-            </p>
-            <StagePipeline stages={stages} onOpenBottlenecks={setBottleneckStageNum} />
+          <Card className={styles.card}>
+            <div className={styles.sectionLabel}>STAGES EFFICIENCY</div>
+            <div className={styles.stepper}>
+              {stages.map((s, i) => (
+                <span key={s.stage} className={styles.stepWrap}>
+                  {i > 0 && <span className={styles.stepChevron}>&rsaquo;</span>}
+                  <button
+                    type="button"
+                    className={styles.step}
+                    disabled={!s.totalSeen}
+                    onClick={() => setDrillStageNum(s.stage)}
+                  >
+                    <span className={`${styles.stepPct} ${s.efficiencyPercentage != null ? efficiencyClass(s.efficiencyPercentage, styles) : styles.stepPctMuted}`}>
+                      {s.efficiencyPercentage != null ? `${s.efficiencyPercentage}%` : '—'}
+                    </span>
+                    <span className={styles.stepLabel}>{s.stageName}</span>
+                    {s.belowTargetCount > 0
+                      ? <span className={styles.stepBadgeLate}>{s.belowTargetCount} BELOW TARGET</span>
+                      : s.totalSeen > 0 && <span className={styles.stepBadgeGood}>ON TARGET</span>}
+                  </button>
+                </span>
+              ))}
+            </div>
           </Card>
 
-          <StageBottleneckModal stage={bottleneckStage} onClose={() => setBottleneckStageNum(null)} />
+          <StageDrillModal stage={drillStage} onClose={() => setDrillStageNum(null)} />
 
-          <Card title="Where Delays Are Happening" className={styles.card}>
-            <p className={styles.sectionHint}>Ranked most overdue-in-progress first — the owner column names who to talk to.</p>
+          {dataQuality && (
+            <Card title="Data Quality" className={styles.card}>
+              <p className={styles.sectionHint}>
+                What the {dataQuality.totalRecords} records behind these numbers actually look like.
+              </p>
+              <div className={styles.dqGrid}>
+                <DqStat label="Valid" value={dataQuality.validEfficiencyRecords} tone="good" />
+                <DqStat label="Needs review" value={dataQuality.recordsRequiringManualReview} tone="bad" />
+                <DqStat label="Missing timestamps" value={dataQuality.missingTimestampRecords} tone="warn" />
+                <DqStat label="Invalid timestamps" value={dataQuality.invalidTimestampRecords} tone="warn" />
+                <DqStat label="Not applicable" value={dataQuality.notApplicableRecords} tone="mute" />
+                <DqStat label="On hold" value={dataQuality.holdRecords} tone="mute" />
+                <DqStat label="Rework detected" value={dataQuality.reworkRecords} tone="mute" />
+              </div>
+              {dataQuality.knownLimitations?.length > 0 && (
+                <>
+                  <div className={styles.metricsLabel} style={{ marginTop: 16 }}>Known data-model limitations</div>
+                  <ul className={styles.limitList}>
+                    {dataQuality.knownLimitations.map((l, i) => <li key={i}>{l}</li>)}
+                  </ul>
+                </>
+              )}
+            </Card>
+          )}
+
+          <Card title="Containers — Lowest Efficiency First" className={styles.card}>
+            <p className={styles.sectionHint}>Click a row for the full target/actual breakdown, stage by stage.</p>
             <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th>#</th>
-                    <th>Stage</th>
-                    <th>Owner</th>
-                    <th>Overdue %</th>
-                    <th>Overdue Now</th>
-                    <th>Completed</th>
-                    <th>Avg Turnaround</th>
+                    <th>#</th><th>Container</th><th>Client</th><th>Current Stage</th>
+                    <th>Efficiency</th><th>Target</th><th>Actual</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bottlenecks.map((b, i) => (
-                    <tr key={b.stage}>
+                  {sortedContainers.map((c, i) => (
+                    <tr key={c.containerNo + c.leaseId} className={styles.clickableRow} onClick={() => setDrillContainer(c)}>
                       <td className={styles.mono}>{i + 1}</td>
-                      <td className={styles.stageName}>{b.label}</td>
-                      <td className={styles.owner}>{b.owner}</td>
-                      <td>{b.overduePct != null ? <span className={overdueClass(b.overduePct, styles)}>{b.overduePct}%</span> : '—'}</td>
-                      <td>
-                        {b.runningOverdueCount > 0
-                          ? <span className={styles.overdueTag}>{b.runningOverdueCount}</span>
-                          : <span className={styles.mono}>0</span>}
-                      </td>
-                      <td className={styles.mono}>{b.completedCount}</td>
-                      <td className={styles.mono}>{b.avgTurnaround || '—'}</td>
+                      <td className={styles.stageName}>{c.containerNo}</td>
+                      <td>{c.clientName}</td>
+                      <td>{c.currentStage}{c.hadRework && <span className={styles.reworkTag}>rework</span>}</td>
+                      <td>{c.cumulative?.cumulativeEfficiencyPercentage != null
+                        ? <span className={efficiencyClass(c.cumulative.cumulativeEfficiencyPercentage, styles)}>{c.cumulative.cumulativeEfficiencyPercentage}%</span>
+                        : '—'}</td>
+                      <td className={styles.mono}>{formatMinutes(c.cumulative?.totalTargetMinutes)}</td>
+                      <td className={styles.mono}>{formatMinutes(c.cumulative?.totalActualMinutes)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {!bottlenecks.length && <EmptyState message="No stage activity yet" />}
+              {!sortedContainers.length && <EmptyState message="No containers yet" />}
             </div>
           </Card>
+
+          <ContainerDrillModal container={drillContainer} onClose={() => setDrillContainer(null)} />
         </>
       )}
     </>
   );
 }
 
-/** Overdue % reads the OPPOSITE direction from on-time % — high is bad here. */
-function overdueClass(pct, styles) {
-  if (pct <= 30) return styles.rateGood;
-  if (pct <= 60) return styles.rateWarn;
-  return styles.rateBad;
-}
-
-/** Stage-wise overdue % — each stage its own ring, colored by severity.
- *  Click a stage to open its bottleneck drill-down (StageBottleneckModal). */
-function StagePipeline({ stages, onOpenBottlenecks }) {
+function DqStat({ label, value, tone }) {
   return (
-    <div className={styles.stepper}>
-      {stages.map((s, i) => (
-        <span key={s.stage} className={styles.stepWrap}>
-          {i > 0 && <span className={styles.stepLine} />}
-          <button
-            type="button"
-            className={styles.step}
-            title={s.budgetSource === 'auto'
-              ? `${s.label} (${s.owner}) — ${s.completedCount} completed, budget ${s.budget} (median of ${s.budgetSampleSize} past completions)`
-              : `${s.label} (${s.owner}) — ${s.completedCount} completed, budget ${s.budget} (default — no completions yet to calibrate from)`}
-            onClick={() => onOpenBottlenecks(s.stage)}
-          >
-            <span className={`${styles.stepPct} ${s.overduePct != null ? overdueClass(s.overduePct, styles) : styles.stepPctMuted}`}>
-              {s.overduePct != null ? `${s.overduePct}%` : '—'}
-            </span>
-            <span className={styles.stepLabel}>{s.label}</span>
-            {s.budgetSource === 'default' && <span className={styles.stepNoHistory}>no history</span>}
-            {s.runningOverdueCount > 0 && <span className={styles.stepBadge}>{s.runningOverdueCount}</span>}
-          </button>
-        </span>
-      ))}
+    <div className={styles.dqStat}>
+      <span className={`${styles.dqStatValue} ${styles[`dqTone_${tone}`]}`}>{value}</span>
+      <span className={styles.dqStatLabel}>{label}</span>
     </div>
   );
 }
 
-/**
- * Stage drill-down modal — matches a reference dashboard's "stage circle ->
- * bottleneck-by-contributor ranking -> per-contributor statistical detail"
- * pattern, explicit 2026-09-02 request. This app has one FIXED owner per
- * whole stage (not per job-order), so "bottlenecks" here are ranked by
- * CLIENT — whose containers are contributing the most cumulative overrun
- * (time PAST budget) at this stage — rather than by individual handler.
- * Two views in one modal, toggled by local state, same as the reference's
- * in-place "Back" navigation rather than stacking a second modal on top.
- */
-function StageBottleneckModal({ stage, onClose }) {
-  const [drill, setDrill] = useState(null);
+/** High is good here — Target/Actual efficiency, not the old Overdue %. */
+function efficiencyClass(pct, styles) {
+  if (pct >= 90) return styles.rateGood;
+  if (pct >= 60) return styles.rateWarn;
+  return styles.rateBad;
+}
 
+function formatMinutes(min) {
+  if (min == null) return '—';
+  const totalMin = Math.round(min);
+  if (totalMin < 60) return `${totalMin}m`;
+  const days = Math.floor(totalMin / 1440);
+  const hours = Math.floor((totalMin % 1440) / 60);
+  const mins = totalMin % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+/**
+ * Stage drill-down — matches the reference's ring -> stat-row -> bottleneck-
+ * by-client ranking -> per-client metrics pattern. This app has one FIXED
+ * owner per whole stage (not per job-order, unlike the reference), so it's
+ * shown once near the top rather than as a multi-chip "people responsible"
+ * list at the bottom.
+ */
+function StageDrillModal({ stage, onClose }) {
+  const [drillClient, setDrillClient] = useState(null);
   if (!stage) return null;
 
   return (
-    <Modal
-      open={!!stage}
-      onClose={() => { setDrill(null); onClose(); }}
-      title={drill ? `${stage.label} › ${drill.name}` : stage.label}
-      width="620px"
-    >
-      {drill ? (
+    <Modal open={!!stage} onClose={() => { setDrillClient(null); onClose(); }} title={drillClient ? `${stage.stageName} › ${drillClient.clientName}` : stage.stageName} width="640px">
+      {drillClient ? (
         <>
-          <button type="button" className={styles.modalBack} onClick={() => setDrill(null)}>&larr; Back</button>
+          <button type="button" className={styles.modalBack} onClick={() => setDrillClient(null)}>&larr; Back</button>
           <div className={styles.metricsLabel}>Metrics</div>
           <div className={styles.metricsList}>
             {[
-              ['Average time in stage', drill.metrics.avgTime, drill.metrics.avgMs],
-              ['Median time in stage', drill.metrics.medianTime, drill.metrics.medianMs],
-              ['90th percentile time', drill.metrics.p90Time, drill.metrics.p90Ms],
-              ['Worst case', drill.metrics.worstTime, drill.metrics.worstMs],
-              ['Average overrun past target', drill.metrics.avgOverrun, drill.metrics.avgOverrunMs],
-              ['Total overrun contributed', drill.metrics.totalOverrun, drill.metrics.totalOverrunMs]
-            ].map(([label, display, ms]) => {
-              const scale = drill.metrics.worstMs || ms || 1;
-              const fillPct = ms != null ? Math.max(3, Math.round((ms / scale) * 100)) : 0;
-              const targetPct = drill.metrics.targetMs != null ? Math.min(100, Math.round((drill.metrics.targetMs / scale) * 100)) : null;
+              ['Average time in stage', drillClient.avgActualDurationMinutes],
+              ['Median time in stage', drillClient.medianActualDurationMinutes],
+              ['90th percentile time', drillClient.p90ActualDurationMinutes],
+              ['Worst case', drillClient.worstActualDurationMinutes],
+              ['Average overrun past target', drillClient.avgOverrunMinutes],
+              ['Total overrun contributed', drillClient.totalOverrunMinutes]
+            ].map(([label, min]) => {
+              const scale = drillClient.worstActualDurationMinutes || min || 1;
+              const fillPct = min != null ? Math.max(3, Math.round((min / scale) * 100)) : 0;
+              const targetPct = stage.targetDurationMinutes != null ? Math.min(100, Math.round((stage.targetDurationMinutes / scale) * 100)) : null;
               return (
                 <div key={label} className={styles.metricRow}>
                   <div className={styles.metricRowHead}>
                     <span>{label}</span>
                     <span className={styles.metricRowValue}>
-                      {display || '—'} <span className={styles.metricRowTarget}>/ {drill.metrics.target}</span>
+                      {formatMinutes(min)} <span className={styles.metricRowTarget}>/ {formatMinutes(stage.targetDurationMinutes)}</span>
                     </span>
                   </div>
                   <div className={styles.metricBarTrack}>
@@ -214,23 +270,24 @@ function StageBottleneckModal({ stage, onClose }) {
       ) : (
         <>
           <div className={styles.modalHero}>
-            <span className={`${styles.modalRing} ${stage.overduePct != null ? overdueClass(stage.overduePct, styles) : styles.stepPctMuted}`}>
-              <span className={styles.modalRingPct}>{stage.overduePct != null ? `${stage.overduePct}%` : '—'}</span>
+            <span className={`${styles.modalRing} ${stage.efficiencyPercentage != null ? efficiencyClass(stage.efficiencyPercentage, styles) : styles.stepPctMuted}`}>
+              <span className={styles.modalRingPct}>{stage.efficiencyPercentage != null ? `${stage.efficiencyPercentage}%` : '—'}</span>
             </span>
             <div className={styles.modalStats}>
-              <div className={styles.modalStatRow}><span>Avg TAT / Target</span><span>{stage.avgTurnaround || '—'} / {stage.budget}</span></div>
-              <div className={styles.modalStatRow}><span>Late</span><span>{stage.lateCount} of {stage.totalCount}</span></div>
-              <div className={styles.modalStatRow}><span>Time lost</span><span>{stage.timeLost || '—'}</span></div>
+              <div className={styles.modalStatRow}><span>Owner</span><span>{stage.owner}</span></div>
+              <div className={styles.modalStatRow}><span>Avg Actual / Target</span><span>{formatMinutes(stage.avgActualDurationMinutes)} / {formatMinutes(stage.targetDurationMinutes)}</span></div>
+              <div className={styles.modalStatRow}><span>Below target</span><span>{stage.belowTargetCount} of {stage.totalSeen}</span></div>
+              <div className={styles.modalStatRow}><span>Time lost</span><span>{formatMinutes(stage.timeLostMinutes)}</span></div>
             </div>
           </div>
           <div className={styles.metricsLabel}>Bottlenecks — by client</div>
-          {!stage.bottlenecks.length && <p className={styles.sectionHint}>No late instances recorded for this stage yet.</p>}
+          {!stage.bottlenecks.length && <p className={styles.sectionHint}>No below-target instances recorded for this stage yet.</p>}
           <div className={styles.bottleneckList}>
             {stage.bottlenecks.map((b) => (
-              <button type="button" key={b.name} className={styles.bottleneckRow} onClick={() => setDrill(b)}>
+              <button type="button" key={b.clientName} className={styles.bottleneckRow} onClick={() => setDrillClient(b)}>
                 <div className={styles.bottleneckRowHead}>
-                  <span className={styles.bottleneckName}>{b.name} <span className={styles.bottleneckRole}>client</span></span>
-                  <span className={styles.bottleneckStat}>{b.lateCount} &middot; {b.totalOverrun}</span>
+                  <span className={styles.bottleneckName}>{b.clientName} <span className={styles.bottleneckRole}>client</span></span>
+                  <span className={styles.bottleneckStat}>{b.belowTargetCount} &middot; {formatMinutes(b.totalOverrunMinutes)}</span>
                 </div>
                 <div className={styles.bottleneckBarRow}>
                   <div className={styles.bottleneckBarTrack}>
@@ -241,8 +298,66 @@ function StageBottleneckModal({ stage, onClose }) {
               </button>
             ))}
           </div>
+          <div className={styles.metricsLabel} style={{ marginTop: 16 }}>Owner Responsible</div>
+          <div className={styles.peopleRow}>
+            <span className={styles.personChip}>{stage.owner}</span>
+          </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+const STATUS_LABEL = {
+  COMPLETED: 'Completed', IN_PROGRESS: 'In Progress', HOLD: 'On Hold', NOT_STARTED: 'Not Started',
+  NOT_APPLICABLE: 'Not Applicable', REJECTED: 'Rejected'
+};
+
+function statusClass(s, styles) {
+  if (s.calculationStatus === 'MISSING_DATA' || s.calculationStatus === 'INVALID_DATA') return styles.pillBad;
+  if (s.status === 'COMPLETED') return styles.pillGood;
+  if (s.status === 'HOLD') return styles.pillWarn;
+  if (s.status === 'IN_PROGRESS') return styles.pillAccent;
+  return styles.pillMute;
+}
+
+/** Per-container drill-down — the full per-stage formula breakdown for one
+ *  specific container, distinct from the stage-level bottleneck modal above. */
+function ContainerDrillModal({ container, onClose }) {
+  if (!container) return null;
+  return (
+    <Modal open={!!container} onClose={onClose} title={`${container.containerNo} — ${container.clientName}`} width="640px">
+      <div className={styles.modalHero}>
+        <span className={`${styles.modalRing} ${container.cumulative?.cumulativeEfficiencyPercentage != null ? efficiencyClass(container.cumulative.cumulativeEfficiencyPercentage, styles) : styles.stepPctMuted}`}>
+          <span className={styles.modalRingPct}>{container.cumulative?.cumulativeEfficiencyPercentage != null ? `${container.cumulative.cumulativeEfficiencyPercentage}%` : '—'}</span>
+        </span>
+        <div className={styles.modalStats}>
+          <div className={styles.modalStatRow}><span>Current stage</span><span>{container.currentStage}</span></div>
+          <div className={styles.modalStatRow}><span>Target / Actual</span><span>{formatMinutes(container.cumulative?.totalTargetMinutes)} / {formatMinutes(container.cumulative?.totalActualMinutes)}</span></div>
+          <div className={styles.modalStatRow}><span>Rework detected</span><span>{container.hadRework ? 'Yes (Move-To-Stage history)' : 'No'}</span></div>
+        </div>
+      </div>
+      <div className={styles.metricsLabel}>Stage-by-stage</div>
+      <div className={styles.stageDrillList}>
+        {container.stages.map((s) => (
+          <div key={s.stage} className={styles.stageDrillRow}>
+            <div className={styles.stageDrillHead}>
+              <span className={styles.stageDrillName}>{s.stageName}</span>
+              <span className={`${styles.statusPill} ${statusClass(s, styles)}`}>
+                {s.calculationStatus === 'MISSING_DATA' ? 'Missing Data'
+                  : s.calculationStatus === 'INVALID_DATA' ? 'Invalid Data'
+                  : (STATUS_LABEL[s.status] || s.status)}
+              </span>
+              {s.efficiencyPercentage != null && (
+                <span className={efficiencyClass(s.efficiencyPercentage, styles)}>{s.efficiencyPercentage}%</span>
+              )}
+            </div>
+            {s.formula && <div className={styles.stageDrillFormula}>{s.formula}</div>}
+            {s.reason && <div className={styles.stageDrillReason}>{s.reason}</div>}
+            {s.dataLimitation && <div className={styles.stageDrillReason}>{s.dataLimitation}</div>}
+          </div>
+        ))}
+      </div>
     </Modal>
   );
 }

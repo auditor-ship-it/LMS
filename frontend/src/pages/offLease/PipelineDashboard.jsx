@@ -1,11 +1,15 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { StatCard, Card, Button, SearchBar, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
+import { fetchMyTasks } from '../../services/myTask.service.js';
 import { STAGES } from '../../constants/stages.js';
+import { ROUTES } from '../../constants/routes.js';
 import { OrderBookView } from './OrderBookView.jsx';
 import { ContainerDetailModal } from './ContainerDetailModal.jsx';
 import styles from './PipelineDashboard.module.css';
@@ -30,9 +34,16 @@ const VIEWS = [
 ];
 
 export function PipelineDashboard({ onOpenTab }) {
+  const navigate = useNavigate();
   const { data, loading, error, reload } = useAsync(fetchOffLeaseDashboard, []);
   // Same background-eligibility catch as StagePageBase — see usePolling's doc comment.
   usePolling(() => reload({ silent: true }));
+  useAutoRefresh('off-lease', () => reload({ silent: true }));
+  /* Lease Expiry's own overdue count — same source the sidebar badge reads
+     (getMyTasks -> .expired), fetched here too so the scorecard never shows
+     a different number than the nav item right next to it. */
+  const { data: taskCounts, loading: taskCountsLoading, reload: reloadTaskCounts } = useAsync(fetchMyTasks, []);
+  usePolling(() => reloadTaskCounts({ silent: true }));
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
   // The record whose full stage history is open, or null.
@@ -53,6 +64,9 @@ export function PipelineDashboard({ onOpenTab }) {
 
     if (stageFilter === 'approval') out = out.filter((it) => it.stageClass === 'approval');
     else if (stageFilter === 'done') out = out.filter((it) => it.stageClass === 'done');
+    else if (stageFilter === 'hold') out = out.filter((it) => it.onHold);
+    else if (stageFilter === 'outstanding') out = out.filter((it) => it.hasOutstanding);
+    else if (stageFilter === 'stage1Invoice') out = out.filter((it) => it.stageClass === 'stage1Invoice');
     /* pendingStages, not currentStageNum: a container can genuinely be
        pending in more than one stage's queue at once (see pendingStages'
        doc comment on the backend), and the KPI card's own count is a real
@@ -77,41 +91,92 @@ export function PipelineDashboard({ onOpenTab }) {
     ? 'Pending approval'
     : stageFilter === 'done'
       ? 'Completed'
-      : stageFilter != null
-        ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
-        : '';
+      : stageFilter === 'hold'
+        ? 'On hold'
+        : stageFilter === 'outstanding'
+          ? 'Outstanding payment'
+          : stageFilter === 'stage1Invoice'
+            ? 'Stage 1.1 — Invoice'
+            : stageFilter != null
+              ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
+              : '';
 
   return (
     <>
       <div className={styles.kpiRow}>
+        {/* Fixed order per explicit request, 2026-09-04: Lease Expiry, Hold,
+            Active, then the live workflow in sequence (Intimation ->
+            Approval -> Transportation -> Gate In -> Inspection -> Final
+            Billing -> Outstanding Payment ["Payment Pending" in the user's
+            own sequence, right after Billing]), Completed last. Stage 6
+            (FMS Closure) is intentionally not in this row — everything else
+            here is either a cross-module count or one explicit stage, not
+            the generic STAGES.flatMap sweep this row used before. */}
+        {/* Reverted to individual cards, 2026-09-04 — the combined split
+            card read worse than two plain ones. Lease Expiry leads the row,
+            navigating to that page (same destination the sidebar's own nav
+            item goes to); Active Off-Lease keeps its own separate card. A
+            plain client-side sum of the two — no backend change needed,
+            both numbers are already loaded on this page. */}
+        <StatCard
+          icon="grid" label="Total · Lease Expiry + Off-Lease"
+          value={(taskCounts?.expired != null && kpis.active != null) ? taskCounts.expired + kpis.active : '—'}
+          loading={loading || taskCountsLoading}
+          tint="neutral"
+        />
+        <StatCard
+          icon="clock" label="Lease Expiry" value={taskCounts?.expired ?? '—'} loading={taskCountsLoading} tint="warn"
+          footnote={taskCounts?.expired > 0 ? 'Overdue' : undefined}
+          onClick={() => navigate(ROUTES.LEASE_EXPIRY)}
+        />
+        <StatCard
+          icon="lock" label="Hold · Stage 1" value={kpis.holdStage1 ?? '—'} loading={loading} tint="warn"
+          footnote={kpis.holdStage1 > 0 ? 'Paused' : undefined}
+          onClick={() => toggleFilter('hold')}
+        />
         <StatCard icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} loading={loading} tint="navy" />
-        {/* The approval gate sits BETWEEN Stage 1 and Stage 2, so its card
-            follows Stage 1 rather than leading the row — the cards now read in
-            the order the work actually happens. Same reasoning as the tab
-            strip in OffLeasePage.jsx. */}
-        {STAGES.flatMap((s) => {
-          const card = (
-            <StatCard
-              key={s.number}
-              icon={STAGE_ICONS[s.number]}
-              label={`Stage ${s.display} · ${s.label}`}
-              value={kpis.byStage?.[s.number] ?? '—'}
-              loading={loading}
-              tint={s.number === 8 ? 'success' : 'info'}
-              footnote={s.owner}
-              onClick={() => toggleFilter(s.number)}
-            />
-          );
-          if (s.display !== 1) return [card];
-          return [card, (
-            <StatCard
-              key="approval"
-              icon="clock" label="Stage 1A · Pending approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="warn"
-              footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
-              onClick={() => toggleFilter('approval')}
-            />
-          )];
-        })}
+        <StatCard
+          icon={STAGE_ICONS[1]} label="Stage 1 · Off-Lease Intimation" value={kpis.byStage?.[1] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 1)?.owner}
+          onClick={() => toggleFilter(1)}
+        />
+        <StatCard
+          icon="edit" label="Stage 1.1 · Invoice" value={kpis.stage1Invoice ?? '—'} loading={loading} tint="warn"
+          footnote={kpis.stage1Invoice > 0 ? 'Invoice pending' : undefined}
+          onClick={() => toggleFilter('stage1Invoice')}
+        />
+        <StatCard
+          icon="clock" label="Stage 1.2 · Approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="warn"
+          footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
+          onClick={() => toggleFilter('approval')}
+        />
+        <StatCard
+          icon={STAGE_ICONS[6]} label="Stage 2 · Transportation" value={kpis.byStage?.[6] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 6)?.owner}
+          onClick={() => toggleFilter(6)}
+        />
+        <StatCard
+          icon={STAGE_ICONS[7]} label="Stage 3 · Gate In" value={kpis.byStage?.[7] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 7)?.owner}
+          onClick={() => toggleFilter(7)}
+        />
+        <StatCard
+          icon={STAGE_ICONS[3]} label="Stage 4 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 3)?.owner}
+          onClick={() => toggleFilter(3)}
+        />
+        <StatCard
+          icon={STAGE_ICONS[5]} label="Stage 5 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 5)?.owner}
+          onClick={() => toggleFilter(5)}
+        />
+        {/* Moved to after Billing, 2026-09-04 — "Payment Pending" in the
+            user's own stage sequence sits right after Billing, not before it. */}
+        <StatCard
+          icon="list" label="Outstanding Payment" value={kpis.outstandingCount ?? '—'} loading={loading} tint="warn"
+          footnote={kpis.outstandingWithDamageCount > 0 ? `${kpis.outstandingWithDamageCount} with damage` : undefined}
+          onClick={() => toggleFilter('outstanding')}
+        />
         <StatCard icon="check" label="Completed this month" value={kpis.completedThisMonth ?? '—'} loading={loading} tint="success" />
       </div>
 

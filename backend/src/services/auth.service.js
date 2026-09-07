@@ -12,7 +12,9 @@
  * failed-attempt lockout (5 tries -> 15 min lock) was removed on request.
  */
 import crypto from 'crypto';
-import { getSheetData, updateCell, appendRow } from './googleSheets.service.js';
+import { getSheetData, updateCell, appendRow, colLetter } from './googleSheets.service.js';
+import { getSheetDataFromMongo, patchMongoMirrorRow } from './mongoSheetData.service.js';
+import { normalizeKey } from '../config/mongoSheetMapping.js';
 import { getCollection } from './mongo.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr, dmyTime, parseDmyTime } from '../utils/format.js';
@@ -73,17 +75,41 @@ function authMaskEmail(e) {
   return e[0] + '***' + e[at - 1] + e.slice(at);
 }
 
-/** Find an employee row by a column value, live against the sheet.
- *  SHEETS-FIRST (reverted 2026-08-21) — this used to also have a
- *  Mongo-mirror-backed variant (authFindMongo) for the non-write-adjacent
- *  callers (login, OTP request), added 2026-08-01 after login hitting the
- *  live Sheets quota on every attempt caused real problems. Reverted at the
- *  user's explicit request along with every other Mongo-first path in the
- *  app; this is the highest-frequency one (every login + heartbeat), so if
- *  login-time quota errors resurface, this is the first place to look. */
-async function authFind(colIdx, value) {
+/** Find an employee row by a column value, live against the sheet — the
+ *  ONLY source safe to derive a writable `rowNum` from. USER is a
+ *  naturalKeyColumn (by-email) mirror, not position-keyed (see
+ *  mongoSheetMapping.js) — Mongo's find() order for it is not guaranteed to
+ *  match the live sheet's row order, so a rowNum computed from a Mongo read
+ *  could address the WRONG row on a write. Used only by the one caller that
+ *  writes back to this sheet (empResetPassword's password-cell update). */
+async function authFindLive(colIdx, value) {
   const { rows } = await getSheetData(SHEETS.USER, undefined, 'A1:D');
   return authScanRows(rows, colIdx, value, true);
+}
+
+/**
+ * MONGO-FIRST (restored 2026-09-07) — login + heartbeat are the highest-
+ * frequency reads in the whole app; reading the USER sheet live on every
+ * single login/OTP-request attempt is what tripped the shared Google Sheets
+ * quota circuit breaker and locked EVERY user out of login at once
+ * (confirmed live: the login page showed "Google Sheets API rate limit was
+ * recently hit"). This had been reverted once before (2026-08-21, "at the
+ * user's explicit request along with every other Mongo-first path in the
+ * app") — reinstated now specifically for this call site, with the write
+ * side made safe (see authFindLive above) and both write paths patching the
+ * mirror immediately (empResetPassword, addUserToLogin below) so a
+ * just-changed password or a brand-new login works on the very next
+ * Mongo-first read instead of waiting out the up-to-5-minute reconcile
+ * cycle.
+ *
+ * withRowNum is always false here — deliberately: the array position of a
+ * doc returned by getSheetDataFromMongo for a by-key sheet carries no
+ * relationship to the live sheet's row order, so any `rowNum` computed from
+ * it would be unsafe to write with. Only authFindLive may hand out a
+ * trustworthy rowNum. */
+async function authFind(colIdx, value) {
+  const { rows } = await getSheetDataFromMongo(SHEETS.USER);
+  return authScanRows(rows, colIdx, value, false);
 }
 
 function authScanRows(rows, colIdx, value, withRowNum) {
@@ -306,12 +332,24 @@ export async function empResetPassword(empId, otp, newPassword) {
   if (rec.tries > AUTH_OTP_MAX_TRIES) { cacheRemove(key); return { ok: false, error: 'Too many wrong OTPs. Request a new one.' }; }
   if (!authEq(rec.otp, otp)) { cachePut(key, JSON.stringify(rec), AUTH_OTP_SECS); return { ok: false, error: 'Wrong OTP' }; }
 
-  const emp = await authFind(AUTH_COL_EMPID, empId);
+  // authFindLive, not authFind — this write needs a rowNum trustworthy
+  // enough to address the exact live sheet row (see authFindLive's own doc
+  // comment on why the Mongo-first authFind can't safely provide one).
+  const emp = await authFindLive(AUTH_COL_EMPID, empId);
   if (!emp) return { ok: false, error: 'Account not found' };
 
   await withSheetLock(SHEETS.USER, async () => {
     await updateCell(SHEETS.USER, emp.rowNum, AUTH_COL_PASSWORD, newPassword);
   });
+
+  // Patch the Mongo mirror immediately — otherwise the new password isn't
+  // visible to the Mongo-first login read above until the next reconcile
+  // cycle (up to 5 min), during which login would still see the OLD one.
+  await patchMongoMirrorRow(
+    SHEETS.USER, emp.rowNum,
+    [{ range: `'${SHEETS.USER}'!${colLetter(AUTH_COL_PASSWORD)}${emp.rowNum}`, values: [[newPassword]] }],
+    { key: normalizeKey(SHEETS.USER, emp.email) }
+  );
 
   cacheRemove(key);
   return { ok: true };
@@ -322,6 +360,29 @@ export async function addUserToLogin(name, empId, password, email) {
   if (await authFind(AUTH_COL_EMPID, empId)) return `Already exists (Employee ID ${empId})`;
   if (await authFind(AUTH_COL_EMAIL, email)) return `Already exists (Email ${email})`;
   await appendRow(SHEETS.USER, [name, empId, password, email]);
+
+  // Upsert the mirror doc immediately — patchMongoMirrorRow only updates an
+  // EXISTING doc, and this row has none yet (it didn't exist before this
+  // append). Without this, a brand-new login could not authenticate via the
+  // Mongo-first authFind above until the next reconcile cycle (up to 5 min).
+  const row = [name, empId, password, email];
+  try {
+    const mirrorKey = normalizeKey(SHEETS.USER, email);
+    await getCollection(SHEETS.USER).updateOne(
+      { key: mirrorKey },
+      { $set: { key: mirrorKey, row, updatedAt: new Date(), deletedAt: null } },
+      { upsert: true }
+    );
+    // getSheetDataFromMongo caches its own read (mongoSheetData.service.js) —
+    // bust it too, or the very next login could still see the pre-add
+    // snapshot for up to that cache's own TTL. patchMongoMirrorRow does this
+    // internally for the password-reset path; this hand-rolled upsert must
+    // do it itself.
+    cacheRemove(`mongo_raw_v1:${SHEETS.USER}`);
+  } catch (e) {
+    logger.error('[AUTH] mirror upsert (add user) failed — reconcile will catch up within 5 min:', e?.message || e);
+  }
+
   return `Added: ${name} | ID ${empId} | ${email}`;
 }
 

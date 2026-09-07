@@ -67,6 +67,7 @@ import { copyApprovedData } from '../services/offlease.service.js';
 import { runSheetsReconciliation } from './sheetsReconcile.job.js';
 import { refreshStage3FormCache } from '../services/stage3Form.service.js';
 import { warmFmsCache } from '../services/stage8.service.js';
+import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -82,7 +83,15 @@ export function registerCronJobs() {
   cron.schedule('0 * * * *', safeRun('runAutoApproval', runAutoApproval));
   cron.schedule('0 * * * *', safeRun('copyApprovedData', copyApprovedData));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly)');
+  /* Daily, 9:00 AM — server runs in Asia/Calcutta (confirmed via
+     Intl.DateTimeFormat().resolvedOptions().timeZone, 2026-09-04), so this
+     single-value hour field needs no explicit timezone/offset handling.
+     Explicit request 2026-09-04: one email per sales executive, grouped by
+     their own Lease Expiry rows (overdue + expiring soon) — see
+     leaseExpiryDigest.service.js for the grouping/send logic. */
+  cron.schedule('0 9 * * *', safeRun('leaseExpiryDigest', () => sendLeaseExpiryDigest()));
+
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM)');
 }
 
 /**

@@ -5,7 +5,7 @@ import { getMoveHistory } from '../services/offleaseMoveHistory.service.js';
 import * as stage8Service from '../services/stage8.service.js';
 import * as stage3FormService from '../services/stage3Form.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
-import { getOffLeaseEfficiencyData } from '../services/offleaseEfficiency.service.js';
+import { getOffLeaseEfficiencyReport } from '../services/offleaseEfficiency.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
@@ -63,6 +63,16 @@ export async function getData(req, res) {
     ? gateFormIndex()
     : undefined;
 
+  /* ?filter=invoice on stage 1 is NOT a filter of the pending-Stage-1 queue
+     (getOffLeaseData) — it reads COMPLETED Stage 1 rows awaiting their
+     invoice, same shape as the Approval queue. See
+     getOffLeaseStage11InvoiceData's own doc comment for why. */
+  if (stage === 1 && req.query.filter === 'invoice') {
+    const data = await offLeaseService.getOffLeaseStage11InvoiceData(req.user);
+    res.json(data);
+    return;
+  }
+
   /* ?filter=hold — Stage 1's own Hold view (see getOffLeaseData's doc
      comment on that branch). Meaningless for every other stage; harmless to
      pass through unconditionally since getOffLeaseData only reads it when
@@ -90,8 +100,8 @@ export async function getData(req, res) {
  * labels is worse than no badge.
  */
 export async function getStageCounts(req, res) {
-  const { counts, approval } = await offLeaseService.getOffLeaseStageCounts(req.user);
-  res.json({ counts: { ...counts, approval } });
+  const { counts, approval, stage1Invoice } = await offLeaseService.getOffLeaseStageCounts(req.user);
+  res.json({ counts: { ...counts, approval, stage1Invoice } });
 }
 
 export async function getStageDetail(req, res) {
@@ -145,6 +155,17 @@ export async function saveStage(req, res) {
   // for the WRITE, where a wrong-row match would corrupt real data.
   const { rowNum, ...data } = req.body || {};
   const message = await offLeaseService.saveOffLeaseStageFast(req.params.containerNo, stage, data, req.user.email, rowNum);
+  res.json({ message });
+}
+
+/** POST /:containerNo/stage1-invoice — the Stage 1.1 (Invoice) tab's own
+ *  save, separate from saveStage above: Stage 1 is already Completed by the
+ *  time a row reaches this queue, so the generic save (which rejects any
+ *  further write once a stage's status column is filled) can't be reused
+ *  here. See saveOffLeaseStage1Invoice's doc comment. */
+export async function saveStage1Invoice(req, res) {
+  const { rowNum, ...data } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseStage1Invoice(req.params.containerNo, data, req.user.email, rowNum);
   res.json({ message });
 }
 
@@ -374,12 +395,16 @@ export async function getContainerDetail(req, res) {
   res.json(detail);
 }
 
-/** Efficiency report — per-stage SLA/TAT performance, bottleneck ranking,
- *  monthly throughput, owner performance. Read-only aggregate, no per-user
- *  scoping (same as the Dashboard) — every field is a count/average, not a
- *  specific record, so there's nothing here a broader audience shouldn't see. */
+/** Efficiency report — Target/Actual efficiency %, per stage and per
+ *  container, plus cumulative and data-quality summaries. REWORKED
+ *  2026-09-03: the previous Overdue-% version was read-only aggregate (no
+ *  per-record data, hence no scoping); this version's own `containers` array
+ *  names specific clients, so it is now scoped through the same
+ *  _offLeaseAccessGate every other Off-Lease endpoint already uses — a
+ *  Sale-Person-restricted login must not see this page's client-wise
+ *  breakdown for clients outside their own scope. */
 export async function getEfficiencyData(req, res) {
-  res.json(await getOffLeaseEfficiencyData());
+  res.json(await getOffLeaseEfficiencyReport(req.user));
 }
 
 export async function getDashboardData(req, res) {

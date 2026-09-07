@@ -385,6 +385,7 @@ function ChecklistTable({ title, columnLabel, points }) {
 
 function StageCard({ stage, isCurrent }) {
   const cls = stage.done ? styles.cardDone : (isCurrent ? styles.cardCurrent : styles.cardLocked);
+  const tat = stage.tat;
   return (
     <div className={`${styles.stageCard} ${cls}`}>
       {/* displayStage is null for a retired stage — label it as such rather
@@ -394,6 +395,15 @@ function StageCard({ stage, isCurrent }) {
       <span className={styles.stageCardStatus}>{stage.skipped ? 'Skipped' : stage.done ? 'Completed' : 'Pending'}</span>
       {stage.done && (
         <span className={styles.stageCardMeta}>{formatActionTimestamp(stage.timestamp)}{stage.user ? ` · ${stage.user}` : ''}</span>
+      )}
+      {/* TAT — Start/End/Duration/SLA status, computed even for a long-since
+          completed stage (attachStageTat only ever covers a pending queue). */}
+      {tat && (
+        <span className={`${styles.stageCardTat} ${tat.completed ? (tat.delayed ? styles.tatDoneLate : styles.tatDone) : (tat.delayed ? styles.tatLate : styles.tatOk)}`}>
+          {tat.completed
+            ? (tat.backdated ? 'TAT: already on record' : `TAT: ${tat.elapsed} of ${tat.budget}${tat.delayed ? ` (${tat.overdueBy} late)` : ''}`)
+            : `TAT: ${tat.elapsed} of ${tat.budget}${tat.delayed ? ` · ${tat.overdueBy} over` : ' · running'}`}
+        </span>
       )}
     </div>
   );

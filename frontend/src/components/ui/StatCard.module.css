@@ -85,6 +85,24 @@ button.hitArea { cursor: pointer; }
 .trend.down { color: var(--error); }
 .trend.flat { color: var(--text-3); }
 
+/* Two equally-weighted halves in one card — see StatCard's `split` prop. */
+.splitRow {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  gap: 14px;
+}
+.splitHalf {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0 4px 14px;
+  border-left: 1px solid var(--line);
+}
+.splitHalf:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+
 .kfootSegments {
   display: flex;
   align-items: center;

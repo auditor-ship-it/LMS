@@ -436,6 +436,9 @@ export function LeaseExpiryPage() {
                 </td>,
                 <td key="days" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   {formatDays(item.daysLeft)}
+                  {validSourceNote(item.validSource) && (
+                    <div className={styles.validSourceNote}>{validSourceNote(item.validSource)}</div>
+                  )}
                 </td>,
                 <td key="renewalStatus" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   {item.actionStatus ? <StatusBadge status={item.actionStatus} /> : '—'}
@@ -514,7 +517,12 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
           ))}
           <div className={styles.detailField}>
             <div className={styles.detailLabel}>Days Left</div>
-            <div className={styles.detailValue}>{formatDays(item.daysLeft)}</div>
+            <div className={styles.detailValue}>
+              {formatDays(item.daysLeft)}
+              {validSourceNote(item.validSource) && (
+                <span className={styles.validSourceNote}> &middot; {validSourceNote(item.validSource)}</span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -544,4 +552,14 @@ function formatDays(daysLeft) {
   if (daysLeft < 0) return `${Math.abs(daysLeft)}d overdue`;
   if (daysLeft === 0) return 'Today';
   return `${daysLeft}d left`;
+}
+
+/** Only shown for the "exactly one of the two is valid" case (validSource
+ *  'agreement'/'po') — 'both'/'none' are already self-evident from the band
+ *  (Safe / Overdue) without needing to name which date, per the explicit
+ *  "clearly identify which date is valid" requirement for the partial case. */
+function validSourceNote(validSource) {
+  if (validSource === 'agreement') return 'Agreement valid';
+  if (validSource === 'po') return 'PO valid';
+  return null;
 }

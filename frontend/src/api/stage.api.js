@@ -21,6 +21,13 @@ export const getStageDetail = (containerNo, stage, rowNum) =>
 export const saveStage = (containerNo, stage, data, rowNum) =>
   apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/stage/${stage}`, { ...data, rowNum }).then((r) => r.data.message);
 
+/** POST /api/offlease/:containerNo/stage1-invoice — the Stage 1.1 (Invoice)
+ *  tab's own save. Stage 1 is already Completed by the time a row reaches
+ *  this queue, so it goes through this separate endpoint rather than
+ *  saveStage above (see backend saveOffLeaseStage1Invoice's doc comment). */
+export const saveStage1Invoice = (containerNo, data, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/stage1-invoice`, { ...data, rowNum }).then((r) => r.data.message);
+
 /** GET /api/offlease/next-lease-id — preview only, used on Stage 1. */
 export const getNextLeaseId = () => apiClient.get('/offlease/next-lease-id').then((r) => r.data.leaseId);
 

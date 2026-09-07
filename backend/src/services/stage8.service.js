@@ -243,8 +243,15 @@ export async function getAllOffleaseMovementRows() {
    STAGE-8's Booking Order Number ("QAS 841A") rather than its Delivery Order
    Number ("1003020"), despite the column NAMES saying the opposite. Both are
    therefore offered as candidates and whichever matches wins; `matchedOn`
-   records which, so this can be tightened once the data says. */
-const S10 = { DO_NUMBER: 3 };
+   records which, so this can be tightened once the data says.
+
+   TIMESTAMP (col C) — CORRECTED 2026-09-03: earlier comments elsewhere in
+   this file claimed STAGE-10 "carries no date of its own", which was wrong —
+   it has its own real form-submission "Timestamp" column, just never
+   extracted into a field here. That earlier (incorrect) belief is why
+   Transportation/Gate-In TAT used to borrow STAGE-8/9's own timestamp as a
+   stand-in for "when was this delivered" — this is the real one. */
+const S10 = { DO_NUMBER: 3, TIMESTAMP: 2 };
 
 /** DO numbers are written inconsistently ("QAS 549", "QAS-549", "qas549"), so
  *  they are compared on alphanumerics, upper-cased. */
@@ -262,6 +269,7 @@ async function readStage10Rows() {
   return rows
     .map((r) => ({
       doNumber: safeStr(r[S10.DO_NUMBER]).trim(),
+      timestamp: safeStr(r[S10.TIMESTAMP]).trim(),
       keys: r.map(normDo).filter(Boolean),
       fields: allFields(headers, r)
     }))
@@ -511,11 +519,15 @@ export async function getDeliveredKeys() {
   const in8 = new Set(rows8.map((r) => normContainer(r.containerNo)).filter(Boolean));
   const in9 = new Set(rows9.map((r) => normContainer(r.containerNo)).filter(Boolean));
 
-  /* STAGE-10 itself carries no date of its own (see readStage10Rows) — the
-     matching STAGE-8/STAGE-9 row's own timestamp is used as this delivery
-     event's date, which is sound: STAGE-10 only ever confirms a movement
-     that STAGE-8/9 already recorded, so that movement's own date is when
-     this delivery cycle happened. */
+  /* STAGE-8/STAGE-9's own timestamp is used as this delivery event's date
+     here (not STAGE-10's own Timestamp column, which readStage10Rows also
+     exposes as of 2026-09-03) — this map only needs to know a container was
+     EVER delivered, at any point, and the booking/transport date is a
+     perfectly good "when" for that purpose. Transportation/Gate-In TAT
+     (offlease.service.js's _attachTransportGateInTat, offleaseEfficiency.
+     service.js) use STAGE-10's own real timestamp instead, since THEIR
+     question is specifically "how long between booking and delivery",
+     which needs delivery's own date, not the booking date reused. */
   for (const [src, dateField] of [[rows8, 'timestamp'], [rows9, 'lastUpdated']]) {
     for (const r of src) {
       const k = normContainer(r.containerNo);
