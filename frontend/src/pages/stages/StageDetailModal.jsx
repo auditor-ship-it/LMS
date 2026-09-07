@@ -419,22 +419,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 </div>
               )}
 
-              {/* Inspection Checklist has real fields (unlike Gate In), so the
-                  !fields.length check above never fires for it — this container
-                  specifically was routed around inspection because its Gate-In
-                  form already marked "Repair Required? = No". Nothing here to
-                  fill in, and the checklist below would be meaningless anyway. */}
-              {!identityOnly && !!data?._skipped && (
-                <div className={styles.savedPanel}>
-                  <p className={styles.savedTitle}>Skipped — Repair Not Required</p>
-                  <p className={styles.savedHint}>
-                    The Gate-In form for this container already marked it as not needing
-                    repair, so it moved straight to Billing without an inspection.
-                    {data._skipReason ? ` ${data._skipReason}.` : ''} Nothing to fill in here.
-                  </p>
-                </div>
-              )}
-
               {billing && <BillingTable billing={billing} clientName={data?.col_5} />}
 
               {/* identityOnly: the container's own details and nothing else.
