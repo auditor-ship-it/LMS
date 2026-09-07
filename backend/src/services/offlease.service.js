@@ -2436,24 +2436,20 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       };
     }
 
-    /* Inspection Checklist (internal 3) has no manual form to fill for a
-       container the Stage 3 (Gate In) form already marked "Repair Required?
-       = No" — it was routed straight to Billing, not inspected. Flagged here
-       so the modal shows that fact (and the form's own repair verdict)
-       instead of a blank 44-field checklist a fill would be meaningless on.
-       Resolved against THIS row's own client (row[5]) — see
-       pickGateFormForClient's doc comment for why container number alone
-       is not enough. */
-    if (Number(stage) === OL_INSPECTION_INTERNAL) {
-      const gf = getGateFormForContainer(containerNo, row[5]);
-      if (isRepairNotRequired(gf)) {
-        result._skipped = true;
-        result._skipReason = [
-          gf.repairRequired ? `Repair Required: ${gf.repairRequired}` : '',
-          gf.remarks ? `Remarks: ${gf.remarks}` : ''
-        ].filter(Boolean).join(' · ');
-      }
-    }
+    /* REMOVED 2026-09-07 (leftover from before the 2026-09-04 change): this
+       used to mark the row `_skipped` — hiding the real checklist behind a
+       "Skipped — Repair Not Required" panel — whenever the Gate-In form
+       said Repair Required = No. getOffLeaseData's own queue-membership
+       logic was updated 2026-09-04 to stop dropping these containers from
+       Stage 4's pending list specifically so they get a REAL inspection
+       completed, not auto-skipped — but this read path was never updated to
+       match, so opening one of those still-pending rows showed the old skip
+       screen instead of the fillable form (confirmed live: HNKU6063239,
+       50+ days "pending" with nothing actionable behind Open). The Gate-In
+       form's own repair verdict is still a real, useful data point — it's
+       just never again a reason to hide the checklist; Container Lookup's
+       history display still shows it (see isRepairNotRequired's other
+       callers). */
 
     /* Move To Stage / Send Back state — exposed for every stage (cheap, just
        a few more already-fetched columns) so the frontend can show what was
