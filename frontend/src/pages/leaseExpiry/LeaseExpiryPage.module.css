@@ -46,6 +46,10 @@
 
 .clickCell { cursor: pointer; }
 
+/* Only shown when exactly one of Agreement/PO validity kept a record from
+   being overdue — names which one, since the band alone (Safe) doesn't say. */
+.validSourceNote { font-size: 10.5px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
+
 /* Fits every column within the screen width — no horizontal scrollbar.
    table-layout: fixed divides the width evenly across columns; unlike the
    ellipsis-truncation approach, long values wrap to a second line within the

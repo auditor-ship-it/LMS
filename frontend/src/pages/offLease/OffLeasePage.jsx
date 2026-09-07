@@ -4,6 +4,7 @@ import {
 } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -12,6 +13,7 @@ import { fetchApprovalQueue, decideApproval, lookupContainer } from '../../servi
 import { RejectModal } from './RejectModal.jsx';
 import { getStageCounts as fetchStageCounts } from '../../api/offlease.api.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
+import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { LookupResult } from './LookupResult.jsx';
 import { exportLookupToExcel, exportLookupToPdf } from './lookupExport.js';
 import { PipelineDashboard } from './PipelineDashboard.jsx';
@@ -23,7 +25,15 @@ import styles from './OffLeasePage.module.css';
    Stage 2 — so it is numbered 1A and placed immediately after Stage 1 rather
    than floating at the front of the strip, where the tab order implied
    approvals happened before intimation. */
-const APPROVAL_TAB = { key: 'approval', label: 'Stage 1A (Approval)', countKey: 'approval' };
+const APPROVAL_TAB = { key: 'approval', label: 'Stage 1.2 (Approval)', countKey: 'approval' };
+
+/* Not a stage of its own either — a filtered view of Stage 1's own rows
+   (Transportation PO required, invoice not yet uploaded — see
+   getOffLeaseData's opts.filter === 'invoice' branch), given its own tab so
+   it reads the same way "Stage 1.2 (Approval)" does. Opens the exact same
+   Stage 1 form (StagePageBase with forcedFilter="invoice"), not a separate
+   queue/backend stage. Added 2026-09-04. */
+const STAGE11_TAB = { key: 'stage1invoice', label: 'Stage 1.1 (Invoice)', countKey: 'stage1Invoice' };
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -38,7 +48,7 @@ const TABS = [
       countKey: String(s.number),
       label: s.owner ? `Stage ${s.display} (${s.owner})` : `Stage ${s.display}`
     };
-    return s.display === 1 ? [tab, APPROVAL_TAB] : [tab];
+    return s.display === 1 ? [tab, STAGE11_TAB, APPROVAL_TAB] : [tab];
   })
 ];
 
@@ -76,6 +86,7 @@ export function OffLeasePage() {
   // external Gate-In form submission, an FMS update) without a manual
   // refresh — see usePolling's doc comment.
   usePolling(() => reloadCounts({ silent: true }));
+  useAutoRefresh('off-lease', () => reloadCounts({ silent: true }));
 
   return (
     <>
@@ -108,6 +119,7 @@ export function OffLeasePage() {
           (e.g. a stale value from before a permission was revoked). */}
       {tab === 'dashboard' && canAct('offleasedashboard') && <PipelineDashboard onOpenTab={setTab} />}
       {tab === 'approval' && <ApprovalQueue />}
+      {tab === 'stage1invoice' && <StagePageBase stageNumber={1} embedded forcedFilter="invoice" />}
       {tab === 'lookup' && canAct('offleaselookup') && <ContainerLookup />}
       {stageMatch && <StagePageBase stageNumber={Number(stageMatch[1])} embedded />}
     </>
@@ -117,6 +129,7 @@ export function OffLeasePage() {
 function ApprovalQueue() {
   const { data, loading, error, reload } = useAsync(() => fetchApprovalQueue(), []);
   usePolling(() => reload({ silent: true }));
+  useAutoRefresh('off-lease', () => reload({ silent: true }));
   const { canAct } = usePermission();
   const canActApproval = canAct('offleaseapproval');
 
@@ -274,7 +287,7 @@ function ApprovalQueue() {
       )}
 
       <DataGrid
-        headers={visibleHeaders}
+        headers={[...visibleHeaders, ...(data?.tatBudget ? [`TAT (${data.tatBudget})`] : [])]}
         rows={pageRows}
         loading={loading}
         error={error}
@@ -285,7 +298,21 @@ function ApprovalQueue() {
         onToggleAll={toggleAllOnPage}
         rowKey={(r) => r._rowNum}
         emptyMessage="No off-lease intimations awaiting approval"
-        renderRow={(values) => visibleColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>)}
+        renderRow={(values, item) => [
+          ...visibleColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
+          ...(data?.tatBudget
+            ? [<td key="tat">{item?.tat
+              ? (
+                <>
+                  <span className={item.tat.delayed ? styles.tatLate : styles.tatOk}>
+                    {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
+                  </span>
+                  <span className={styles.tatMeta}>Started {formatActionTimestamp(item.tat.startedAt)}</span>
+                </>
+              )
+              : '—'}</td>]
+            : [])
+        ]}
         renderActions={canActApproval ? (item) => (
           <div className={styles.actionsCell}>
             <Button

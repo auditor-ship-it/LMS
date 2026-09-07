@@ -248,23 +248,64 @@ export async function getExpiryDataByFilter(filterType, user) {
     const expDate = parseDate(expRaw); // Sheets API returns formatted strings, not Date objects — see format.js
     const poExpDate = poValidIdx >= 0 ? parseDate(row[poValidIdx]) : null;
 
-    /* Renewal urgency is driven by whichever of the two dates is CLOSER —
-       a container due for renewal because its PO lapses in 5 days is just
-       as urgent as one whose agreement lapses in 5 days, and must show that
-       way even if the other date is months out. Whichever date is present
-       and sooner wins; a blank cell simply doesn't compete. */
+    /* PO/AGREEMENT VALIDITY, rewritten 2026-09-03 (explicit request; replaces
+     * the old "whichever date is sooner wins" rule below, keeping that
+     * comment for context on what changed and why).
+     *
+     * OLD: whichever date is present and sooner wins — Math.min(agrDays,
+     * poDays). A container with a healthy PO valid 28 days out but an
+     * agreement that expired 156 days ago showed as 156 days OVERDUE,
+     * because the more-negative number always won regardless of the OTHER
+     * date being perfectly fine — confirmed live via a real container
+     * (Agreement 31/03/2026 expired, PO 30/09/2026 still valid, shown as
+     * "156d overdue").
+     *
+     * NEW: a record is only unsafe/expired if BOTH dates are expired — one
+     * valid document is enough to keep the whole record valid, matching how
+     * an actual lease/PO renewal works (either paper covers the container).
+     *   - both valid           -> 'safe', unconditionally (two live documents
+     *     is inherently safe, regardless of how soon either individually
+     *     runs out — the OTHER one still covers it)
+     *   - exactly one valid    -> banded on THAT date's own day-count (normal
+     *     critical/warning/safe thresholds), `validSource` names which one
+     *     so the UI can say so explicitly rather than leaving it ambiguous
+     *   - neither valid (or neither present) -> 'overdue', days shown as the
+     *     LESS-negative (nearer to today) of the two, i.e. the more
+     *     recently-lapsed one — the more meaningful "how overdue" figure
+     *     when both have expired, not whichever happens to be more negative
+     *
+     * A blank/unparseable cell never competes — it's treated the same as
+     * "expired" for the both-invalid case, same as before.
+     */
     const daysUntil = (d) => (d ? Math.ceil((d - today) / 86400000) : null);
     const agrDays = daysUntil(expDate);
     const poDays = daysUntil(poExpDate);
-    let days = '';
-    if (agrDays !== null && poDays !== null) days = Math.min(agrDays, poDays);
-    else if (agrDays !== null) days = agrDays;
-    else if (poDays !== null) days = poDays;
+    const agrValid = agrDays !== null && agrDays >= 0;
+    const poValid = poDays !== null && poDays >= 0;
 
+    let days = '';
     let band = '';
-    if (typeof days === 'number') {
-      if (days < 0) band = 'overdue';
-      else if (days <= 7) band = 'critical';
+    let validSource = 'none'; // 'agreement' | 'po' | 'both' | 'none' — which date the record is actually valid on
+    if (agrValid && poValid) {
+      validSource = 'both';
+      days = Math.max(agrDays, poDays);
+      band = 'safe';
+    } else if (agrValid) {
+      validSource = 'agreement';
+      days = agrDays;
+    } else if (poValid) {
+      validSource = 'po';
+      days = poDays;
+    } else if (agrDays !== null || poDays !== null) {
+      // Neither valid — the less-negative (more recently lapsed) of whichever
+      // day-counts exist is the more meaningful "how overdue" figure.
+      days = agrDays !== null && poDays !== null ? Math.max(agrDays, poDays) : (agrDays ?? poDays);
+      band = 'overdue';
+    }
+    if (band === '' && typeof days === 'number') {
+      // One valid date's own tier — never 'overdue' here, agrValid/poValid
+      // already guarantees days >= 0 on this branch.
+      if (days <= 7) band = 'critical';
       else if (days <= 30) band = 'warning';
       else band = 'safe';
     }
@@ -287,7 +328,7 @@ export async function getExpiryDataByFilter(filterType, user) {
        why a container-number-only lookup there isn't safe (a returned
        lease's old row stays on the sheet, not deleted, so a container can
        have more than one row and a plain search can grab the wrong one). */
-    const item = { row: displayRow, daysLeft: days, band, actionDate: safeStr(vVal), actionStatus: safeStr(wVal), _rowNum: ri + 2 };
+    const item = { row: displayRow, daysLeft: days, band, validSource, actionDate: safeStr(vVal), actionStatus: safeStr(wVal), _rowNum: ri + 2 };
     if (filterType === 'documents') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);
@@ -563,14 +604,29 @@ function _deployedClientName(headers, row) {
 
 /**
  * The Renewal Log as report rows — one per renewal, newest first.
+ *
+ * SALE-PERSON SCOPING, added 2026-09-03 — explicit follow-up request: a
+ * scoped Sales Executive must not see other Sales Executives' renewals
+ * either, same as New Lease Report just above. This sheet has no "Sale
+ * Person"/"Sale Exec" column of its own to fall back on (unlike New Lease's
+ * SALE_EXEC cell) — the only signal available is `clientName`, resolved
+ * through the live CRM. So this follows offlease.service.js's
+ * `_offLeaseAccessGate` variant of the pattern (pure CRM lookup, FAIL CLOSED:
+ * a client the CRM doesn't recognise is excluded for a scoped caller, not
+ * shown) rather than getExpiryDataByFilter/getNewLeaseReport's
+ * CRM-with-sheet-fallback variant, for the same reason Off-Lease uses it —
+ * no sheet value exists here to fall back to.
  */
-export async function getRenewalLogReport() {
+export async function getRenewalLogReport(user) {
   let rows = [];
   try {
     ({ rows } = await getSheetData(RENEWAL_LOG_SHEET));
   } catch (e) {
     return { headers: RENEWAL_LOG_HEADERS, data: [], error: e?.message || 'Could not read Renewal Log' };
   }
+
+  const salePersonScope = salePersonScopeFor(user);
+  const resolveSalePerson = salePersonScope ? await getSalePersonResolver() : null;
 
   const data = rows
     .filter((r) => safeStr(r[1]).trim() !== '')     // must have a container
@@ -587,6 +643,7 @@ export async function getRenewalLogReport() {
       oldPoFile: safeStr(r[9]).trim(),
       oldAgreementFile: safeStr(r[10]).trim()
     }))
+    .filter((row) => !resolveSalePerson || matchesSalePersonScope(resolveSalePerson(row.clientName) || '', salePersonScope))
     .reverse();                                     // newest first
 
   return { headers: RENEWAL_LOG_HEADERS, data, count: data.length };
@@ -600,8 +657,16 @@ export async function getRenewalLogReport() {
  * can fall in a different month from the deployment it describes.
  *
  * Column positions are fixed on this sheet.
+ *
+ * SALE-PERSON SCOPING, added 2026-09-03 — explicit request: a logged-in Sales
+ * Executive must only see New Lease rows for clients assigned to them, using
+ * the SAME scoping mechanism getExpiryDataByFilter already uses for Lease
+ * Expiry (see this file's own header note there). `user` is `req.user`; an
+ * admin (ROLES_ADMIN_EMAILS) or any login not mapped in
+ * salePersonAccess.service.js's SALE_PERSON_BY_EMAIL sees every row,
+ * unchanged from before this scoping existed.
  */
-export async function getNewLeaseReport() {
+export async function getNewLeaseReport(user) {
   const NL = {
     CONTAINER: 0, CLIENT_CODE: 1, CLIENT_NAME: 2, ORDER_NO: 3, ORDER_TYPE: 4,
     QTY: 5, SALE_EXEC: 8, LOCATION: 9, SIZE: 10, PRODUCT_TYPE: 11, DEPLOYED_DATE: 12
@@ -615,6 +680,24 @@ export async function getNewLeaseReport() {
     return { data: [], error: e?.message || 'Could not read New Lease' };
   }
 
+  const salePersonScope = salePersonScopeFor(user);
+  /* LIVE SALE PERSON, CRM-first with a fallback to this sheet's own Sale
+   * Exec cell — identical reasoning to getExpiryDataByFilter's liveSalePerson:
+   * the sheet cell is a snapshot from whenever this row was created and can
+   * disagree with a client's CURRENT CRM-assigned owner (a reassignment
+   * afterward). Filtering on a stale cell while a scoped user's OWN other
+   * screens (Lease Expiry) already show the live name would both leak a
+   * reassigned-away client and hide a newly-assigned one. Only resolved when
+   * actually needed (a scoped caller) — getSalePersonResolver() is a real
+   * CRM read, no reason to pay for it for the common unscoped/admin case.
+   */
+  const resolveSalePerson = salePersonScope ? await getSalePersonResolver() : null;
+  const liveSaleExec = (r) => {
+    const sheetValue = safeStr(r[NL.SALE_EXEC]).trim();
+    if (!resolveSalePerson) return sheetValue;
+    return resolveSalePerson(r[NL.CLIENT_NAME]) || sheetValue;
+  };
+
   const data = rows
     .filter((r) => safeStr(r[NL.CONTAINER]).trim() !== '')
     .map((r) => ({
@@ -624,12 +707,19 @@ export async function getNewLeaseReport() {
       orderNo: safeStr(r[NL.ORDER_NO]).trim(),
       orderType: safeStr(r[NL.ORDER_TYPE]).trim(),
       qty: safeStr(r[NL.QTY]).trim(),
-      saleExec: safeStr(r[NL.SALE_EXEC]).trim(),
+      // Resolved (live) value — see liveSaleExec above. Kept as the DISPLAYED
+      // value even for an unscoped caller, so this column reads identically
+      // whoever is looking at it, not just for scoped Sales Executives.
+      saleExec: liveSaleExec(r),
       location: safeStr(r[NL.LOCATION]).trim(),
       size: safeStr(r[NL.SIZE]).trim(),
       productType: safeStr(r[NL.PRODUCT_TYPE]).trim(),
       deployedDate: fmtCellDate(r[NL.DEPLOYED_DATE])
-    }));
+    }))
+    // Filter on the SAME value just computed for display — see
+    // getExpiryDataByFilter's identical comment for why filtering on a
+    // different value than what's shown would be self-contradictory.
+    .filter((row) => !salePersonScope || matchesSalePersonScope(row.saleExec, salePersonScope));
 
   return { data, count: data.length };
 }

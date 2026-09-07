@@ -72,7 +72,10 @@ export function Sidebar({ open, onNavigate }) {
   // Renew & Document page's own KPI correctly showed 8 while this sidebar's
   // badge still read a stale 6 from first load. Subscribing here, same
   // pattern every page already uses for its own data.
-  useAutoRefresh('deployed-sheet', reloadCounts);
+  // 'off-lease' added alongside 'deployed-sheet' — a Stage 1-8 action
+  // (approve, complete a stage, move, hold) never touches the Deployed
+  // sheet, so it wouldn't otherwise reach this badge until the next poll.
+  useAutoRefresh(['deployed-sheet', 'off-lease'], reloadCounts);
   const visible = (item) => (item.sidebarKey ? canView(item.sidebarKey) : true);
 
   const visibleItems = NAV_TREE.items.filter((item) => item.children || visible(item));

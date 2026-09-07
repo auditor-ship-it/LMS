@@ -12,6 +12,7 @@ import { ALL_STAGES, stageDisplayNumber, stageCaption, isReadOnlyStage } from '.
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -102,7 +103,7 @@ function FmsDots({ item }) {
   );
 }
 
-export function StagePageBase({ stageNumber, embedded }) {
+export function StagePageBase({ stageNumber, embedded, forcedFilter }) {
   // ALL_STAGES, not STAGES: a retired stage's direct route still has to label
   // itself correctly for anyone opening historical data.
   const stage = ALL_STAGES.find((s) => s.number === stageNumber);
@@ -116,11 +117,11 @@ export function StagePageBase({ stageNumber, embedded }) {
   const stage1Extras = stageNumber === STAGE1_EXTRAS_STAGE;
 
   /* 'pending' (the normal queue), 'hold' or 'reject' (Stage 1's own Hold /
-     Reject views) — only ever switched away from 'pending' when
-     stage1Extras, but harmless to carry for every stage since
-     fetchStageList ignores it unless the backend also recognises
-     stageNumber === 1. */
-  const [subTab, setSubTab] = useState('pending');
+     Reject views), or 'invoice' (Stage 1.1 — see forcedFilter below) — only
+     ever switched away from 'pending' when stage1Extras, but harmless to
+     carry for every stage since fetchStageList ignores it unless the
+     backend also recognises stageNumber === 1. */
+  const [subTab, setSubTab] = useState(() => forcedFilter || 'pending');
   const { data, loading, error, reload } = useAsync(
     () => fetchStageList(stageNumber, stage1Extras && subTab !== 'pending' ? subTab : undefined),
     [stageNumber, stage1Extras, subTab]
@@ -132,6 +133,7 @@ export function StagePageBase({ stageNumber, embedded }) {
      load" so the tab reflects it within a minute instead of whenever
      someone happens to navigate back here. */
   usePolling(() => reload({ silent: true }));
+  useAutoRefresh('off-lease', () => reload({ silent: true }));
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
   const [locationFilter, setLocationFilter] = useState('');
@@ -245,7 +247,7 @@ export function StagePageBase({ stageNumber, embedded }) {
             drops out of the normal queue and appears here instead, same
             row, no duplicate. See saveOffLeaseHold's and
             saveOffLeaseSendRejectedToStage1's doc comments on the backend. */}
-        {stage1Extras && (
+        {stage1Extras && !forcedFilter && (
           <div className={styles.tabRow}>
             <button
               type="button"
@@ -312,6 +314,8 @@ export function StagePageBase({ stageNumber, embedded }) {
               ? 'No records on hold'
               : stage1Extras && subTab === 'reject'
               ? 'No rejected records'
+              : stage1Extras && subTab === 'invoice'
+              ? 'No pending invoice records'
               : `No pending records for ${stageCaption(stageNumber)}`
           }
           rowKey={(r) => r._rowNum}
@@ -341,24 +345,32 @@ export function StagePageBase({ stageNumber, embedded }) {
                        transport happening ahead of the paperwork) has no real
                        elapsed time to show, so it says so plainly instead of
                        a bare "0m" that reads like a bug. */
-                    <span
-                      className={item.tat.backdated ? styles.tatDone : (item.tat.delayed ? styles.tatDoneLate : styles.tatDone)}
-                      title={item.tat.backdated
-                        ? `FMS already had this movement recorded on ${formatActionTimestamp(item.tat.completedAt)}, before this record's own Stage 2 entry on ${formatActionTimestamp(item.tat.startedAt)} — transported ahead of the paperwork.`
-                        : `Started ${formatActionTimestamp(item.tat.startedAt)} · Completed ${formatActionTimestamp(item.tat.completedAt)}`}
-                    >
-                      {item.tat.backdated
-                        ? 'Completed · already on record'
-                        : `Completed · ${item.tat.elapsed}${item.tat.delayed ? ` (${item.tat.overdueBy} late)` : ''}`}
-                    </span>
+                    <>
+                      <span
+                        className={item.tat.backdated ? styles.tatDone : (item.tat.delayed ? styles.tatDoneLate : styles.tatDone)}
+                        title={item.tat.backdated
+                          ? `FMS already had this movement recorded on ${formatActionTimestamp(item.tat.completedAt)}, before this record's own Stage 2 entry on ${formatActionTimestamp(item.tat.startedAt)} — transported ahead of the paperwork.`
+                          : `Started ${formatActionTimestamp(item.tat.startedAt)} · Completed ${formatActionTimestamp(item.tat.completedAt)}`}
+                      >
+                        {item.tat.backdated
+                          ? 'Completed · already on record'
+                          : `Completed · ${item.tat.elapsed}${item.tat.delayed ? ` (${item.tat.overdueBy} late)` : ''}`}
+                      </span>
+                      <span className={styles.tatMeta}>
+                        {formatActionTimestamp(item.tat.startedAt)} &rarr; {formatActionTimestamp(item.tat.completedAt)}
+                      </span>
+                    </>
                   )
                   : (
-                    <span
-                      className={item.tat.delayed ? styles.tatLate : styles.tatOk}
-                      title={`Waiting since ${formatActionTimestamp(item.tat.startedAt)}`}
-                    >
-                      {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
-                    </span>
+                    <>
+                      <span
+                        className={item.tat.delayed ? styles.tatLate : styles.tatOk}
+                        title={`Waiting since ${formatActionTimestamp(item.tat.startedAt)}`}
+                      >
+                        {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
+                      </span>
+                      <span className={styles.tatMeta}>Started {formatActionTimestamp(item.tat.startedAt)}</span>
+                    </>
                   )
                 : '—'}</td>]
               : [])
@@ -403,6 +415,7 @@ export function StagePageBase({ stageNumber, embedded }) {
           rowNum={activeRow._rowNum}
           readOnly={!canEdit}
           identityOnly={readOnly}
+          fieldContext={forcedFilter}
           /* STAGE-8 / STAGE-9 detail for this container, matched server-side.
              Shown here rather than as grid columns — ten mostly-blank columns
              made the table unreadable. */

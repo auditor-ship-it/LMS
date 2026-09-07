@@ -35,6 +35,18 @@
  * CURRENT live move state and are cleared on Send Back; the permanent
  * audit trail lives in a separate append-only sheet — see
  * offleaseMoveHistory.service.js.
+ *
+ * Indices 317..324 ("Transportation PO", "Transportation PO Amount",
+ * "Transportation PO Required", "Invoice Amount", "Invoice Upload",
+ * "Invoice Date", "Invoice Remarks", "Invoice No") are the same kind of
+ * deliberate, hand-added exception — added 2026-09-04 for Stage 1 (Off-Lease
+ * Intimation)'s conditional Transportation PO / Invoice fields, shown in
+ * the UI as the "Stage 1.1" section (see OL_STAGE1_EXTRA_COLS in
+ * offlease.service.js). Verified as the sheet's true next-free columns
+ * before adding — 298..304 look like a gap in this array but are NOT free
+ * (298/299 = Move To Stage's own client-scope/arrival-date columns,
+ * 300..302 = Hold, 303/304 = Off-Lease Tracking Remarks/Requested By — all
+ * already in live use, just not individually commented here).
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -119,4 +131,6 @@ export const OL_HEADERS = [
   "Billing Estimated Repair Charges", "Billing Transport Cost Billed", "Billing Adjust Security Deposit",
   "Billing Security Deposit Amount", "Billing Last Date Of Billing", "Billing Accrued Rental Amount",
   "Billing Accrued Rental Amount Date", "Billing Reconcile Entire Cycle", "Billing Remark",
+  "Transportation PO", "Transportation PO Amount", "Transportation PO Required",
+  "Invoice Amount", "Invoice Upload", "Invoice Date", "Invoice Remarks", "Invoice No",
 ];

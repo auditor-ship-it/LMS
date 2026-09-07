@@ -10,14 +10,18 @@ export async function list(req, res) {
   res.json(await expiryService.getExpiryDataByFilter(filterType, req.user));
 }
 
-/** GET /api/expiry/renewal-log — Renewal Log rows for the month-wise report. */
+/** GET /api/expiry/renewal-log — Renewal Log rows for the month-wise report.
+ *  req.user determines which rows come back for a scoped Sales Executive —
+ *  see salePersonAccess.service.js, same mechanism as list() above. */
 export async function renewalLog(req, res) {
-  res.json(await expiryService.getRenewalLogReport());
+  res.json(await expiryService.getRenewalLogReport(req.user));
 }
 
-/** GET /api/expiry/new-lease-report — New Lease rows for the month-wise report. */
+/** GET /api/expiry/new-lease-report — New Lease rows for the month-wise report.
+ *  req.user determines which rows come back for a scoped Sales Executive —
+ *  see salePersonAccess.service.js, same mechanism as list() above. */
 export async function newLeaseReport(req, res) {
-  res.json(await expiryService.getNewLeaseReport());
+  res.json(await expiryService.getNewLeaseReport(req.user));
 }
 
 /**

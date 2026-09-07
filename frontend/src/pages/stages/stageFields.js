@@ -63,6 +63,11 @@ const isReefer = (v) => String(v.col_3 || '').trim().toLowerCase().includes('ree
 
 const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
 
+/** Transportation PO Required = Yes opens the PO upload/amount and Invoice
+ *  fields on Stage 1 — explicit 2026-09-04 request, kept as conditional
+ *  fields on Stage 1's own form (not a new workflow stage). */
+const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
+
 /**
  * Stage 3 inspection checklist — the 8 container inspection points from the
  * printed instruction sheet, plus Curtain / Tube Light / Mantrap.
@@ -243,6 +248,20 @@ export const STAGE_FIELDS = {
     { key: 'col_11', label: 'Off-Lease Date', type: 'date', required: true },
     { key: 'col_12', label: 'Email Notification', type: 'file' },
     { key: 'col_13', label: 'Final Billing Date', type: 'date', required: true },
+    { key: 'col_319', label: 'Return Transportation PO Required', type: 'radio', options: YES_NO, group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    { key: 'col_317', label: 'Return Transportation PO', type: 'file', showIf: poRequiredShown, group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    { key: 'col_318', label: 'Return Transportation PO Amount', type: 'number', showIf: poRequiredShown, group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    /* context: 'invoice' — these 4 fields are filled from the "Stage 1.1
+       (Invoice)" tab's own form (StagePageBase forcedFilter="invoice" ->
+       StageDetailModal fieldContext="invoice"), NOT Stage 1's own form.
+       Explicit request 2026-09-04: once Transportation PO Required is Yes,
+       the row moves to the Stage 1.1 tab and the invoice details are
+       captured there, not mixed into Stage 1's own Intimation form. */
+    { key: 'col_324', label: 'Invoice No', type: 'text', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    { key: 'col_320', label: 'Invoice Amount', type: 'number', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    { key: 'col_321', label: 'Invoice Upload', type: 'file', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    { key: 'col_322', label: 'Invoice Date', type: 'date', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
+    { key: 'col_323', label: 'Remarks', type: 'text', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
     { key: 'col_14', label: 'Remark', type: 'text' }
   ],
 

@@ -74,7 +74,7 @@ import {
 } from './googleSheets.service.js';
 import { SHEETS, EXTERNAL_SPREADSHEETS } from '../config/sheets.config.js';
 import { env } from '../config/env.js';
-import { safeStr, safeAmt, formatDateVal, parseDate } from '../utils/format.js';
+import { safeStr, safeAmt, toNum, formatDateVal, parseDate } from '../utils/format.js';
 import { normKey } from '../utils/normalize.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
@@ -335,6 +335,22 @@ const OL_STAGE3_EXTRA_COLS = [
 const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
 
 /**
+ * Off-Lease Intimation's (internal Stage 1) Transportation PO / Invoice
+ * fields — NOT part of OL_STAGE_INFO[1]'s startCol..endCol range (10..17),
+ * same "appended beyond the stage's own contiguous range" shape as every
+ * other *_EXTRA_COLS array here. Added 2026-09-04 at the sheet's true
+ * next-free columns (317-324 — verified via OL_HEADERS.length before
+ * adding; see that file's own header comment for why 298-304 looked free
+ * but weren't). The Invoice fields (320-324) and the PO upload/amount
+ * (317/318) only matter when Transportation PO Required (319) is "Yes" —
+ * see stageFields.js's poRequiredShown predicate; explicit request 2026-09-04
+ * was for conditional fields on Stage 1's own form (labelled "Stage 1.1" in
+ * the UI), not a new workflow stage. [poUpload, poAmount, poRequired,
+ * invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo].
+ */
+const OL_STAGE1_EXTRA_COLS = [317, 318, 319, 320, 321, 322, 323, 324];
+
+/**
  * Billing Reconciliation's (internal Stage 5) own data fields. NOT part of
  * OL_STAGE_INFO[5]'s startCol..endCol range (29..44) — that range's LAST four
  * columns (41-44) are Stage 5's own auto-written Remark/Timestamp/User/Status
@@ -411,8 +427,8 @@ const OL_RETIRED_STAGES = new Set([2, 4]);
    the tab shown as "Stage 2 (Transportation)" and the one shown as
    "Stage 3 (Gate In)". Named because the display numbers are not the internal
    ones and reading `6` or `7` inline invites the wrong assumption. */
-const OL_STAGE2_INTERNAL = 6;
-const OL_STAGE3_INTERNAL = 7;
+export const OL_STAGE2_INTERNAL = 6;
+export const OL_STAGE3_INTERNAL = 7;
 
 /** Container key for cross-sheet lookups — upper-cased alphanumerics only, so
  *  spacing and punctuation differences between sheets cannot miss. Must stay
@@ -1691,7 +1707,7 @@ export async function getOffLeaseEntryStamp(containerNo) {
  * Sales login must never see another client's off-lease data through any
  * Off-Lease endpoint, including by guessing a container number.
  */
-async function _offLeaseAccessGate(user) {
+export async function _offLeaseAccessGate(user) {
   const scope = salePersonScopeFor(user);
   if (!scope) return null;
   const resolveSalePerson = await getSalePersonResolver();
@@ -1826,7 +1842,6 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     const containerKey = _containerKey(row[0]);
     const gfRow = gateFormIndex ? pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]) : null;
     const gatedIn = isGatedIn(gfRow);
-    const repairSkip = isRepairNotRequired(gfRow);
     // Active "Move To Stage" jump (any reason) — computed once, reused
     // below both to skip stages this jump bypassed and to land the row in
     // its chosen destination stage's queue. See _jumpSkipsStage's doc comment.
@@ -1845,12 +1860,16 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     /* Gate In (internal 7) has no form left to fill its own status column —
        the external form confirming it IS the completion signal, so a
        gated-in container must drop out of this queue exactly as if that
-       column had been written. Inspection Checklist (internal 3) similarly
-       drops a repair-not-required container from ITS queue: that container
-       is not "pending inspection", it was routed around inspection
-       entirely and belongs in Billing's queue instead. */
+       column had been written.
+       CHANGED 2026-09-04, explicit request: Inspection Checklist (internal
+       3) no longer drops a repair-not-required container from its queue —
+       every gated-in container now waits here for Inspection to actually be
+       completed, whether or not the Gate-In form marked Repair Required as
+       No. isRepairNotRequired/repairSkip is no longer read in this
+       function at all — it remains a real, useful data point elsewhere
+       (Container Lookup's own history display still shows what the Gate-In
+       form said), just never again as a queue-bypass signal. */
     if (Number(stage) === OL_STAGE3_INTERNAL && gatedIn) continue;
-    if (Number(stage) === OL_INSPECTION_INTERNAL && repairSkip) continue;
     if (!(Number(stage) === 1 && opts.filter === 'reject' && rejected)) {
       if (statusVal && String(statusVal).trim() !== '') continue;
     }
@@ -1863,7 +1882,15 @@ export async function getOffLeaseData(stage, opts = {}, user) {
        shows everything else (a held or rejected record disappears from the
        normal pending list the moment it's put on hold or rejected).
        Irrelevant to every other stage, so this only ever branches for
-       Stage 1. */
+       Stage 1.
+       NOTE: the Stage 1.1 (Invoice) tab is NOT a filter of THIS queue — a
+       row only gets Transportation PO Required (col_319) answered as part
+       of the very same submission that completes Stage 1, so by the time
+       col_319 is ever "Yes" the row has already failed the statusVal check
+       above and never reaches here. See getOffLeaseStage11InvoiceData
+       (separate function, mirrors getOffLeaseApprovalData's shape) for that
+       queue instead — it reads COMPLETED Stage 1 rows, same as Approval
+       does, just gated differently. */
     if (Number(stage) === 1) {
       const held = _isOnHold(row);
       if (opts.filter === 'hold') { if (!held) continue; }
@@ -1926,19 +1953,20 @@ export async function getOffLeaseData(stage, opts = {}, user) {
       /* Same "released past a column nothing can fill" shape as the
          delivery bypass, one link further down the chain: Inspection's gate
          is normally Gate In's status column (135); a gated-in container
-         releases into Inspection instead on the external form's signal.
-         Billing's gate is normally Inspection's status column (28); a
-         repair-not-required container releases straight into Billing on
-         the SAME form's signal, skipping Inspection's column entirely. */
-      const releasedByGateForm = Number(stage) === OL_INSPECTION_INTERNAL && gatedIn && !repairSkip && transportDone;
-      const releasedByRepairSkip = Number(stage) === OL_BILLING_INTERNAL && repairSkip && transportDone;
+         releases into Inspection instead on the external form's signal —
+         CHANGED 2026-09-04: regardless of Repair Required Yes/No now (see
+         the identical change on the Stage 4 exclusion above). Billing no
+         longer has an equivalent repair-not-required bypass of its own —
+         every container must actually pass through Inspection's queue
+         first; removed the direct-to-Billing release that used to skip it. */
+      const releasedByGateForm = Number(stage) === OL_INSPECTION_INTERNAL && gatedIn && transportDone;
       /* This row's active jump names `stage` as its actual destination — it
          must appear in this queue right now regardless of whatever normally
          gates entry to it (an intermediate stage's own status), which is
          the whole point of a direct jump. See _prepareMoveToStage/
          saveOffLeaseMoveToStage's doc comments. */
       const jumpLanded = jumpTarget != null && Number(stage) === jumpTarget && stage1Done;
-      const bypassed = releasedByDelivery || releasedByGateForm || releasedByRepairSkip || jumpLanded;
+      const bypassed = releasedByDelivery || releasedByGateForm || jumpLanded;
       const prevStatus = row[prevInfo.statusCol];
       if (!bypassed && (!prevStatus || String(prevStatus).trim() === '')) continue;
 
@@ -2025,7 +2053,14 @@ export async function getOffLeaseStageCounts(user) {
   let approval = null;
   try { approval = (await getOffLeaseApprovalData(user, sheetData)).data.length; } catch (e) { /* leave null */ }
 
-  return { counts, approval };
+  // "Stage 1.1 (Invoice)" tab badge — same queue logic as its own list
+  // (getOffLeaseStage11InvoiceData, defined near getOffLeaseApprovalData).
+  let stage1Invoice = null;
+  try {
+    stage1Invoice = (await getOffLeaseStage11InvoiceData(user, sheetData)).data.length;
+  } catch (e) { /* leave null */ }
+
+  return { counts, approval, stage1Invoice };
 }
 
 /**
@@ -2039,42 +2074,44 @@ function _laterStamp(a, b) {
 /**
  * Stage 2 (Transportation, internal 6) and Gate In (internal 7)'s TAT — special-
  * cased out of the generic attachStageTat below because neither fits its
- * "previous stage's own status column" rule:
+ * "previous stage's own status column" rule (Stage 2's own status column is
+ * essentially never written — see OL_STAGE2_INTERNAL's bypass comments in
+ * getOffLeaseData).
  *
- *  - Stage 2's own status column is essentially never written (it is
- *    released by the STAGE-10 delivery signal or a manual move, not a form
- *    submission — see OL_STAGE2_INTERNAL's bypass comments in getOffLeaseData),
- *    so there was never a real completion timestamp to freeze its TAT at —
- *    the generic function only ever measured live elapsed time against
- *    Date.now(), forever, even long after the container had actually moved
- *    on. Explicit 2026-09-02 request: Stage 2's clock starts when the record
- *    enters Stage 2 (Intimation Approval — the queue's own gate already
- *    requires this, see getOffLeaseData's gatedByApproval check, so every
- *    row reaching this list has already been approved) and STOPS the moment
- *    STAGE-8 (movement booked) and STAGE-9 (transported) both have a
- *    matching Offlease row for this container — frozen at that instant, not
- *    recomputed against "now" afterward.
- *  - Gate In inherited the exact same problem one hop further down the
- *    chain: its "previous stage" (Stage 2) has no real completion timestamp
- *    either, so its clock silently fell back to the container's original
- *    off-lease entry date — weeks earlier — making it read as permanently,
- *    massively overdue. Explicit request: Gate In's clock does not start at
- *    all until STAGE-10 (site delivery) has a matching row for this
- *    container; STAGE-10 carries no date of its own (see readStage10Rows'
- *    doc comment in stage8.service.js), so the same STAGE-8/9 timestamp that
- *    closed Stage 2 is reused as "when this delivery cycle happened" — the
- *    established convention getDeliveredKeys() already uses for the same
- *    reason.
+ * REDEFINED 2026-09-03 — Transportation TAT's window changed, per an explicit
+ * full-pipeline spec that superseded the same-day-earlier "physical transit"
+ * definition (STAGE-8/9-fetch -> STAGE-10-fetch, worked example: Stage 8
+ * fetched 01-Sep 10:00 AM, Stage 10 fetched 03-Sep 09:00 AM -> 1d 23h). That
+ * measurement is intentionally no longer tracked as its own named TAT — the
+ * new spec explicitly chose the Stage-2-entry-to-booking-confirmed window
+ * over it (asked directly which of the two the metric should be; "switch",
+ * not "track both").
+ *
+ *  - Transportation TAT starts the moment the case ENTERS Stage 2 — i.e. the
+ *    Intimation Approval gate is approved (a container isn't actually in
+ *    Stage 2 before that; mirrors the same approval-gate convention already
+ *    used for the generic per-stage walk elsewhere in this app).
+ *  - Transportation TAT ends — frozen permanently, never recomputed against
+ *    "now" again — the moment STAGE-8 (movement booked) AND STAGE-9
+ *    (transported) BOTH have a matching row for this container (the later of
+ *    their own two real timestamps). Do not start Gate In's clock here.
+ *  - Not yet approved -> no TAT at all (null), the case hasn't reached Stage 2
+ *    yet. Approved but STAGE-8/9 not yet both matched -> still Running, live
+ *    duration from approval to now.
+ *  - Gate In's own clock is unrelated to any of the above — see below.
  *
  * Matched via getMatchedFmsForContainer — the SAME exact container+client
  * match (matchRow) the Stage 2 grid's own FMS status dots use, not
- * getFmsForContainer/matchByContainer. BUG FOUND 2026-09-02 via CXRU1042578:
- * matchByContainer silently drops the client check entirely when called with
- * no cycle-start bound, so it can return a completely unrelated client's old
- * movement for a reused container number — which briefly showed this Stage 2
- * TAT badge as "Completed" while the row's own FMS dots correctly showed
- * nothing matched. See getMatchedFmsForContainer's own doc comment for the
- * full account.
+ * getFmsForContainer/matchByContainer (see that function's own doc comment
+ * for why: matchByContainer silently drops the client check entirely when
+ * called with no cycle-start bound, which previously produced a false
+ * "Completed" from a completely unrelated client's old movement on a reused
+ * container number — confirmed 2026-09-02 via CXRU1042578).
+ *
+ * Recalculates from live FMS/approval data on every call — nothing here is
+ * stored, so every existing Transportation/Gate-In record is already
+ * computed with this corrected logic the next time it's read; there is no
+ * separate migration.
  */
 async function _attachTransportGateInTat(result, stageNum, budget) {
   const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
@@ -2089,42 +2126,45 @@ async function _attachTransportGateInTat(result, stageNum, budget) {
     let fms = null;
     try { fms = await getMatchedFmsForContainer(container, client); } catch (e) { fms = null; }
 
-    // "Fetched" = STAGE-8 and STAGE-9 both have a matching Offlease row for
-    // this container — the moment BOTH exist is the later of their own two
-    // real timestamps (a stable, recorded value — never Date.now()/page-load
-    // time, so this stays identical across refreshes and re-logins).
+    // Transportation's own start: case entered Stage 2 = Intimation Approval
+    // approved.
+    const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim().toLowerCase() : '';
+    const approvedAt = (apStatus === 'approved' && apTsCol >= 0) ? parseStamp(row[apTsCol]) : null;
+    // transportation_tat_end: STAGE-8 and STAGE-9 both matched — the later of
+    // their own two real timestamps (stable, never Date.now(), so this stays
+    // identical across refreshes and re-logins).
     const stage89At = (fms?.movement && fms?.transport)
       ? _laterStamp(parseStamp(fms.movement.timestamp), parseStamp(fms.transport.lastUpdated))
       : null;
+    // Gate In's own start: STAGE-10's own real Timestamp column — never
+    // borrowed from STAGE-8/9.
+    const stage10At = fms?.delivery ? parseStamp(fms.delivery.timestamp) : null;
+    // Transportation's own end — normally stage89At, but explicit rule
+    // 2026-09-03: "when Stage 10 is fetched, Transportation TAT must already
+    // be stopped" / "never run two stage TATs simultaneously". STAGE-10 only
+    // ever arrives once a shipment has physically gone through Stage 8/9, so
+    // if STAGE-10 somehow matched before STAGE-8/9 did (FMS data landing out
+    // of order — the same "paperwork catching up to physical reality"
+    // pattern already documented elsewhere in this file), STAGE-10's own
+    // timestamp is the best available proof Transportation is over, and
+    // using it here is what keeps Transportation and Gate In from ever both
+    // reading "running" at once.
+    const transportEndAt = stage89At || stage10At;
 
     if (stageNum === OL_STAGE2_INTERNAL) {
-      const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim().toLowerCase() : '';
-      const approvedAt = (apStatus === 'approved' && apTsCol >= 0) ? parseStamp(row[apTsCol]) : null;
-      // Falls back to Stage 1's own completion only if the approval columns
-      // are somehow missing — every row in this queue has already passed
-      // the approval gate, so this should only ever be the fallback path.
-      const stage1Raw = safeStr(row[OL_STAGE_INFO[1].statusCol - 2]).trim();
-      const start = approvedAt || parseStamp(stage1Raw);
-      if (!start) { item.tat = null; continue; }
+      if (!approvedAt) { item.tat = null; continue; }
 
-      if (stage89At) {
-        // Frozen at the completion instant — not recomputed against "now".
-        /* BACKDATED CASE, found 2026-09-02 via CXRU1042578: the external FMS
-           system's own STAGE-8/9 timestamps (Feb/Mar) can predate this app's
-           own Stage 2 entry (Aug approval) by months — the same "paperwork
-           catching up to physical reality" pattern already documented
-           extensively in stage8.service.js (matchByContainer's doc comment).
-           The container was genuinely already booked+transported in FMS
-           before this app's own off-lease record for it even reached
-           approval, so `rawElapsed` goes negative. Clamping to 0 for the
-           displayed duration is correct (there is no real "waiting time" to
-           show), but "Completed · 0m" alone reads as a bug rather than what
-           it is — flagged explicitly so the UI can say so instead. */
-        const rawElapsed = stage89At.getTime() - start.getTime();
+      if (transportEndAt) {
+        // Frozen at the end instant — not recomputed against "now".
+        // BACKDATED CASE: if the end timestamp somehow predates approval
+        // (data entered out of order in the external system), clamp to 0
+        // rather than show a negative duration, and say so explicitly
+        // rather than let "Completed · 0m" read as a bug.
+        const rawElapsed = transportEndAt.getTime() - approvedAt.getTime();
         const elapsed = Math.max(0, rawElapsed);
         item.tat = {
-          startedAt: start.toISOString(),
-          completedAt: stage89At.toISOString(),
+          startedAt: approvedAt.toISOString(),
+          completedAt: transportEndAt.toISOString(),
           budget: budgetLabel(budget),
           elapsed: humanize(elapsed),
           elapsedMs: elapsed,
@@ -2134,9 +2174,9 @@ async function _attachTransportGateInTat(result, stageNum, budget) {
           backdated: rawElapsed < 0
         };
       } else {
-        const elapsed = Date.now() - start.getTime();
+        const elapsed = Date.now() - approvedAt.getTime();
         item.tat = {
-          startedAt: start.toISOString(),
+          startedAt: approvedAt.toISOString(),
           budget: budgetLabel(budget),
           elapsed: humanize(elapsed),
           elapsedMs: elapsed,
@@ -2146,20 +2186,46 @@ async function _attachTransportGateInTat(result, stageNum, budget) {
         };
       }
     } else {
-      // Gate In — do not calculate anything until STAGE-10 (site delivery)
-      // has a matching row; a container mid-transport, or not yet booked at
-      // all, has simply not reached this point yet.
-      if (!fms?.delivery || !stage89At) { item.tat = null; continue; }
-      const elapsed = Date.now() - stage89At.getTime();
-      item.tat = {
-        startedAt: stage89At.toISOString(),
-        budget: budgetLabel(budget),
-        elapsed: humanize(elapsed),
-        elapsedMs: elapsed,
-        delayed: elapsed > budget,
-        overdueBy: elapsed > budget ? humanize(elapsed - budget) : '',
-        completed: false
-      };
+      // Gate In — starts exactly at STAGE-10's own fetch timestamp.
+      //
+      // FIXED 2026-09-03: this used to have no stop point at all, so a
+      // container stayed "running" forever once STAGE-10 was ever matched —
+      // even long after it had physically gated in and moved on to
+      // Inspection/Billing/FMS Closure, which inflated "currently overdue"
+      // far past the real, live Stage 3 queue (confirmed live: 17 shown vs
+      // ~5 actually pending). Gate In DOES have a real completion signal —
+      // the Stage 3 form's own "Inward (Gate-In)" submission (isGatedIn),
+      // the same signal every other bypass check in this app already uses —
+      // frozen at that form's own timestamp once it exists.
+      if (!stage10At) { item.tat = null; continue; }
+      const gfRow = getGateFormForContainer(container, client);
+      const gateInAt = isGatedIn(gfRow) ? parseStamp(gfRow?.timestamp) : null;
+      if (gateInAt) {
+        const rawElapsed = gateInAt.getTime() - stage10At.getTime();
+        const elapsed = Math.max(0, rawElapsed);
+        item.tat = {
+          startedAt: stage10At.toISOString(),
+          completedAt: gateInAt.toISOString(),
+          budget: budgetLabel(budget),
+          elapsed: humanize(elapsed),
+          elapsedMs: elapsed,
+          delayed: elapsed > budget,
+          overdueBy: elapsed > budget ? humanize(elapsed - budget) : '',
+          completed: true,
+          backdated: rawElapsed < 0
+        };
+      } else {
+        const elapsed = Date.now() - stage10At.getTime();
+        item.tat = {
+          startedAt: stage10At.toISOString(),
+          budget: budgetLabel(budget),
+          elapsed: humanize(elapsed),
+          elapsedMs: elapsed,
+          delayed: elapsed > budget,
+          overdueBy: elapsed > budget ? humanize(elapsed - budget) : '',
+          completed: false
+        };
+      }
     }
   }
   result.tatBudget = budgetLabel(budget);
@@ -2215,12 +2281,34 @@ export async function attachStageTat(result, stage) {
 
   const { rows } = await getSheetDataFromMongo(OL_SHEET);
 
+  /* Gate In's own status column is virtually never written — it is released
+     by the Stage 3 form's "Inward (Gate-In)" signal, not a status-column
+     submission (see OL_STAGE2_INTERNAL's bypass comments in getOffLeaseData).
+     A stage whose immediate predecessor IS Gate In needs that real signal
+     instead of falling straight back to the off-lease entry date, weeks
+     earlier: Inspection (stage 4, prevNum always 7), and Billing (stage 5)
+     whenever Inspection itself was skipped via repair-not-required — a row
+     can only reach Stage 5's own queue with a blank Inspection column by
+     having been bypassed, since a still-pending Inspection wouldn't be here
+     yet. BUG FOUND 2026-09-03 via MYRU4513729: Gate In was actually filled
+     02-Sep, but Stage 4's TAT read "Started 25-Aug" — its off-lease entry
+     date — because Gate In's own status column was blank and the old
+     fallback chain had nowhere better to go. */
+  const needsGateInFallback = prevNum === OL_STAGE3_INTERNAL || stageNum === 5;
+  const gateFormIndex = needsGateInFallback ? getGateFormIndexSync() : null;
+
   for (const item of result.data) {
     const row = rows[item._rowNum - 2] || [];
     const entry = entryByContainer.get(normKey(item.row?.[0])) || '';
-    /* Previous stage's completion, falling back to the off-lease entry stamp
-       when that stage was never stamped. */
-    const startRaw = (prevInfo ? safeStr(row[prevInfo.statusCol - 2]).trim() : '') || entry;
+    /* Previous stage's completion, falling back to Gate In's own real
+       completion signal (when applicable) and then the off-lease entry stamp
+       when neither is available. */
+    let startRaw = (prevInfo ? safeStr(row[prevInfo.statusCol - 2]).trim() : '') || '';
+    if (!startRaw && needsGateInFallback) {
+      const gfRow = pickGateFormForClient(gateFormIndex.get(_containerKey(row[0])) || [], row[5]);
+      if (isGatedIn(gfRow) && gfRow?.timestamp) startRaw = gfRow.timestamp;
+    }
+    startRaw = startRaw || entry;
 
     const start = parseStamp(startRaw);
     if (!start) { item.tat = null; continue; }
@@ -2279,6 +2367,24 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 
+    if (Number(stage) === 1) {
+      // [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload,
+      // invoiceDate, invoiceRemarks, invoiceNo] — see OL_STAGE1_EXTRA_COLS'
+      // own doc comment. safeStr for uploads (Drive URLs — fmtCell's
+      // parseDate() can misread a digit-bearing string as a date, the exact
+      // bug Stage 5's own extra-cols read is documented as avoiding), the
+      // Yes/No radio and plain text remarks/invoice no; fmtNumCell for the
+      // amount, fmtCell only for the genuine date field.
+      const [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo] = OL_STAGE1_EXTRA_COLS;
+      result[`col_${poUpload}`] = safeStr(row[poUpload]);
+      result[`col_${poAmount}`] = fmtNumCell(row[poAmount]);
+      result[`col_${poRequired}`] = safeStr(row[poRequired]);
+      result[`col_${invoiceAmount}`] = fmtNumCell(row[invoiceAmount]);
+      result[`col_${invoiceUpload}`] = safeStr(row[invoiceUpload]);
+      result[`col_${invoiceRemarks}`] = safeStr(row[invoiceRemarks]);
+      result[`col_${invoiceDate}`] = fmtCell(row[invoiceDate]);
+      result[`col_${invoiceNo}`] = safeStr(row[invoiceNo]);
+    }
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
 
@@ -3030,12 +3136,12 @@ export async function saveOffLeaseSendBackFast(containerNo, userEmail, knownRow)
  *  status column stays blank, exactly like any other still-pending Stage 1
  *  row. These two columns are the ONLY thing that changes, which is also
  *  all Send Back To Stage 1 clears — same row, no duplicate ever created. */
-const OL_HOLD_TIMESTAMP_COL = 300;
+export const OL_HOLD_TIMESTAMP_COL = 300;
 const OL_HOLD_BY_COL = 301;
 const OL_HOLD_REMARKS_COL = 302;
 const OL_HOLD_ALL_COLS = [OL_HOLD_TIMESTAMP_COL, OL_HOLD_BY_COL, OL_HOLD_REMARKS_COL];
 
-function _isOnHold(row) {
+export function _isOnHold(row) {
   return safeStr(row[OL_HOLD_TIMESTAMP_COL]).trim() !== '';
 }
 
@@ -3340,8 +3446,12 @@ function _clientNameFallback(leaseInfo) {
  *   In), the same class of scorecard/queue mismatch fixed 2026-08-20 for
  *   the STAGE-10 delivery bypass.
  * @param repairSkip true when that SAME form row is also marked "Repair
- *   Required? = No" — Inspection Checklist (Stage 4) is skipped entirely,
- *   so it counts as done here too, advancing straight to Billing.
+ *   Required? = No". CHANGED 2026-09-04: no longer treated as a bypass —
+ *   Inspection Checklist (Stage 4) now waits for a real completion
+ *   regardless of Repair Required Yes/No (matches getOffLeaseData's own
+ *   queue gating, which dropped the identical bypass the same day). Kept as
+ *   a parameter so every existing caller's call site stays unchanged; no
+ *   longer read inside this function.
  * @param delivered true when STAGE-10 has this container's site delivery —
  *   Transportation (Stage 2) has no status column left to fill either, so
  *   this substitutes for it the same way. Applied HERE, inline with every
@@ -3407,7 +3517,6 @@ export function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSki
     const jumpSkipped = _jumpSkipsStage(jumpTarget, s);
     const bypassDone = (s === OL_STAGE2_INTERNAL && (delivered || movedOut) && stage1Done)
       || (s === OL_STAGE3_INTERNAL && gatedIn)
-      || (s === OL_INSPECTION_INTERNAL && repairSkip)
       || jumpSkipped;
     return {
       stage: s,
@@ -3415,7 +3524,7 @@ export function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSki
       label: OL_STAGE_LABELS[s],
       done: st !== '' || bypassDone,
       real: st !== '', // genuinely filled in (not just bypass-inferred) — see the backward pass below
-      skipped: (s === OL_INSPECTION_INTERNAL && repairSkip) || jumpSkipped,
+      skipped: jumpSkipped,
       movedToHere: jumpTarget != null && s === jumpTarget,
       timestamp: row[info.statusCol - 2],
       remark
@@ -3561,6 +3670,15 @@ export async function getOffLeaseDashboardData(user) {
   try {
     approvalPendingRows = new Set((await getOffLeaseApprovalData(user, sheetData)).data.map((d) => d._rowNum));
   } catch (e) { /* leave empty — no approval-queue containers surfaced, not a broken dashboard */ }
+  /* Stage 1.1 (Invoice) — completed-Stage-1 rows held out of Approval
+     pending their invoice (see getOffLeaseStage11InvoiceData's doc
+     comment). Disjoint from approvalPendingRows by construction: the same
+     gate that populates this set is also what excludes these rows from the
+     Approval queue. Added 2026-09-04. */
+  let stage1InvoicePendingRows = new Set();
+  try {
+    stage1InvoicePendingRows = new Set((await getOffLeaseStage11InvoiceData(user, sheetData)).data.map((d) => d._rowNum));
+  } catch (e) { /* leave empty — no Stage 1.1 containers surfaced, not a broken dashboard */ }
 
   const items = [];
   /* byStage seeded directly from each stage's own real queue length
@@ -3574,7 +3692,13 @@ export async function getOffLeaseDashboardData(user) {
    * only way byStage stays exactly right by construction. pendingApproval
    * still accumulates per-row below since Off-Lease Tracking rows and the
    * approval queue are already known to be disjoint by definition. */
-  const kpis = { active: 0, pendingApproval: 0, byStage: { ...byStageQueueCounts }, completedThisMonth: 0 };
+  const kpis = {
+    active: 0, pendingApproval: 0, byStage: { ...byStageQueueCounts }, completedThisMonth: 0,
+    /* Added for the dashboard's Hold/Outstanding scorecards — 2026-09-04. */
+    holdStage1: 0, outstandingCount: 0, outstandingWithDamageCount: 0,
+    /* Stage 1.1 (Invoice) scorecard — 2026-09-04. */
+    stage1Invoice: 0
+  };
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -3592,7 +3716,9 @@ export async function getOffLeaseDashboardData(user) {
     // queue-membership result — see the doc comment above.
     let currentStage = c.currentStage, stageClass = c.stageClass, currentStageNum = c.currentStageNum, completed = c.completed;
     if (c.stages[0].done) { // Stage 1 done — otherwise leave _classifyOffLeaseStages' own "Stage 1" result as-is
-      if (approvalPendingRows.has(rowNum)) {
+      if (stage1InvoicePendingRows.has(rowNum)) {
+        currentStage = 'Stage 1.1 — Invoice'; stageClass = 'stage1Invoice'; currentStageNum = null; completed = false;
+      } else if (approvalPendingRows.has(rowNum)) {
         currentStage = 'Pending Approval'; stageClass = 'approval'; currentStageNum = null; completed = false;
       } else {
         const pending = pendingByRow.get(rowNum);
@@ -3606,6 +3732,24 @@ export async function getOffLeaseDashboardData(user) {
         }
       }
     }
+
+    // Hold — Stage 1 only, read straight off this same row (no extra fetch).
+    const onHold = _isOnHold(row);
+
+    /* Outstanding Payment — Billing Reconciliation's own Outstanding Amount
+       cell (OL_STAGE5_EXTRA_COLS[1], col 306); 0/blank for any row that
+       hasn't reached Billing yet, so this naturally only counts records
+       that have. "With damage" cross-references the SAME row's Inspection
+       Checklist fault points (_olIsFaultStatus — Damage/Rusty/Cut/etc.,
+       same rule stageFields.js's own isFaultStatus uses) — a blank
+       Inspection (not yet reached, or skipped via repair-not-required)
+       simply contributes no fault points, not a false positive. */
+    const outstandingAmount = toNum(row[306]);
+    const hasOutstanding = outstandingAmount > 0;
+    const hasDamage = hasOutstanding && (
+      OL_INSPECTION_POINTS.some((p) => _olIsFaultStatus(row[p.status]))
+      || OL_MACHINE_POINTS.some((p) => _olIsFaultStatus(row[p.status]))
+    );
 
     items.push({
       container,
@@ -3628,6 +3772,9 @@ export async function getOffLeaseDashboardData(user) {
       currentStage,
       stageClass,
       currentStageNum,
+      onHold,
+      hasOutstanding,
+      hasDamage,
       /* Every stage THIS ROW is genuinely pending in right now (see the
          pendingByRow doc comment above for why this must be keyed by row,
          not container number), not just the single one currentStageNum
@@ -3649,12 +3796,122 @@ export async function getOffLeaseDashboardData(user) {
 
     if (!completed) kpis.active++;
     if (stageClass === 'approval') kpis.pendingApproval++;
+    if (stageClass === 'stage1Invoice') kpis.stage1Invoice++;
     // byStage is seeded directly from each stage's own queue length above —
     // not accumulated here, see that comment for why.
     if (completed && _completedThisMonth(c.stages[7])) kpis.completedThisMonth++;
+    if (onHold) kpis.holdStage1++;
+    if (hasOutstanding) {
+      kpis.outstandingCount++;
+      if (hasDamage) kpis.outstandingWithDamageCount++;
+    }
   }
 
   return { kpis, items, ...(_stale ? { _stale, _staleSince } : {}) };
+}
+
+/**
+ * Per-stage TAT for the Container Lookup detail view — every ACTIVE stage,
+ * whether currently pending or long since completed, unlike attachStageTat
+ * (which only ever runs against a single stage's PENDING queue). Reuses the
+ * exact same start/end definitions already confirmed for the pending-list
+ * views:
+ *  - Stage 1: off-lease entry stamp -> Stage 1's own completion.
+ *  - Transportation (6): Intimation Approval approved -> STAGE-8+9 both
+ *    matched in FMS (_attachTransportGateInTat's definition).
+ *  - Gate In (7): STAGE-10's own FMS timestamp -> the Stage 3 form's real
+ *    "Inward (Gate-In)" submission (same function's definition).
+ *  - Inspection (3): Gate In's real completion (not its unfillable status
+ *    column) -> Inspection's own completion. Skipped entirely when
+ *    repair-not-required (nothing to measure — the stage never happened).
+ *  - Billing (5): Inspection's real completion, or Gate In's if Inspection
+ *    was skipped -> Billing's own completion (mirrors attachStageTat's
+ *    Gate-In fallback for this exact case).
+ *  - FMS Closure (8): Billing's real completion -> its own completion.
+ *
+ * Best-effort throughout: any missing signal simply means that stage's `tat`
+ * comes back null (nothing to show), never a thrown error that would cost
+ * the caller the whole lookup.
+ */
+async function _buildContainerStageTatMap(row, headers, gfRow, gatedIn, repairSkip) {
+  const container = row[0];
+  const clientName = row[5];
+  const map = {};
+
+  let entryAt = null;
+  try {
+    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+    const updCol = _findOlColumnMulti(dh, ['update']);
+    const stsCol = _findOlColumnMulti(dh, ['status']);
+    if (updCol >= 0) {
+      const k = normKey(container);
+      for (const r of dr) {
+        if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+        if (normKey(r[0]) === k) { entryAt = parseStamp(safeStr(r[updCol]).trim()); break; }
+      }
+    }
+  } catch (e) { /* best-effort — a missing entry stamp just leaves Stage 1's tat null */ }
+
+  const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+  const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim().toLowerCase() : '';
+  const approvedAt = (apStatus === 'approved' && apTsCol >= 0) ? parseStamp(row[apTsCol]) : null;
+
+  let fms = null;
+  try { fms = await getMatchedFmsForContainer(container, clientName); } catch (e) { fms = null; }
+  const stage89At = (fms?.movement && fms?.transport)
+    ? _laterStamp(parseStamp(fms.movement.timestamp), parseStamp(fms.transport.lastUpdated))
+    : null;
+  const stage10At = fms?.delivery ? parseStamp(fms.delivery.timestamp) : null;
+  const gateInAt = gatedIn ? parseStamp(gfRow?.timestamp) : null;
+
+  const mk = (start, end, budget) => {
+    if (!start || !budget) return null;
+    if (end) {
+      const rawElapsed = end.getTime() - start.getTime();
+      const elapsed = Math.max(0, rawElapsed);
+      return {
+        startedAt: start.toISOString(), completedAt: end.toISOString(), budget: budgetLabel(budget),
+        elapsed: humanize(elapsed), elapsedMs: elapsed, delayed: elapsed > budget,
+        overdueBy: elapsed > budget ? humanize(elapsed - budget) : '', completed: true, backdated: rawElapsed < 0
+      };
+    }
+    const elapsed = Date.now() - start.getTime();
+    return {
+      startedAt: start.toISOString(), budget: budgetLabel(budget), elapsed: humanize(elapsed), elapsedMs: elapsed,
+      delayed: elapsed > budget, overdueBy: elapsed > budget ? humanize(elapsed - budget) : '', completed: false
+    };
+  };
+  const completionOf = (tat) => (tat?.completed ? new Date(tat.completedAt) : null);
+
+  const s1Info = OL_STAGE_INFO[1];
+  const s1Done = s1Info && safeStr(row[s1Info.statusCol]).trim() !== '' ? parseStamp(row[s1Info.statusCol - 2]) : null;
+  map[1] = mk(entryAt, s1Done, SLA_MS[1]);
+
+  map[OL_STAGE2_INTERNAL] = mk(approvedAt, stage89At, SLA_MS[OL_STAGE2_INTERNAL]);
+  map[OL_STAGE3_INTERNAL] = mk(stage10At, gateInAt, SLA_MS[OL_STAGE3_INTERNAL]);
+
+  /* CHANGED 2026-09-04: Inspection's TAT is now always computed, regardless
+     of Repair Required Yes/No — it no longer bypasses this stage (see
+     getOffLeaseData's own queue-gating change, same day, for the source of
+     truth this mirrors). `repairSkip` stays an accepted parameter (call
+     site unchanged) but is no longer read here. */
+  const inspStart = gateInAt || stage10At;
+  const inspInfo = OL_STAGE_INFO[OL_INSPECTION_INTERNAL];
+  const inspDone = inspInfo && safeStr(row[inspInfo.statusCol]).trim() !== '' ? parseStamp(row[inspInfo.statusCol - 2]) : null;
+  map[OL_INSPECTION_INTERNAL] = mk(inspStart, inspDone, SLA_MS[OL_INSPECTION_INTERNAL]);
+
+  const billInfo = OL_STAGE_INFO[OL_BILLING_INTERNAL];
+  const billStart = completionOf(map[OL_INSPECTION_INTERNAL]);
+  const billDone = billInfo && safeStr(row[billInfo.statusCol]).trim() !== '' ? parseStamp(row[billInfo.statusCol - 2]) : null;
+  map[OL_BILLING_INTERNAL] = mk(billStart, billDone, SLA_MS[OL_BILLING_INTERNAL]);
+
+  const closeInfo = OL_STAGE_INFO[8];
+  const closeStart = completionOf(map[OL_BILLING_INTERNAL]);
+  const closeDone = closeInfo && safeStr(row[closeInfo.statusCol]).trim() !== '' ? parseStamp(row[closeInfo.statusCol - 2]) : null;
+  map[8] = mk(closeStart, closeDone, SLA_MS[8]);
+
+  return map;
 }
 
 /* =============================================
@@ -3801,6 +4058,11 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], res.clientName);
   const gatedIn = isGatedIn(gfRow);
   const repairSkip = isRepairNotRequired(gfRow);
+  /* Best-effort — a lookup must still render every field above even if FMS
+     is briefly unreachable, so a TAT failure here costs only the TAT cards,
+     never the whole page. */
+  let stageTatMap = {};
+  try { stageTatMap = await _buildContainerStageTatMap(row, headers, gfRow, gatedIn, repairSkip); } catch (e) { stageTatMap = {}; }
 
   const stages = [];
   /* WORKFLOW ORDER, not 1..8 ascending. Internal stage numbers do not run in
@@ -3827,8 +4089,10 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
     const st = safeStr(row[info.statusCol]).trim();
     // Manual "Move To Stage" closeout — same read-straight-off-the-row signal
     // as getOffLeaseData/_classifyOffLeaseStages (see _isMovedOut/_jumpSkipsStage).
+    // Inspection (internal 3) no longer bypasses on repairSkip — CHANGED
+    // 2026-09-04, see getOffLeaseData's own queue-gating change.
     const bypassDone = (s === OL_STAGE2_INTERNAL && _isMovedOut(row))
-      || (s === OL_STAGE3_INTERNAL && gatedIn) || (s === OL_INSPECTION_INTERNAL && repairSkip)
+      || (s === OL_STAGE3_INTERNAL && gatedIn)
       || _jumpSkipsStage(_jumpTargetInternal(row), s);
 
     const fields = [];
@@ -3954,16 +4218,17 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
       displayStage: displayStageNum(s),
       label: OL_STAGE_LABELS[s],
       done: st !== '' || bypassDone,
-      /* Gate In is genuinely done (the external form confirms the physical
-         event happened); Inspection Checklist bypassed by repair-skip never
-         happened at all — it was routed around, not completed. Both count
-         as `done` for gating the next stage, but only one should ever say
-         "Completed" on screen. */
-      skipped: s === OL_INSPECTION_INTERNAL && repairSkip,
+      /* Inspection Checklist no longer has a "skipped" case at all — CHANGED
+         2026-09-04, it now always waits for a real completion regardless of
+         Repair Required Yes/No. Only a Move-To-Stage jump can still mark a
+         stage as genuinely skipped (jumpSkipped, folded into bypassDone
+         above for stages other than Gate In). */
+      skipped: false,
       status: st,
       timestamp: gateFormTimestamp,
       user: gateFormUser,
       fields: gateFormFields,
+      tat: stageTatMap[s] || null,
       ...(inspection ? { inspection } : {}),
       ...(machine ? { machine } : {}),
       ...(cabin ? { cabin } : {}),
@@ -4044,6 +4309,14 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
     'Stage 1 Remark', 'Stage 1 Completed On'
   ];
 
+  // Stage 1's own completion timestamp — 2 columns before its status column,
+  // the same convention every other stage in this file follows (see
+  // OL_STAGE_INFO's statusCol comments). Every row reaching this function
+  // has already passed the s1Status === 'completed' check below, so this is
+  // always the real moment the case entered Stage 1A, never a guess.
+  const s1TsCol = stage1StatusCol - 2;
+  const approvalBudget = SLA_MS.approval;
+
   const finalData = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -4057,11 +4330,146 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
     const apprStatus = row[approvalStatusCol];
     if (apprStatus && String(apprStatus).trim().toLowerCase() !== '') continue;
 
+    /* Return Transportation PO Required (col_319) = "Yes" holds a row out of
+       Approval until its Invoice Upload (col_321) is filled in — it belongs
+       in the Stage 1.1 (Invoice) queue first (getOffLeaseStage11InvoiceData,
+       same two columns). Explicit request 2026-09-04. */
+    const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
+    if (poRequired && String(row[321] || '').trim() === '') continue;
+
     const displayRow = displayIndices.map((ci) => (dateCols.has(ci) ? fmtCell(row[ci]) : safeStr(row[ci])));
+
+    /* TAT — every row here is by definition still pending (the apprStatus
+       blank filter above), so this is always a live "Running" duration
+       against the 1h approval budget, never a frozen "Completed" one. */
+    const start = parseStamp(safeStr(row[s1TsCol]).trim());
+    let tat = null;
+    if (start) {
+      const elapsed = Date.now() - start.getTime();
+      tat = {
+        startedAt: start.toISOString(),
+        budget: budgetLabel(approvalBudget),
+        elapsed: humanize(elapsed),
+        elapsedMs: elapsed,
+        delayed: elapsed > approvalBudget,
+        overdueBy: elapsed > approvalBudget ? humanize(elapsed - approvalBudget) : '',
+        completed: false
+      };
+    }
+    finalData.push({ row: displayRow, _rowNum: i + 2, tat });
+  }
+
+  return { headers: displayHeaders, data: finalData, count: finalData.length, tatBudget: budgetLabel(approvalBudget) };
+}
+
+/**
+ * Rows where Stage 1 is Completed, Return Transportation PO Required
+ * (col_319) = "Yes", and the Invoice hasn't been uploaded yet (col_321
+ * blank) — the "Stage 1.1 (Invoice)" tab. Sibling of getOffLeaseApprovalData
+ * just above: a completed-Stage-1 row sits HERE instead of Approval until
+ * the invoice is filled in (see saveOffLeaseStage1Invoice and the matching
+ * gate added to getOffLeaseApprovalData). Explicit request 2026-09-04 — a
+ * container never reaches here with col_319 still blank, since Transportation
+ * PO Required is only ever answered as part of the same submission that
+ * completes Stage 1 (see getOffLeaseData's own doc comment on why this can't
+ * be a filter of the pending-Stage-1 queue).
+ */
+export async function getOffLeaseStage11InvoiceData(user, preFetchedSheetData) {
+  await _ensureOffLeaseSheet();
+  const { headers, rows } = preFetchedSheetData || await getSheetDataFromMongo(OL_SHEET);
+  if (!rows.length) return { headers: [], data: [], count: 0 };
+
+  const gate = await _offLeaseAccessGate(user);
+  const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+
+  const displayIndices = [0, 1, 2, 3, 5, 6, 7, 8];
+  const displayHeaders = [
+    'Container No', 'Lease ID', 'Size', 'Type', 'Client Name',
+    'Location', 'Deployed Date', 'Valid Upto'
+  ];
+
+  const finalData = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row[0] || String(row[0]).trim() === '') continue;
+    if (gate && !gate(safeStr(row[5]))) continue;
+
+    const s1Status = safeStr(row[stage1StatusCol]).trim().toLowerCase();
+    if (s1Status !== 'completed') continue;
+
+    const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
+    if (!poRequired) continue;
+    const invoiceUploaded = String(row[321] || '').trim() !== '';
+    if (invoiceUploaded) continue;
+
+    const displayRow = displayIndices.map((ci) => ((ci === 7 || ci === 8) ? fmtCell(row[ci]) : safeStr(row[ci])));
     finalData.push({ row: displayRow, _rowNum: i + 2 });
   }
 
   return { headers: displayHeaders, data: finalData, count: finalData.length };
+}
+
+/**
+ * Save the invoice fields for a row already sitting in the Stage 1.1
+ * (Invoice) queue — Stage 1 itself is already Completed by the time a row
+ * reaches here, so this deliberately does NOT go through saveOffLeaseStage
+ * (its ALREADY_PROCESSED guard would reject any further write to a
+ * completed stage 1). Only the 5 invoice columns are writable; anything
+ * else in the payload is silently ignored — this is not a general Stage 1
+ * editor.
+ */
+export async function saveOffLeaseStage1Invoice(containerNo, data, userEmail, knownRow) {
+  await checkActionPermission('offlease1', userEmail);
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+    const row = rows[rn - 2] || [];
+
+    const s1Status = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim().toLowerCase();
+    if (s1Status !== 'completed') throw new AppError('Stage 1 has not been completed yet.');
+    const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
+    if (!poRequired) throw new AppError('Return Transportation PO is not required for this record.');
+
+    // [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo]
+    const invoiceCols = new Set(OL_STAGE1_EXTRA_COLS.slice(3));
+
+    const payload = { ...(data || {}) };
+    _sanitizeRichTextPayload(payload);
+    const cellUpdates = [];
+    const mirrored = {};
+    for (const key of Object.keys(payload)) {
+      if (key.indexOf('col_') !== 0) continue;
+      const colIdx = parseInt(key.replace('col_', ''), 10);
+      if (!invoiceCols.has(colIdx)) continue;
+      const val = payload[key];
+      if (val === '' || val === undefined || val === null) continue;
+      const colName = OL_HEADERS[colIdx] || '';
+      const cellVal = colName.toLowerCase().indexOf('date') !== -1 && typeof val === 'string' && val.length > 0
+        ? (parseFormDate(val) ? safeStr(parseFormDate(val)) : val)
+        : val;
+      cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(colIdx)}${rn}`, values: [[cellVal]] });
+      mirrored[`row.${colIdx}`] = cellVal;
+    }
+    if (!cellUpdates.length) throw new AppError('No invoice fields to save.');
+
+    await batchUpdateValues(cellUpdates);
+
+    // Mirror into Mongo immediately — same reasoning as saveOffLeaseStage's
+    // own mirror block: without it, the row would still show in Stage 1.1
+    // (and stay hidden from Approval) until the next reconcile cycle.
+    try {
+      const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: mirrored });
+      if (!r.matchedCount) console.warn(`[OL-STAGE1-INVOICE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-STAGE1-INVOICE] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
 }
 
 export async function saveOffLeaseApprovalAction(containerNo, status, userEmail, remarks = '', knownRow) {
