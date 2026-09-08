@@ -85,7 +85,7 @@ import { getCollection } from './mongo.service.js';
 import { getSheetDataFromMongo, getMongoRowsWithKeys } from './mongoSheetData.service.js';
 import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
-import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
+import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
 import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer } from './stage8.service.js';
@@ -1428,8 +1428,24 @@ async function _sendOffLeaseNotification(row) {
     </table>
   `;
 
-  await sendMail({ to: 'support@crystalgroup.in', subject, body, html });
-  console.log(`[OL-ADD-EMAIL] Off-Lease notification sent for ${fields[0][1]}`);
+  /* Recipient changed 2026-09-07 (explicit request) from a single fixed
+   * support@crystalgroup.in to shivani.dhall@crystalgroup.in, CC
+   * pushpa.shetty@crystalgroup.in PLUS whichever sales executive owns this
+   * container's client — resolved the same way Lease Expiry resolves "Sale
+   * Person" (Sales CRM's assignedTo, keyed by Client Name — read-only, see
+   * getSalePersonResolver's own doc comment), then mapped to that
+   * executive's login email via emailForSalePerson (the same explicit
+   * 6-person map Lease Expiry's own access scoping and daily digest use —
+   * salePersonAccess.service.js). A client whose salesperson isn't one of
+   * those 6 (or isn't in the CRM at all) simply gets no extra CC — never a
+   * reason to fail sending the notification itself. */
+  const resolveSalePerson = await getSalePersonResolver();
+  const salePersonName = resolveSalePerson(row[5]) || '';
+  const salePersonEmail = salePersonName ? emailForSalePerson(salePersonName) : null;
+  const cc = ['pushpa.shetty@crystalgroup.in', salePersonEmail].filter(Boolean).join(',');
+
+  await sendMail({ to: 'shivani.dhall@crystalgroup.in', cc, subject, body, html });
+  console.log(`[OL-ADD-EMAIL] Off-Lease notification sent for ${fields[0][1]} (sale person: ${salePersonName || 'unresolved'} -> ${salePersonEmail || 'no CC'})`);
 }
 
 /* =============================================
