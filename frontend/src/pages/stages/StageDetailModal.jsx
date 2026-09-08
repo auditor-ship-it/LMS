@@ -785,7 +785,10 @@ function CostReferencePanel({ transportCost, inspectionCost }) {
         </div>
         <div className={styles.outstandingCard}>
           <span className={styles.outstandingLabel}>Inspection / Repair Estimate</span>
-          <span className={styles.outstandingValue}>{i !== null ? inr(i) : '—'}</span>
+          {/* No usable figure (blank cell, "NA", or no checklist/Gate-In data
+              at all) reads as "no repair cost", not "unknown" — shown as ₹0,
+              not "—". Explicit request 2026-09-08. */}
+          <span className={styles.outstandingValue}>{inr(i ?? 0)}</span>
         </div>
         <div className={styles.outstandingCard}>
           <span className={styles.outstandingLabel}>Total</span>
