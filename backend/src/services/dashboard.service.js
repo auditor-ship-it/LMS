@@ -9,8 +9,7 @@
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
 import { safeStr, parseDate } from '../utils/format.js';
-import { normKey } from '../utils/normalize.js';
-import { _expiryOrderNoMap, _deployedRawValues } from './expiry.service.js';
+import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues } from './expiry.service.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -198,7 +197,7 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
 
     containers.push({
       container: safeStr(row[0]),   // A = Container
-      orderNo: ordMap[normKey(row[0])] || '',
+      orderNo: _resolveOrderNo(ordMap, row[0], row[1]), // client-disambiguated — see expiry.service.js's own doc comment
       clientCode: safeStr(row[15]),  // P = Client Code
       clientName: safeStr(row[1]),   // B = Client Name
       size: safeStr(row[2]),         // C = Size

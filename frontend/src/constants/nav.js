@@ -38,11 +38,11 @@ export const NAV_TREE = {
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
-    /* No sidebarKey — same reasoning as 'reports' just below: the Sidebar
-       Access sheet is read POSITIONALLY against SIDEBAR_KEYS, so a new key
-       needs a matching column added there before it grants anything. Left
-       unkeyed (always visible) rather than shipping a nav item nobody can see. */
-    { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency', path: ROUTES.OFF_LEASE_EFFICIENCY, icon: 'grid', section: 'Returns' },
+    // sidebarKey added 2026-09-10 — the matching SIDEBAR_KEYS column now
+    // exists (permissions.config.js) and roles.service.js backfills every
+    // existing user's row to TRUE for it, so this doesn't silently vanish
+    // for anyone the moment this ships (see _ensureSidebarHeaderWidth).
+    { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency', path: ROUTES.OFF_LEASE_EFFICIENCY, icon: 'grid', sidebarKey: 'offLeaseEfficiency', section: 'Returns' },
     /* No sidebarKey: the Sidebar Access sheet is read POSITIONALLY against
        SIDEBAR_KEYS, so a new key needs a matching column added there before it
        grants anything. Left unkeyed (always visible) until that column exists,

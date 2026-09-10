@@ -74,8 +74,10 @@ export const PERMISSION_KEYS = [
    * `offlease6` is still the third-from-last entry, still governs the same
    * sheet column, and now simply SAYS "Stage 2" because that is what Stage 2
    * has meant since the reorder. */
-  { key: 'offleaseapproval', label: 'Off-Lease Stage 1A: Approval' },
-  { key: 'offlease1', label: 'Off-Lease Stage 1: Intimation (Christopher)' },
+  { key: 'offleaseapproval', label: 'Off-Lease Stage 1.2: Approval' },
+  // Also governs the Stage 1.1 (Invoice) tab — same permission, no separate
+  // key, since that tab is a filtered view of Stage 1's own data/form.
+  { key: 'offlease1', label: 'Off-Lease Stage 1 / 1.1: Intimation & Invoice (Christopher)' },
   // Retired 2026-08-10 — no live tab corresponds to this. Deliberately NOT
   // labelled "Stage 2", which now means Transportation (offlease6, below).
   { key: 'offlease2', label: 'Off-Lease (Retired) Lifting / Arrival' },
@@ -127,12 +129,30 @@ export const SIDEBAR_KEYS = [
   // Lease Management's own Renew & Document / Off-Lease pages, which had no
   // dedicated sidebar toggle before (see nav.js's requireBoth wiring).
   { key: 'renewDocument', label: 'Renew & Document' },
-  { key: 'offLease', label: 'Off-Lease' }
-  /* 'agreementForm' removed 2026-08-18 — the Agreement Form page was deleted.
-     'returnDashboard' removed 2026-08-18 — the Return Dashboard page was
-     deleted too. NEITHER slot is reused: this array is positional against
-     the live "Sidebar Access" sheet, and every key so far has been appended
-     for that exact reason (see the comments above). Reusing a slot would
-     silently hand the OLD toggle's stored true/false to whatever feature
-     claims it next. */
+  { key: 'offLease', label: 'Off-Lease' },
+  /* BUG FOUND AND FIXED 2026-09-10: 'returnDashboard'/'agreementForm' were
+     dropped from THIS array on 2026-08-18 when their pages were deleted, but
+     the live "Sidebar Access" sheet was never trimmed to match — it still
+     physically has both columns (confirmed live: 20 header columns wide,
+     this array only accounted for 17). Since this array is read POSITIONALLY
+     (row[1 + index]), removing them shifted every later entry's position
+     off by 2 relative to the live sheet — appending offLeaseEfficiency
+     straight after 'offLease' silently landed it on the leftover
+     'returnDashboard' column instead of a new one, and read every existing
+     user's old (mostly false) Return Dashboard value as their
+     offLeaseEfficiency visibility, hiding the new nav item for everyone.
+     Restored as inert placeholders to keep this array's positions aligned
+     with the live sheet — neither key appears in RELEVANT_SIDEBAR_KEYS
+     (roles.service.js) or as a sidebarKey in nav.js, so they hold their
+     slot open without being editable or read anywhere. Do not remove a
+     slot from this array again without also shrinking the live sheet. */
+  { key: '_retiredReturnDashboard', label: 'Return Dashboard' },
+  { key: '_retiredAgreementForm', label: 'Agreement Form' },
+  // Genuinely the next free column — appended 2026-09-10. Off-Lease
+  // Efficiency had no dedicated sidebar toggle before (nav.js left it
+  // unkeyed/always-visible for exactly this reason: no matching column
+  // existed here yet). See roles.service.js's _ensureSidebarHeaderWidth for
+  // how the live sheet picks up this new column without hiding it from
+  // existing users.
+  { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency' }
 ];

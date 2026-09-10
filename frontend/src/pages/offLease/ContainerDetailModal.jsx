@@ -3,6 +3,7 @@ import { useAsync } from '../../hooks/useAsync.js';
 import { lookupContainer } from '../../services/offLease.service.js';
 import { exportLookupToExcel, exportLookupToPdf } from './lookupExport.js';
 import { LookupResult } from './LookupResult.jsx';
+import { useStageSelection, StageSelector } from './StageSelector.jsx';
 
 /**
  * Every stage's data for one record, opened by clicking a dashboard row.
@@ -24,6 +25,7 @@ export function ContainerDetailModal({ container, leaseId, onClose }) {
   );
 
   const ready = data?.found && !data?.multiple;
+  const { filled, selected, toggle } = useStageSelection(data);
 
   return (
     <Modal
@@ -40,9 +42,10 @@ export function ContainerDetailModal({ container, leaseId, onClose }) {
 
       {!loading && !error && ready && (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <StageSelector filled={filled} selected={selected} onToggle={toggle} />
             <Button variant="secondary" size="sm" onClick={() => exportLookupToExcel(data)}>Download Excel</Button>
-            <Button variant="secondary" size="sm" onClick={() => exportLookupToPdf(data)}>Download PDF</Button>
+            <Button variant="secondary" size="sm" onClick={() => exportLookupToPdf(data, selected)}>Download PDF</Button>
           </div>
           <LookupResult result={data} />
         </>

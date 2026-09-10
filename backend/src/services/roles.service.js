@@ -85,15 +85,31 @@ let sidebarHeaderChecked = false;
  * change here would never reach the live sheet. Same self-heal pattern as
  * offlease.service.js's _ensureOffLeaseSheet: compare live header width to
  * SIDEBAR_HEADER.length, append whatever's missing. Runs once per process.
+ *
+ * ALSO backfills every EXISTING row's new column(s) with TRUE (added
+ * 2026-09-10, offLeaseEfficiency) — loadSidebarTable() reads a cell as
+ * visible only via `row[1 + k] === true`, so a row with nothing at all in
+ * the new column would read as `false` (hidden) the instant the header
+ * widens, silently hiding the new nav item for every existing user. New
+ * accounts already start every key TRUE (ensureRolesSeeded's seed rows) —
+ * this keeps a column added to an already-seeded sheet consistent with that
+ * same "visible until explicitly hidden" convention.
  */
 async function _ensureSidebarHeaderWidth() {
   if (sidebarHeaderChecked) return;
   sidebarHeaderChecked = true;
-  const { headers } = await getSheetData(SIDEBAR_SHEET, undefined, 'A1:ZZ1').catch(() => ({ headers: [] }));
+  const { headers, rows } = await getSheetData(SIDEBAR_SHEET).catch(() => ({ headers: [], rows: [] }));
   if (!headers.length) return; // sheet doesn't exist yet — insertSheetIfMissing above handles that case
   if (headers.length >= SIDEBAR_HEADER.length) return;
-  const missing = SIDEBAR_HEADER.slice(headers.length);
-  await updateRange(SIDEBAR_SHEET, `${colLetter(headers.length)}1:${colLetter(SIDEBAR_HEADER.length - 1)}1`, [missing]);
+  const startCol = headers.length;
+  const missing = SIDEBAR_HEADER.slice(startCol);
+  await updateRange(SIDEBAR_SHEET, `${colLetter(startCol)}1:${colLetter(SIDEBAR_HEADER.length - 1)}1`, [missing]);
+
+  if (rows.length) {
+    const fillRow = new Array(missing.length).fill(true);
+    const values = rows.map(() => fillRow);
+    await updateRange(SIDEBAR_SHEET, `${colLetter(startCol)}2:${colLetter(SIDEBAR_HEADER.length - 1)}${rows.length + 1}`, values);
+  }
 }
 
 /** Seeds the two sheets once (only if Team Accounts has no data rows yet). */
@@ -248,7 +264,7 @@ export async function dynamicSidebarVisible(email, tabId) {
  * Stage 9 without a code change (or offlease9 being taken back out of this
  * set) until this is revisited.
  */
-const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'approve', 'expiry', 'renewDocument', 'offLease', 'deployedSummary']);
+const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'approve', 'expiry', 'renewDocument', 'offLease', 'deployedSummary', 'offLeaseEfficiency']);
 const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables', 'offlease2', 'offlease4', 'offlease9']);
 
 export async function getRolesAndAccessData(callerEmail) {
