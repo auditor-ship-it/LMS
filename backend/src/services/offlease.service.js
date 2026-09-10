@@ -1278,13 +1278,28 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
   return withSheetLock(OL_SHEET, async () => {
     await _ensureOffLeaseSheet();
 
-    const colA = await getRange(OL_SHEET, 'A2:A');
-    for (const r of colA) {
-      if (String(r[0]) == containerNo) return 'ALREADY_EXISTS'; // eslint-disable-line eqeqeq
-    }
-
     const { found, colMap, targetRow: deployedTargetRow } = await _lookupDeployedForOffLease(containerNo, undefined, deployedRow);
     if (!found) throw new AppError(`Container not found: ${containerNo}`);
+
+    /* Duplicate check, scoped to THIS client's lease — not just this
+     * container number ever having appeared in Off-Lease Tracking at all.
+     * A container number gets reused across unrelated lease cycles over
+     * time (confirmed live 2026-09-10: CRIU4025507 was off-leased once
+     * already under OF0024 for Shree Agency, then deployed again and
+     * leased to KPN Farm Fresh Pvt Ltd/OR524 — a separate, current, active
+     * lease). The old exact-container-match check blocked KPN's genuine
+     * off-lease action just because the box's number had been used before,
+     * the same "container numbers are not unique" issue already fixed
+     * elsewhere in this file for Gate-In matching (pickGateFormForClient)
+     * and the Order No join (_resolveOrderNo) — same fix here: only a
+     * match on BOTH container AND client counts as a real duplicate. */
+    const clientName = safeStr(found[colMap.clientName]);
+    const existing = await getRange(OL_SHEET, 'A2:F');
+    for (const r of existing) {
+      if (String(r[0]) != containerNo) continue; // eslint-disable-line eqeqeq
+      if (clientMatches(safeStr(r[5]), clientName)) return 'ALREADY_EXISTS';
+    }
+
     console.log(`[OL-ADD] colMap.rate=${colMap.rate}, rateVal=${found[colMap.rate]}`);
 
     const newRow = new Array(10).fill('');

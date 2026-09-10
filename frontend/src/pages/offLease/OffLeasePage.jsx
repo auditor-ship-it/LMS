@@ -16,6 +16,7 @@ import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { LookupResult } from './LookupResult.jsx';
 import { exportLookupToExcel, exportLookupToPdf } from './lookupExport.js';
+import { useStageSelection, StageSelector } from './StageSelector.jsx';
 import { PipelineDashboard } from './PipelineDashboard.jsx';
 import { StagePageBase } from '../stages/StagePageBase.jsx';
 import { STAGES } from '../../constants/stages.js';
@@ -415,12 +416,14 @@ function ContainerLookup() {
 
   const clear = () => { setTerm(''); setResult(null); setError(''); setDownloadError(''); };
 
+  const { filled, selected, toggle } = useStageSelection(result);
+
   // Both exports are built from `result`, which is already in memory — no
   // extra API call, so no loading state is needed here.
-  const download = (fn) => () => {
+  const download = (fn, ...args) => () => {
     setDownloadError('');
     try {
-      fn(result);
+      fn(result, ...args);
     } catch (err) {
       setDownloadError(err?.message || 'Could not build the download file.');
     }
@@ -435,11 +438,16 @@ function ContainerLookup() {
       actions={canDownload ? (
         <>
           <Button variant="secondary" size="sm" onClick={download(exportLookupToExcel)}>Download Excel</Button>
-          <Button variant="secondary" size="sm" onClick={download(exportLookupToPdf)}>Download PDF</Button>
+          <Button variant="secondary" size="sm" onClick={download(exportLookupToPdf, selected)}>Download PDF</Button>
         </>
       ) : undefined}
     >
       {downloadError && <p className={styles.actionError}>{downloadError}</p>}
+      {canDownload && filled.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <StageSelector filled={filled} selected={selected} onToggle={toggle} />
+        </div>
+      )}
 
       <form onSubmit={search} className={styles.searchRow}>
         <SearchBar value={term} onChange={setTerm} placeholder="Search by container number…" />

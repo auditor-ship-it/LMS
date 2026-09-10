@@ -145,9 +145,22 @@ function formatStamp(date) {
 
 const CARD_GAP = 3.5;
 
-export function exportLookupToPdf(result) {
+/**
+ * @param {Set<number>|null} selectedInternalStages - which completed stages
+ *   (keyed by internalStage, buildFilledStages' own stable id) to include in
+ *   the per-stage cards below. null/undefined means every stage — the
+ *   original, unfiltered behaviour, so callers that never pass this argument
+ *   are unaffected. Everything else in the report (identity, history,
+ *   invoices, estimate summary) always prints in full — only the per-stage
+ *   cards are selectable, since those are what "each stage select then
+ *   download" (explicit request 2026-09-09) was actually asking to trim.
+ */
+export function exportLookupToPdf(result, selectedInternalStages) {
   const identity = buildIdentityRows(result);
-  const filled = buildFilledStages(result);
+  const allFilled = buildFilledStages(result);
+  const filled = selectedInternalStages
+    ? allFilled.filter((s) => selectedInternalStages.has(s.internalStage))
+    : allFilled;
 
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const rpt = createReport(doc);

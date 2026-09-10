@@ -89,12 +89,15 @@ const EXPIRY_ORDER_SOURCES = [SHEETS.OPERATION, SHEETS.NEW_LEASE]; // priority o
 const EXPIRY_ORDMAP_CACHE_KEY = 'expiry_ordmap_v1';
 const EXPIRY_ORDMAP_TTL_SECS = 300;
 
+const _normClient = (v) => safeStr(v).trim().toLowerCase();
+
 export async function _expiryOrderNoMap() {
   // cacheGetOrLoad: this reads TWO sheets and is called on every Lease
   // Expiry page load — several tabs/users opening it in the same moment
   // used to mean that many independent copies of both reads.
   return cacheGetOrLoad(EXPIRY_ORDMAP_CACHE_KEY, EXPIRY_ORDMAP_TTL_SECS, async () => {
-    const map = {};
+    const map = {};      // container-only key -> Order No (legacy shape, kept for containers that only ever appear under one client)
+    const byClient = {}; // "containerKey::clientName" -> Order No — disambiguates a reused container number
     for (const sheetName of EXPIRY_ORDER_SOURCES) {
       try {
         // Read-only map-building, no write ever derives a row number from
@@ -106,19 +109,54 @@ export async function _expiryOrderNoMap() {
           const hd = String(headers[h] || '').trim().toLowerCase();
           if (hd.indexOf('order') !== -1 && hd.indexOf('no') !== -1) { ordCol = h; break; }
         }
+        /* Added 2026-09-08 — a container number is not unique across lease
+           cycles (confirmed live: CRIU4025507 leased first to Shree Agency
+           (OR482), later to KPN Farm Fresh Pvt Ltd (OR524)); the container-
+           only map below picks whichever row it reads FIRST for that
+           container and never corrects it for a later cycle's different
+           client, showing the wrong Order No forever once superseded. */
+        let clientCol = -1;
+        for (let h = 0; h < headers.length; h++) {
+          const hd = String(headers[h] || '').trim().toLowerCase();
+          if (hd.indexOf('client name') !== -1 || hd.indexOf('customer name') !== -1) { clientCol = h; break; }
+        }
         for (const row of rows) {
           const o = safeStr(row[ordCol]).trim();
           if (!o) continue;
+          const client = clientCol >= 0 ? _normClient(row[clientCol]) : '';
           const parts = _splitContainers(row[0]);
           for (const part of parts) {
             const k = _normKey(part);
-            if (k && !map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+            if (!k) continue;
+            if (!map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+            if (client) {
+              const ck = `${k}::${client}`;
+              if (!byClient[ck]) byClient[ck] = o;
+            }
           }
         }
       } catch (e) { /* never break the expiry screen */ }
     }
-    return map;
+    return { map, byClient };
   });
+}
+
+/** Order No for one container, disambiguated by client when the container
+ *  number has been leased to more than one client over time — falls back to
+ *  the plain container-only map when no client-specific entry exists (the
+ *  overwhelming majority of containers, never reused). `clientName` is the
+ *  DISPLAYED client for the row being built, not necessarily the sheet's own
+ *  raw cell — same value the row shows everywhere else, so the Order No
+ *  always matches what the rest of the row says. */
+export function _resolveOrderNo(ordMap, containerNo, clientName) {
+  const k = _normKey(containerNo);
+  if (!k) return '';
+  const client = _normClient(clientName);
+  if (client) {
+    const viaClient = ordMap.byClient[`${k}::${client}`];
+    if (viaClient) return viaClient;
+  }
+  return ordMap.map[k] || '';
 }
 
 export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
@@ -317,7 +355,7 @@ export async function getExpiryDataByFilter(filterType, user) {
     if (salePersonCol !== -1) displaySrc[salePersonCol] = salePerson;
     const displayRow = buildDisplayRow(displaySrc, 15, allHeaders);
     /* ★ Order No as the 2nd column (joined from New Lease by container) */
-    displayRow.splice(1, 0, ordMap[_normKey(row[0])] || '');
+    displayRow.splice(1, 0, _resolveOrderNo(ordMap, row[0], customerCol >= 0 ? row[customerCol] : ''));
     if (filterType === 'renewed' || filterType === 'offlease') {
       displayRow.push(safeStr(vVal));
       displayRow.push(safeStr(wVal));
