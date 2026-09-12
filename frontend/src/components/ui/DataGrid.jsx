@@ -27,7 +27,12 @@ export function DataGrid({
   selectable = false,
   selectedKeys,
   onToggleRow,
-  onToggleAll
+  onToggleAll,
+  /* Opt-in: makes the whole row clickable (e.g. to open a detail view),
+     independent of renderActions' own buttons — those live in their own
+     cell, which stops the click before it reaches the row, so a button
+     press never also triggers onRowClick. */
+  onRowClick
 }) {
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
   // The real header row stays visible while loading — it's context the user
@@ -71,9 +76,13 @@ export function DataGrid({
               const values = r.row || r;
               const key = rowKey(r, i);
               return (
-                <tr key={key}>
+                <tr
+                  key={key}
+                  onClick={onRowClick ? () => onRowClick(r, i) : undefined}
+                  className={onRowClick ? styles.clickableRow : undefined}
+                >
                   {selectable && (
-                    <td className={styles.selectCol}>
+                    <td className={styles.selectCol} onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={!!selectedKeys?.has(key)}
@@ -83,7 +92,7 @@ export function DataGrid({
                     </td>
                   )}
                   {renderRow ? renderRow(values, r, i) : values.map((v, ci) => <td key={ci}>{renderCellValue(v)}</td>)}
-                  {renderActions && <td className={styles.actionsCol}>{renderActions(r, i)}</td>}
+                  {renderActions && <td className={styles.actionsCol} onClick={(e) => e.stopPropagation()}>{renderActions(r, i)}</td>}
                 </tr>
               );
             })}

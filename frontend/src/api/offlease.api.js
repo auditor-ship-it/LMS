@@ -17,6 +17,13 @@ export const saveOffLeaseApprovalAction = (containerNo, status, remarks, rowNum)
 export const sendRejectedToStage1 = (containerNo, rowNum) =>
   apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/reject/send-back`, { rowNum }).then((r) => r.data.message);
 
+/** POST /api/offlease/:containerNo/approval/send-back — reopens Stage 1 for
+ *  editing directly from the Approval desk, without cancelling the off-lease
+ *  request (contrast saveOffLeaseApprovalAction's Rejected status, which now
+ *  cancels it outright). `remarks` carries onto Stage 1's own Remark field. */
+export const sendBackFromApproval = (containerNo, remarks, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval/send-back`, { remarks, rowNum }).then((r) => r.data.message);
+
 /** GET /api/offlease/:containerNo/outstanding — Tally outstanding, proxied
  *  through our backend so the Accounts & Collection credentials stay server-side. */
 export const getOutstanding = (containerNo, clientName) =>

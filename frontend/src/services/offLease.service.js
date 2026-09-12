@@ -1,5 +1,5 @@
 import {
-  getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, getOffLeaseContainerDetail,
+  getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, sendBackFromApproval, getOffLeaseContainerDetail,
   addToOffLeaseTracking, getOffLeaseDashboardData,
   getMovementSourceContainers, getMovementSourceContainer, getStage9Movements, saveStage9Movement,
   getRemarkThread, addRemark, updateRemark, deleteRemark
@@ -23,6 +23,11 @@ export async function decideApproval(containerNo, status, remarks, rowNum) {
 }
 export async function sendRejectedBackToStage1(containerNo, rowNum) {
   const res = await sendRejectedToStage1(containerNo, rowNum);
+  invalidate('off-lease');
+  return res;
+}
+export async function sendBackToStage1FromApproval(containerNo, remarks, rowNum) {
+  const res = await sendBackFromApproval(containerNo, remarks, rowNum);
   invalidate('off-lease');
   return res;
 }

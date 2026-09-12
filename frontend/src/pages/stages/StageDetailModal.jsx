@@ -1278,6 +1278,9 @@ function SendBackPanel({ containerNo, rowNum, moveInfo, onSentBack }) {
       <p className={styles.savedHint}>
         Reason: {moveInfo.reason}
         {moveInfo.commentType ? ` — ${moveInfo.commentType}` : ''}
+        {moveInfo.newClientName ? ` · New Client: ${moveInfo.newClientName}` : ''}
+        {moveInfo.clientScope ? ` · Scope: ${moveInfo.clientScope}` : ''}
+        {moveInfo.arrivalDate ? ` · Arrival: ${moveInfo.arrivalDate}` : ''}
         {moveInfo.date ? ` · ${moveInfo.date}` : ''}
         {moveInfo.remarks ? ` · ${moveInfo.remarks}` : ''}
       </p>
