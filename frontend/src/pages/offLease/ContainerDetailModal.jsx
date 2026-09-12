@@ -17,8 +17,14 @@ import { useStageSelection, StageSelector } from './StageSelector.jsx';
  * `leaseId` is passed through because a container can be off-leased under more
  * than one lease; without it the API returns the candidate list rather than
  * this row's record.
+ *
+ * `actions` (optional): caller-supplied buttons shown in a footer bar below
+ * the data — e.g. the Approval queue's own Approve/Send Back/Reject, so a
+ * row opened from there can be acted on without closing this and going back
+ * to the table. Undefined for every other caller (Container Lookup, the
+ * dashboard's own row-click), which stay exactly as they were.
  */
-export function ContainerDetailModal({ container, leaseId, onClose }) {
+export function ContainerDetailModal({ container, leaseId, onClose, actions }) {
   const { data, loading, error, reload } = useAsync(
     () => lookupContainer(container, leaseId),
     [container, leaseId]
@@ -48,6 +54,12 @@ export function ContainerDetailModal({ container, leaseId, onClose }) {
             <Button variant="secondary" size="sm" onClick={() => exportLookupToPdf(data, selected)}>Download PDF</Button>
           </div>
           <LookupResult result={data} />
+
+          {actions && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+              {actions}
+            </div>
+          )}
         </>
       )}
     </Modal>

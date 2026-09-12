@@ -1463,6 +1463,37 @@ async function _sendOffLeaseNotification(row) {
   console.log(`[OL-ADD-EMAIL] Off-Lease notification sent for ${fields[0][1]} (sale person: ${salePersonName || 'unresolved'} -> ${salePersonEmail || 'no CC'})`);
 }
 
+/** Vertical table, same convention as _sendOffLeaseNotification just above —
+ *  fired once, from saveOffLeaseRejectAndCancel, right as a rejected
+ *  off-lease request is cancelled and the container handed back to Lease
+ *  Expiry. `row` is the Off-Lease Tracking row as it stood BEFORE it was
+ *  cleared. Explicit request 2026-09-11. */
+async function _sendOffLeaseRejectionEmail(row, remarks, userEmail) {
+  const fields = [
+    ['Container No', safeStr(row[0])],
+    ['Lease ID', safeStr(row[1])],
+    ['Client Name', safeStr(row[5])],
+    ['Location', safeStr(row[6])],
+    ['Rejected By', safeStr(userEmail)],
+    ['Remarks', safeStr(remarks)]
+  ];
+  const subject = `Off-Lease Rejected & Cancelled – ${fields[0][1] || 'Unknown Container'}`;
+  const body = fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n'
+    + '\nThis off-lease request was rejected at Stage 1.2 (Approval) — the container has been removed from Off-Lease Tracking and handed back to Lease Expiry as a normal active lease.';
+
+  const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
+  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s || '-'}</td>`;
+  const html = `
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+    </table>
+    <p style="font-family:Arial,sans-serif;font-size:13px;">This off-lease request was rejected at Stage 1.2 (Approval) — the container has been removed from Off-Lease Tracking and handed back to Lease Expiry as a normal active lease.</p>
+  `;
+
+  await sendMail({ to: 'shivani.dhall@crystalgroup.in', subject, body, html });
+  console.log(`[OL-REJECT-EMAIL] Rejection/cancellation notice sent for ${fields[0][1]}`);
+}
+
 /* =============================================
    AUTO-CREATE OFF-LEASE STAGE 2 FROM FMS STAGE 8 (2026-08-28)
 
@@ -4080,6 +4111,18 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   res.approvalDate = apTsCol >= 0 ? formatDateVal(row[apTsCol]) : '';
   res.approvalUser = apUsCol >= 0 ? safeStr(row[apUsCol]) : '';
 
+  /* Stage 1.1 (Invoice) card, for the Off-Lease Progress board — a filtered
+     view of Stage 1's own row (Transportation PO Required / Invoice Upload,
+     OL_STAGE1_EXTRA_COLS[2]/[4] = col_319/col_321), not a real stage of its
+     own. "Skipped" when Return Transportation PO Required is anything other
+     than an explicit "Yes" — the same fields never applied to this record at
+     all, not merely "not done yet". Explicit request 2026-09-11. */
+  const [, , poRequiredCol, , invoiceUploadCol] = OL_STAGE1_EXTRA_COLS;
+  const invoicePoRequired = String(row[poRequiredCol] || '').trim().toLowerCase() === 'yes';
+  const invoiceUploaded = String(row[invoiceUploadCol] || '').trim() !== '';
+  res.invoicePoRequired = invoicePoRequired;
+  res.invoiceStatus = !invoicePoRequired ? 'skipped' : invoiceUploaded ? 'done' : 'pending';
+
   // This resolved record's own client — see pickGateFormForClient's doc
   // comment for why container number alone is not enough here.
   const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], res.clientName);
@@ -4108,6 +4151,11 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
     return info && safeStr(row[info.statusCol]).trim() !== '';
   }).sort((a, b) => a - b);
 
+  // Computed once — reused both for the generic jump-skip check below and to
+  // attach Move To Stage's own reason/remarks/client data onto whichever
+  // stage was the actual jump TARGET (see the fields.push block below).
+  const containerJumpTarget = _jumpTargetInternal(row);
+
   for (const s of [...OL_ACTIVE_STAGE_NUMS, ...retiredWithData]) {
     const info = OL_STAGE_INFO[s];
     // Stage 4's columns were deleted from the sheet, so it has no entry at all
@@ -4120,13 +4168,47 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
     // 2026-09-04, see getOffLeaseData's own queue-gating change.
     const bypassDone = (s === OL_STAGE2_INTERNAL && _isMovedOut(row))
       || (s === OL_STAGE3_INTERNAL && gatedIn)
-      || _jumpSkipsStage(_jumpTargetInternal(row), s);
+      || _jumpSkipsStage(containerJumpTarget, s);
 
     const fields = [];
     for (let c = info.startCol; c <= info.statusCol - 3; c++) {
       const sv = fmtCell(row[c]);
       if (sv.trim() === '') continue;
       fields.push({ label: OL_HEADERS[c] || `Col ${c + 1}`, value: sv });
+    }
+    /* Move To Stage's own data attaches to TWO different stages, neither of
+       which has real columns of its own filled in — without this, both
+       show "No fields recorded" despite real data (reason, remarks, who
+       moved it) being on file:
+       - Stage 2 (Transportation) itself: marked done via `bypassDone`
+         above the moment a move is INITIATED from it (_isMovedOut) — it
+         never gets its own normal-range columns filled in, since the whole
+         point of the move is to skip the FMS-tracked transport chain.
+       - Whichever stage was the actual jump DESTINATION (Gate In/
+         Inspection/Billing — containerJumpTarget): reached directly, also
+         with nothing written to its own normal-range columns.
+       Explicit request 2026-09-11 (Off-Lease lookup, MRKU0040856: Stage 2
+       showed nothing despite a real "Move To Stage — Other" jump with a
+       remark on file). Mirrors the exact same fields getOffLeaseStageDetail's
+       own `_move` object exposes to the live stage form (StageDetailModal's
+       SendBackPanel), just reshaped as plain label/value pairs here. */
+    if (s === containerJumpTarget || (s === OL_STAGE2_INTERNAL && _isMovedOut(row))) {
+      const moveReason = safeStr(row[OL_MOVE_REASON_COL]);
+      if (moveReason) fields.push({ label: 'Move To Stage — Reason', value: moveReason });
+      const moveNewClient = safeStr(row[OL_MOVE_NEW_CLIENT_COL]);
+      if (moveNewClient) fields.push({ label: 'Move To Stage — New Client Name', value: moveNewClient });
+      const moveClientScope = safeStr(row[OL_MOVE_CLIENT_SCOPE_COL]);
+      if (moveClientScope) fields.push({ label: 'Move To Stage — Client Scope', value: moveClientScope });
+      const moveArrivalDate = safeStr(row[OL_MOVE_ARRIVAL_DATE_COL]);
+      if (moveArrivalDate) fields.push({ label: 'Move To Stage — Arrival Date', value: moveArrivalDate });
+      const moveCommentType = safeStr(row[OL_MOVE_COMMENT_TYPE_COL]);
+      if (moveCommentType) fields.push({ label: 'Move To Stage — Comment Type', value: moveCommentType });
+      const moveRemarks = safeStr(row[OL_MOVE_REMARKS_COL]);
+      if (moveRemarks) fields.push({ label: 'Move To Stage — Remarks', value: moveRemarks });
+      const moveDate = safeStr(row[OL_MOVE_DATE_COL]);
+      if (moveDate) fields.push({ label: 'Move To Stage — Date', value: moveDate });
+      const moveBy = safeStr(row[OL_MOVE_BY_COL]);
+      if (moveBy) fields.push({ label: 'Move To Stage — Moved By', value: moveBy });
     }
     /* Stage 3's inspection columns are reported as a structured `inspection`
        table rather than 44 loose label/value fields — see below. Everything
@@ -4187,6 +4269,28 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
         if (sv3.trim() === '') continue;
         fields.push({ label: OL_HEADERS[eci] || `Col ${eci + 1}`, value: sv3 });
       }
+    }
+    /* Stage 1's "Filled Stage Data" card was missing these — the normal
+       startCol..endCol range above (10..17) never covered Off-Lease
+       Requested By (col 304, captured at Off-Lease creation, before Stage 1
+       is even filled — see OL_TRACKING_PERSON_NAME_COL) or the Return
+       Transportation PO fields (OL_STAGE1_EXTRA_COLS, outside that range for
+       the same reason Stage 3/4's own extras are). Explicit request
+       2026-09-11; Invoice fields are deliberately NOT included here — those
+       belong to the separate Stage 1.1 card/tab, not Stage 1's own. */
+    if (s === 1) {
+      const requestedBy = safeStr(row[OL_TRACKING_PERSON_NAME_COL]);
+      if (requestedBy.trim() !== '') fields.push({ label: OL_HEADERS[OL_TRACKING_PERSON_NAME_COL] || 'Off-Lease Requested By', value: requestedBy });
+      const [poUpload, poAmount, poRequired] = OL_STAGE1_EXTRA_COLS;
+      const poRequiredVal = safeStr(row[poRequired]);
+      if (poRequiredVal.trim() !== '') fields.push({ label: OL_HEADERS[poRequired] || 'Transportation PO Required', value: poRequiredVal });
+      // safeStr, not fmtCell — a Drive URL, same reasoning as every other
+      // upload field in this file (fmtCell's parseDate() misreads a
+      // digit-bearing string as a date).
+      const poUploadVal = safeStr(row[poUpload]);
+      if (poUploadVal.trim() !== '') fields.push({ label: OL_HEADERS[poUpload] || 'Transportation PO', value: poUploadVal });
+      const poAmountVal = fmtNumCell(row[poAmount]);
+      if (poAmountVal.trim() !== '') fields.push({ label: OL_HEADERS[poAmount] || 'Transportation PO Amount', value: poAmountVal });
     }
 
     /* Gate In (internal 7) and a repair-not-required Inspection Checklist
@@ -4680,6 +4784,144 @@ export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmai
   await enqueueSheetReplay('offlease.saveOffLeaseSendRejectedToStage1', [containerNo, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
+}
+
+/**
+ * Rejecting Stage 1.2 (Approval) now CANCELS the off-lease request entirely,
+ * rather than merely marking it Rejected (that older behaviour is still
+ * available separately via saveOffLeaseSendRejectedToStage1, for anyone who
+ * wants to revise and resubmit intimation instead — this function is a
+ * different, more final action). Explicit request 2026-09-11: "click reject
+ * then not show off-lease and show lease expiry."
+ *
+ * Effects, all in one sheet-locked pass:
+ *  1. The Deployed sheet's Off-Lease stamp (Update/Status, cols V/W — the
+ *     exact two cells addToOffLeaseTracking wrote) is reverted to blank, so
+ *     the container is a normal active lease again and reappears in Lease
+ *     Expiry's own pending list (that page explicitly excludes anything
+ *     whose Status reads "Off-Lease").
+ *  2. The ENTIRE Off-Lease Tracking row is cleared (not deleted — clearing
+ *     avoids shifting every row below it, the same reasoning
+ *     saveOffLeaseSendRejectedToStage1 already uses for its own narrower
+ *     clear). Every off-lease queue/view (getOffLeaseData,
+ *     getOffLeaseDashboardData, getOffLeaseContainerDetail, ...) starts its
+ *     per-row loop with `if (!row[0] ...) continue`, so a blank Container No
+ *     alone is enough to make the row invisible everywhere — clearing the
+ *     rest of the row too is just not leaving stale data behind.
+ *  3. Shivani Maam is emailed the rejection (_sendOffLeaseRejectionEmail).
+ *
+ * Deliberately fully live (not the Mongo-first Fast pattern the rest of this
+ * approval flow uses) — rejections are rare, and coordinating a
+ * Deployed-sheet revert + a full-row clear + an email through the
+ * outbox-replay mechanism (built for replaying ONE simple write) is not
+ * worth the complexity for an action this infrequent.
+ */
+export async function saveOffLeaseRejectAndCancel(containerNo, userEmail, remarks = '', knownRow) {
+  await checkActionPermission('offleaseapproval', userEmail);
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    const clientName = safeStr(row[5]);
+
+    // 1. Revert the Deployed sheet's Off-Lease stamp — re-resolved by
+    // container + this row's own client (same disambiguation
+    // _lookupDeployedForOffLease already does elsewhere for a reused
+    // container number), not container alone.
+    try {
+      const { found: deployedRow, targetRow: deployedTargetRow } = await _lookupDeployedForOffLease(containerNo, undefined, undefined, clientName);
+      if (deployedRow) {
+        await batchUpdateValues([
+          { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [['']] },
+          { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['']] }
+        ]);
+        try {
+          await getCollection(SHEETS.DEPLOYED).updateOne({ key: `row_${deployedTargetRow - 2}` }, { $set: { 'row.21': '', 'row.22': '' } });
+        } catch (e) { console.error('[OL-REJECT-CANCEL] Deployed mirror patch failed (reconcile will correct):', e?.message || e); }
+      } else {
+        console.error(`[OL-REJECT-CANCEL] Could not find a matching Deployed row for ${containerNo} / ${clientName} — Off-Lease Tracking row still cleared, but Lease Expiry may not show it again until this is fixed by hand.`);
+      }
+    } catch (e) {
+      console.error('[OL-REJECT-CANCEL] Deployed revert failed:', e?.message || e);
+    }
+
+    // 2. Send the rejection notice BEFORE clearing the row — needs the
+    // row's own data (client name, location, ...).
+    try {
+      await _sendOffLeaseRejectionEmail(row, remarks, userEmail);
+    } catch (e) {
+      console.error('[OL-REJECT-EMAIL]', e?.message || e);
+    }
+
+    // 3. Clear the whole Off-Lease Tracking row.
+    const width = Math.max(OL_HEADERS.length, row.length);
+    const blankRow = new Array(width).fill('');
+    await updateRange(OL_SHEET, `A${rn}:${colLetter(width - 1)}${rn}`, [blankRow]);
+    try {
+      await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: { row: blankRow, updatedAt: new Date() } });
+    } catch (e) {
+      console.error('[OL-REJECT-CANCEL] Off-Lease Tracking mirror clear failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/**
+ * "Send Back" from the Stage 1.2 (Approval) desk — a softer alternative to
+ * Reject: unlike saveOffLeaseRejectAndCancel, this does NOT cancel the
+ * off-lease request or touch the Deployed sheet at all. It just reopens
+ * Stage 1 for editing (clearing Stage 1's own status column) and carries the
+ * reviewer's remarks onto Stage 1's own Remark field (col_14), so whoever
+ * reopens Stage 1 sees exactly what needs fixing before resubmitting.
+ * Explicit request 2026-09-11: "add the send back option stage 1.2, send
+ * back and remarks, the stage 1 move then edit access."
+ *
+ * Distinct from the older saveOffLeaseSendRejectedToStage1: that one only
+ * ever fires AFTER a row has already been marked Rejected (from Stage 1's
+ * own Reject sub-tab) — this one is a direct, one-step action right from the
+ * Approval queue, and never marks anything Rejected at all.
+ */
+export async function saveOffLeaseSendBackFromApproval(containerNo, userEmail, remarks = '', knownRow) {
+  await checkActionPermission('offleaseapproval', userEmail);
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+    const row = rows[rn - 2] || [];
+    const curStatus = row[stage1StatusCol];
+    if (!curStatus || String(curStatus).trim() === '') {
+      throw new AppError('Stage 1 is not completed yet — nothing pending approval to send back.');
+    }
+
+    const rmk = safeStr(remarks).trim() || `Sent back to Stage 1 on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+    const cellUpdates = [
+      { range: `'${OL_SHEET}'!${colLetter(stage1StatusCol)}${rn}`, values: [['']] },
+      { range: `'${OL_SHEET}'!${colLetter(14)}${rn}`, values: [[rmk]] }
+    ];
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      await getCollection(OL_SHEET).updateOne(
+        { key: `row_${rn - 2}` },
+        { $set: { [`row.${stage1StatusCol}`]: '', 'row.14': rmk, updatedAt: new Date() } }
+      );
+    } catch (e) {
+      console.error('[OL-SEND-BACK] mirror patch failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
 }
 
 /** INSTANT single-row sync: one OL Tracking row -> Master Sheet (a SEPARATE

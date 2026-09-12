@@ -83,9 +83,14 @@ export function LookupResult({ result }) {
           <div className={styles.progressRow}>
             {stages.flatMap((s, i) => {
               const card = <StageCard key={s.stage} stage={s} isCurrent={s.stage === currentStageNum} />;
-              // The approval gate sits between Stage 1 and Stage 2 in the real workflow.
+              // Stage 1.1 (Invoice) and the approval gate both sit between
+              // Stage 1 and Stage 2 in the real workflow.
               if (i !== 0) return [card];
-              return [card, <GateCard key="gate" status={approvalLower} date={approvalDate} user={approvalUser} />];
+              return [
+                card,
+                <InvoiceCard key="invoice" status={result.invoiceStatus} />,
+                <GateCard key="gate" status={approvalLower} date={approvalDate} user={approvalUser} />
+              ];
             })}
           </div>
 
@@ -405,6 +410,27 @@ function StageCard({ stage, isCurrent }) {
             : `TAT: ${tat.elapsed} of ${tat.budget}${tat.delayed ? ` · ${tat.overdueBy} over` : ' · running'}`}
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * Stage 1.1 (Invoice) card — a filtered view of Stage 1's own row (Return
+ * Transportation PO Required / Invoice Upload), not a real stage of its own,
+ * same reasoning as GateCard just below. `status` comes straight off
+ * result.invoiceStatus (getOffLeaseContainerDetail): 'skipped' when Return
+ * Transportation PO was never required for this record at all — shown as
+ * "Not Required" rather than "Pending", since nothing here is actually
+ * waiting on anyone. Explicit request 2026-09-11.
+ */
+function InvoiceCard({ status }) {
+  const cls = status === 'done' ? styles.cardDone : status === 'pending' ? styles.cardCurrent : styles.cardLocked;
+  const label = status === 'done' ? 'Completed' : status === 'pending' ? 'Pending' : 'Not Required';
+  return (
+    <div className={`${styles.stageCard} ${styles.gateCard} ${cls}`}>
+      <span className={styles.stageCardLabel}>{status === 'done' ? '✓ 1.1' : '1.1'}</span>
+      <span className={styles.stageCardTitle}>Invoice</span>
+      <span className={styles.stageCardStatus}>{label}</span>
     </div>
   );
 }

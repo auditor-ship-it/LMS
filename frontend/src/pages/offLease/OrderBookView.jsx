@@ -20,20 +20,25 @@ import styles from './OrderBookView.module.css';
  * status pill links through to the tab that actually owns the action.
  */
 
-/** The chips, left to right: Stage 1, the approval gate, then the rest of the
- *  workflow. The gate is drawn as "1A" rather than a stage number because it
- *  is a decision between stages, not a stage.
+/** The chips, left to right: Stage 1, Stage 1.1 (Invoice), Stage 1.2 (the
+ *  approval gate), then the rest of the workflow. 1.1/1.2 are drawn as
+ *  sub-stage labels rather than stage numbers because neither is a stage of
+ *  its own — 1.1 is a filtered view of Stage 1's own row (Transportation PO
+ *  required, invoice not yet uploaded — see getOffLeaseData's
+ *  opts.filter === 'invoice' doc comment) and 1.2 is the decision gate
+ *  between Stage 1 and Stage 2. Renamed from the single "1A" gate chip
+ *  2026-09-11 to match the "Stage 1.1 (Invoice)"/"Stage 1.2 (Approval)" tabs
+ *  everywhere else in this app.
  *
  *  Each chip opens that stage's own tab (onOpenTab) when clicked, same as
  *  the status pill beside them -- a completed or future chip is just as
  *  clickable as the current one, so any stage's record is one click away
  *  regardless of where the container actually is right now. */
-const GATE_CHIP = '1A';
-
 function buildChips(item) {
   const [first, ...rest] = STAGES;
   const approval = String(item.approvalStatus || '').trim().toLowerCase();
   const stageOf = (n) => item.stages?.find((s) => s.stage === n);
+  const pastStage1 = !!stageOf(first.number)?.done;
 
   const chip = (stage) => {
     const s = stageOf(stage.number);
@@ -47,17 +52,25 @@ function buildChips(item) {
     };
   };
 
+  const invoice = {
+    key: 'invoice',
+    label: '1.1',
+    title: 'Stage 1.1 · Invoice',
+    tab: 'stage1invoice',
+    tone: item.stageClass === 'stage1Invoice' ? 'current' : pastStage1 ? 'done' : 'future'
+  };
+
   const gate = {
     key: 'gate',
-    label: GATE_CHIP,
-    title: `Intimation Approval — ${approval || 'pending'}`,
+    label: '1.2',
+    title: `Stage 1.2 · Intimation Approval — ${approval || 'pending'}`,
     tab: 'approval',
     tone: approval === 'approved' ? 'done'
       : approval === 'rejected' ? 'rejected'
         : item.stageClass === 'approval' ? 'current' : 'future'
   };
 
-  return [chip(first), gate, ...rest.map(chip)];
+  return [chip(first), invoice, gate, ...rest.map(chip)];
 }
 
 /** Status pill wording and tone, and which tab owns acting on it. */

@@ -264,7 +264,13 @@ export async function dynamicSidebarVisible(email, tabId) {
  * Stage 9 without a code change (or offlease9 being taken back out of this
  * set) until this is revisited.
  */
-const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'approve', 'expiry', 'renewDocument', 'offLease', 'deployedSummary', 'offLeaseEfficiency']);
+// 'approve' removed 2026-09-11 — Approve Lease no longer has a sidebar
+// entry (nav.js) at all, so a toggle for it here would control nothing,
+// exactly the "confusing/broken" dead-toggle problem this filter exists to
+// avoid (see this const's own doc comment above). The sidebarKey column
+// itself is left in SIDEBAR_KEYS/the live sheet untouched — only what the
+// admin UI displays changed.
+const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'expiry', 'renewDocument', 'offLease', 'deployedSummary', 'offLeaseEfficiency']);
 const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables', 'offlease2', 'offlease4', 'offlease9']);
 
 export async function getRolesAndAccessData(callerEmail) {

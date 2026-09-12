@@ -43,6 +43,7 @@
 .table tbody tr { transition: background var(--dur-fast) var(--ease-out); }
 .table tbody tr:last-child td { border-bottom: none; }
 .table tbody tr:hover td { background: var(--surface-2); }
+.clickableRow { cursor: pointer; }
 
 .skeletonCell { padding: 0; border-bottom: none; }
 .skeletonCell:hover { background: none !important; }

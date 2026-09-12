@@ -229,7 +229,22 @@ export async function saveApprovalAction(req, res) {
   const { status, remarks, rowNum } = req.body;
   // Permission ('offleaseapproval') is checked inside the service. `remarks`
   // (RejectModal, frontend) is only ever meaningful when status === 'Rejected'.
-  const message = await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks, rowNum);
+  // Rejected now CANCELS the off-lease request outright (removed from
+  // Off-Lease Tracking, Deployed reverted, Shivani emailed) — a different,
+  // fully-live path from Approved's Mongo-first Fast one. Explicit request
+  // 2026-09-11; see saveOffLeaseRejectAndCancel's own doc comment.
+  const message = String(status || '').trim().toLowerCase() === 'rejected'
+    ? await offLeaseService.saveOffLeaseRejectAndCancel(req.params.containerNo, req.user.email, remarks, rowNum)
+    : await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks, rowNum);
+  res.json({ message });
+}
+
+/** "Send Back" from the Approval desk — reopens Stage 1 for editing without
+ *  cancelling the off-lease request (see saveOffLeaseSendBackFromApproval's
+ *  doc comment). Explicit request 2026-09-11. */
+export async function sendBackFromApproval(req, res) {
+  const { remarks, rowNum } = req.body;
+  const message = await offLeaseService.saveOffLeaseSendBackFromApproval(req.params.containerNo, req.user.email, remarks, rowNum);
   res.json({ message });
 }
 

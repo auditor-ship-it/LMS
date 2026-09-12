@@ -9,7 +9,7 @@ import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchApprovalQueue, decideApproval, lookupContainer } from '../../services/offLease.service.js';
+import { fetchApprovalQueue, decideApproval, sendBackToStage1FromApproval, lookupContainer } from '../../services/offLease.service.js';
 import { RejectModal } from './RejectModal.jsx';
 import { getStageCounts as fetchStageCounts } from '../../api/offlease.api.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
@@ -23,7 +23,7 @@ import { STAGES } from '../../constants/stages.js';
 import styles from './OffLeasePage.module.css';
 
 /* The approval gate is not a stage of its own — it sits BETWEEN Stage 1 and
-   Stage 2 — so it is numbered 1A and placed immediately after Stage 1 rather
+   Stage 2 — so it is numbered 1.2 and placed immediately after Stage 1 rather
    than floating at the front of the strip, where the tab order implied
    approvals happened before intimation. */
 const APPROVAL_TAB = { key: 'approval', label: 'Stage 1.2 (Approval)', countKey: 'approval' };
@@ -127,6 +127,14 @@ export function OffLeasePage() {
   );
 }
 
+/* Moved out of the Pending Approval table and into the row-click inline
+   detail view instead — see visibleColIdx's own comment. Matched
+   case-insensitively against getOffLeaseApprovalData's own displayHeaders. */
+const APPROVAL_DETAIL_ONLY_HEADERS = new Set([
+  'ol intimation date', 'ol date', 'email notification', 'final billing date',
+  'stage 1 remark', 'stage 1 completed on'
+]);
+
 function ApprovalQueue() {
   const { data, loading, error, reload } = useAsync(() => fetchApprovalQueue(), []);
   usePolling(() => reload({ silent: true }));
@@ -150,11 +158,21 @@ function ApprovalQueue() {
   const rows = data?.data || [];
 
   // System-wide: rate/amount/pricing columns are hidden from every data grid.
+  // These extra ones (2026-09-11, explicit request) made this table too wide
+  // to read without horizontal scrolling — moved into the row-click inline
+  // detail view (ApprovalDetail, below) instead of sitting inline as columns.
   const visibleColIdx = useMemo(
-    () => headers.map((_, i) => i).filter((i) => !isRateOrAmountHeader(headers[i])),
+    () => headers.map((_, i) => i).filter((i) => !isRateOrAmountHeader(headers[i]) && !APPROVAL_DETAIL_ONLY_HEADERS.has(String(headers[i] || '').trim().toLowerCase())),
     [headers]
   );
   const visibleHeaders = visibleColIdx.map((i) => headers[i]);
+  // The inline row detail shows EVERYTHING (rate/amount excepted, same
+  // system-wide rule) — the columns trimmed from the table above reappear
+  // here instead of being lost.
+  const detailColIdx = useMemo(
+    () => headers.map((_, i) => i).filter((i) => !isRateOrAmountHeader(headers[i])),
+    [headers]
+  );
 
   const filtered = useMemo(() => {
     const term = debouncedSearch.trim().toLowerCase();
@@ -164,6 +182,14 @@ function ApprovalQueue() {
 
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filtered, 10);
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
+
+  /* Row detail — click a row to replace the table with its full data +
+     Approve/Send Back/Reject, same "Back to List" pattern as Lease Expiry's
+     own detail view (LeaseExpiryPage.jsx). Reverted 2026-09-11 from an
+     earlier popup-modal attempt at the same request — explicitly asked to
+     match Lease Expiry's inline style instead. */
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  const selected = selectedIdx != null ? filtered.find((it) => it._rowNum === selectedIdx) : null;
 
   const selectedItems = useMemo(
     () => filtered.filter((r) => selectedKeys.has(r._rowNum)),
@@ -266,76 +292,125 @@ function ApprovalQueue() {
     }
   };
 
+  /* Send Back — reopens Stage 1 for editing without cancelling the off-lease
+     request at all (contrast Reject, which now cancels it outright). Single
+     row only, same capture-a-remark-first shape as Reject, reusing the same
+     modal component with different wording. */
+  const [sendBackItem, setSendBackItem] = useState(null);
+  const [sendBackBusy, setSendBackBusy] = useState(false);
+  const [sendBackError, setSendBackError] = useState('');
+  const closeSendBack = () => { setSendBackItem(null); setSendBackError(''); };
+
+  const handleSendBackSubmit = async (remarks) => {
+    if (!sendBackItem) return;
+    setSendBackBusy(true);
+    setSendBackError('');
+    try {
+      await sendBackToStage1FromApproval(sendBackItem.row[0], remarks, sendBackItem._rowNum);
+      closeSendBack();
+      await reload();
+    } catch (e) {
+      setSendBackError(apiErrorMessage(e));
+    } finally {
+      setSendBackBusy(false);
+    }
+  };
+
   return (
     <Card title="Pending Approval" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}>
-      <div className={styles.toolbar}>
-        <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
-      </div>
-
       {actionError && <p className={styles.actionError}>{actionError}</p>}
 
-      {canActApproval && selectedItems.length > 0 && (
-        <div className={styles.bulkBar}>
-          <span className={styles.bulkCount}>{selectedItems.length} selected</span>
-          <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
-          <Button size="sm" variant="primary" loading={bulkBusy === 'Approved'} disabled={!!bulkBusy} onClick={() => decideBulk('Approved')}>
-            Approve ({selectedItems.length})
-          </Button>
-          <Button size="sm" variant="danger" disabled={!!bulkBusy} onClick={() => setRejectItems(selectedItems)}>
-            Reject ({selectedItems.length})
-          </Button>
-        </div>
-      )}
-
-      <DataGrid
-        headers={[...visibleHeaders, ...(data?.tatBudget ? [`TAT (${data.tatBudget})`] : [])]}
-        rows={pageRows}
-        loading={loading}
-        error={error}
-        onRetry={reload}
-        selectable={canActApproval}
-        selectedKeys={selectedKeys}
-        onToggleRow={toggleRow}
-        onToggleAll={toggleAllOnPage}
-        rowKey={(r) => r._rowNum}
-        emptyMessage="No off-lease intimations awaiting approval"
-        renderRow={(values, item) => [
-          ...visibleColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
-          ...(data?.tatBudget
-            ? [<td key="tat">{item?.tat
-              ? (
-                <>
-                  <span className={item.tat.delayed ? styles.tatLate : styles.tatOk}>
-                    {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
-                  </span>
-                  <span className={styles.tatMeta}>Started {formatActionTimestamp(item.tat.startedAt)}</span>
-                </>
-              )
-              : '—'}</td>]
-            : [])
-        ]}
-        renderActions={canActApproval ? (item) => (
-          <div className={styles.actionsCell}>
-            <Button
-              size="sm"
-              variant="primary"
-              loading={busyKey === `${item._rowNum}-Approved`}
-              onClick={() => decide(item, 'Approved')}
-            >
-              Approve
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => setRejectItem(item)}
-            >
-              Reject
-            </Button>
+      {!selected ? (
+        <>
+          <div className={styles.toolbar}>
+            <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
           </div>
-        ) : undefined}
-      />
 
-      <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
+          {canActApproval && selectedItems.length > 0 && (
+            <div className={styles.bulkBar}>
+              <span className={styles.bulkCount}>{selectedItems.length} selected</span>
+              <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
+              <Button size="sm" variant="primary" loading={bulkBusy === 'Approved'} disabled={!!bulkBusy} onClick={() => decideBulk('Approved')}>
+                Approve ({selectedItems.length})
+              </Button>
+              <Button size="sm" variant="danger" disabled={!!bulkBusy} onClick={() => setRejectItems(selectedItems)}>
+                Reject ({selectedItems.length})
+              </Button>
+            </div>
+          )}
+
+          <DataGrid
+            headers={[...visibleHeaders, ...(data?.tatBudget ? [`TAT (${data.tatBudget})`] : [])]}
+            rows={pageRows}
+            loading={loading}
+            error={error}
+            onRetry={reload}
+            selectable={canActApproval}
+            selectedKeys={selectedKeys}
+            onToggleRow={toggleRow}
+            onToggleAll={toggleAllOnPage}
+            rowKey={(r) => r._rowNum}
+            emptyMessage="No off-lease intimations awaiting approval"
+            onRowClick={(item) => setSelectedIdx(item._rowNum)}
+            renderRow={(values, item) => [
+              ...visibleColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
+              ...(data?.tatBudget
+                ? [<td key="tat">{item?.tat
+                  ? (
+                    <>
+                      <span className={item.tat.delayed ? styles.tatLate : styles.tatOk}>
+                        {item.tat.elapsed}{item.tat.delayed ? ` · ${item.tat.overdueBy} over` : ''}
+                      </span>
+                      <span className={styles.tatMeta}>Started {formatActionTimestamp(item.tat.startedAt)}</span>
+                    </>
+                  )
+                  : '—'}</td>]
+                : [])
+            ]}
+            renderActions={canActApproval ? (item) => (
+              <div className={styles.actionsCell}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={busyKey === `${item._rowNum}-Approved`}
+                  onClick={() => decide(item, 'Approved')}
+                >
+                  Approve
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setSendBackItem(item)}
+                >
+                  Send Back
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => setRejectItem(item)}
+                >
+                  Reject
+                </Button>
+              </div>
+            ) : undefined}
+          />
+
+          <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
+        </>
+      ) : (
+        <ApprovalDetail
+          item={selected}
+          headers={headers}
+          detailColIdx={detailColIdx}
+          total={filtered.length}
+          canAct={canActApproval}
+          busy={busyKey === `${selected._rowNum}-Approved`}
+          onBack={() => setSelectedIdx(null)}
+          onApprove={async () => { await decide(selected, 'Approved'); setSelectedIdx(null); }}
+          onSendBack={() => { setSelectedIdx(null); setSendBackItem(selected); }}
+          onReject={() => { setSelectedIdx(null); setRejectItem(selected); }}
+        />
+      )}
 
       <RejectModal
         open={!!(rejectItem || rejectItems)}
@@ -346,7 +421,59 @@ function ApprovalQueue() {
         onClose={closeReject}
         onSubmit={handleRejectSubmit}
       />
+
+      <RejectModal
+        open={!!sendBackItem}
+        item={sendBackItem}
+        submitting={sendBackBusy}
+        error={sendBackError}
+        onClose={closeSendBack}
+        onSubmit={handleSendBackSubmit}
+        titleWord="Send Back"
+        placeholder="What needs fixing before this can be resubmitted? (optional)"
+        submitLabel="Send Back"
+        variant="secondary"
+      />
     </Card>
+  );
+}
+
+/**
+ * Approval queue's inline row detail — same "Back to List" pattern as Lease
+ * Expiry's own LeaseExpiryDetail, showing every column (rate/amount
+ * excepted) rather than just the ones the table kept visible, plus
+ * Approve/Send Back/Reject right here so a record can be decided on without
+ * going back to the table first. Explicit request 2026-09-11.
+ */
+function ApprovalDetail({ item, headers, detailColIdx, total, canAct, busy, onBack, onApprove, onSendBack, onReject }) {
+  const containerNo = item.row?.[0];
+  return (
+    <div>
+      <Button variant="secondary" size="sm" onClick={onBack} className={styles.backBtn}>← Back to List ({total})</Button>
+
+      <div className={styles.detailCard}>
+        <div className={styles.detailHeader}>
+          <h4 className={styles.detailTitle}>{containerNo}</h4>
+        </div>
+
+        <div className={styles.detailGrid}>
+          {detailColIdx.map((ci) => (
+            <div key={ci} className={styles.detailField}>
+              <span className={styles.detailLabel}>{headers[ci]}</span>
+              <span className={styles.detailValue}>{renderCellValue(item.row?.[ci]) || '—'}</span>
+            </div>
+          ))}
+        </div>
+
+        {canAct && (
+          <div className={styles.detailFooter}>
+            <Button size="sm" variant="primary" loading={busy} onClick={onApprove}>Approve</Button>
+            <Button size="sm" variant="secondary" onClick={onSendBack}>Send Back</Button>
+            <Button size="sm" variant="danger" onClick={onReject}>Reject</Button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

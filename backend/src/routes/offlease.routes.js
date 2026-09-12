@@ -61,6 +61,11 @@ router.post('/:containerNo/reject/send-back', asyncHandler(offLeaseController.se
 /* Pending Approval queue (between Stage 1 and Stage 2) */
 router.get('/approval', asyncHandler(offLeaseController.getApprovalData));
 router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprovalAction));
+/* "Send Back" directly from the Approval desk — reopens Stage 1 for editing
+   without cancelling the off-lease request at all (contrast the Reject
+   action above, which now cancels it outright). Explicit request
+   2026-09-11; see saveOffLeaseSendBackFromApproval's doc comment. */
+router.post('/:containerNo/approval/send-back', asyncHandler(offLeaseController.sendBackFromApproval));
 
 /* Dashboard: pipeline overview (all containers) + single-container lookup */
 router.get('/dashboard', asyncHandler(offLeaseController.getDashboardData));

@@ -111,7 +111,7 @@
 }
 
 /* Approval queue TAT — same color language as StagePageBase's own TAT
-   column (see its .tatOk/.tatLate/.tatMeta), so Stage 1A reads consistently
+   column (see its .tatOk/.tatLate/.tatMeta), so Stage 1.2 reads consistently
    with every other stage's pending list. */
 .tatOk { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tatLate {
@@ -131,4 +131,49 @@
   font-weight: 500;
   color: var(--text-3, var(--text-2));
   white-space: nowrap;
+}
+
+/* Approval queue's inline row detail (click a row -> replaces the table with
+   this, "Back to List" returns) — same visual pattern as Lease Expiry's own
+   detail card (LeaseExpiryPage.module.css), copied rather than shared across
+   pages per this app's own duplication-over-cross-page-sharing convention.
+   Explicit request 2026-09-11. */
+.backBtn { margin-bottom: 16px; }
+
+.detailCard {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.detailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.detailTitle { font-family: var(--f-display); font-size: 17px; font-weight: 800; color: var(--text); margin: 0; }
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px 20px;
+  padding: 18px;
+}
+.detailField { display: flex; flex-direction: column; gap: 3px; }
+.detailLabel { font-family: var(--f-mono); font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-3); }
+.detailValue { font-size: 13px; color: var(--text); font-weight: 600; }
+
+.detailFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-2);
 }
