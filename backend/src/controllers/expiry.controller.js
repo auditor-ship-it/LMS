@@ -1,5 +1,6 @@
 import * as expiryService from '../services/expiry.service.js';
 import { refreshSalesCrmLeadIndex } from '../services/salesCrmLeads.service.js';
+import { getCompanyContainers, createRenewalLink } from '../services/renewalHandoff.service.js';
 import { cacheRemoveByPrefix } from '../utils/memoryCache.js';
 
 /** GET /api/expiry?filter=pending|renewed|documents
@@ -43,6 +44,23 @@ export async function refreshSalePersons(req, res) {
   res.json(result);
 }
 
+/** GET /api/expiry/renewal-companies/containers?company=... — the "Renew via
+ *  Sales CRM" picker's source list: every still-live container under that
+ *  exact company name. Read-only, open to any signed-in caller (same
+ *  convention as list() above). */
+export async function companyContainers(req, res) {
+  res.json(await getCompanyContainers(req.query.company));
+}
+
+/** POST /api/expiry/renewal-link — mints the signed handoff URL to the Sales
+ *  CRM's own renewal form. req.user supplies the identity baked into the
+ *  token (empId/name/email) — never a body field, so a caller can only ever
+ *  mint a link that identifies THEM. See renewalHandoff.service.js. */
+export async function renewalLink(req, res) {
+  const { company, containers } = req.body;
+  res.json(await createRenewalLink(req.user, company, containers));
+}
+
 /** POST /api/expiry/documents/upload — `rowNum` (item._rowNum from the list)
  *  addresses this exact Deployed row; see expiry.service.js's
  *  _resolveDeployedRow doc comment for why container number alone isn't
@@ -62,6 +80,13 @@ export async function completeDocumentStage(req, res) {
 export async function saveAction(req, res) {
   const { rowId, timestamp, status, rowNum } = req.body;
   res.json({ result: await expiryService.saveExpiryActionFast(rowId, timestamp, status, req.user.email, rowNum) });
+}
+
+/** POST /api/expiry/remark — Lease Expiry free-text comment for one Deployed
+ *  row (`rowNum` = item._rowNum). Does not change renewal / off-lease status. */
+export async function saveRemark(req, res) {
+  const { containerNo, remark, rowNum } = req.body;
+  res.json(await expiryService.saveExpiryRemarkFast(containerNo, remark, req.user.email, rowNum));
 }
 
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */

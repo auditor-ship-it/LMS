@@ -57,9 +57,15 @@ const norm = (v) => safeStr(v).trim().toLowerCase();
  * app never writes assignments back), so the spelling can't be fixed at the
  * source; treat known aliases as the same identity here instead. Add an
  * entry only when a real person is confirmed affected, same "grows
- * deliberately" rule as SALE_PERSON_BY_EMAIL above. */
+ * deliberately" rule as SALE_PERSON_BY_EMAIL above.
+ *
+ * sagar: ['sagar-a'] added 2026-09-16 — confirmed live the CRM carries 73
+ * leads under "Sagar-A" (a second-territory/-desk suffix, not a typo) with
+ * none of them matching key.accounts@crystalgroup.in's exact-match scope
+ * ("Sagar"), same class of gap as Laveena/Lavina above. */
 const SALE_PERSON_ALIASES = {
-  laveena: ['lavina']
+  laveena: ['lavina'],
+  sagar: ['sagar-a']
 };
 
 /** `scope`'s own normalized name plus any known aliases (see
@@ -72,18 +78,22 @@ function aliasesFor(scope) {
 
 /**
  * The Sale Person name `user` must be restricted to, or null if they see
- * every record — an admin (ROLES_ADMIN_EMAILS; "Admin sees all" per spec),
- * or a login with no mapped Sale Person identity, which keeps today's
- * unfiltered behaviour rather than hiding data with no clear owner.
+ * every record — an admin (dynamic `rolesAdmin` permission; "Admin sees
+ * all" per spec), or a login with no mapped Sale Person identity, which
+ * keeps today's unfiltered behaviour rather than hiding data with no clear
+ * owner.
  *
  * `user` is always the AUTHENTICATED session object (req.user), sourced from
  * the bearer token — never from a request body/query field a caller could
  * substitute another person's name/email/id into.
+ *
+ * Async since 2026-09-16 (isRolesAdmin became a live permission lookup,
+ * not a hardcoded array check) — every call site needs `await`.
  */
-export function salePersonScopeFor(user) {
+export async function salePersonScopeFor(user) {
   const email = norm(user?.email);
   if (!email) return null;
-  if (isRolesAdmin(email)) return null;
+  if (await isRolesAdmin(email)) return null;
   return SALE_PERSON_BY_EMAIL[email] || null;
 }
 

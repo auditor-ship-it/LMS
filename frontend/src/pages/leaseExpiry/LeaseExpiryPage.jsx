@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  PageHeader, Card, Button, StatusBadge, SearchBar, FilterBar, Pagination, DataGrid, StatCard, renderCellValue
+  PageHeader, Card, Button, StatusBadge, SearchBar, FilterBar, Pagination, DataGrid, StatCard, renderCellValue, ConfirmDialog, Icon
 } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
@@ -9,9 +9,10 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchExpiryList, actionExpiryRow, syncSalePersons } from '../../services/expiry.service.js';
+import { fetchExpiryList, actionExpiryRow, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { OffLeaseModal } from './OffLeaseModal.jsx';
+import { RenewalHandoffModal } from './RenewalHandoffModal.jsx';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { distinctOptionsForColumn } from '../../utils/tableFilters.js';
 import styles from './LeaseExpiryPage.module.css';
@@ -48,7 +49,7 @@ const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle|po)$/i;
  * container number (row[0]) as the identifier, matching the main app.
  */
 export function LeaseExpiryPage() {
-  const { data, loading, error, reload } = useAsync(() => fetchExpiryList(), []);
+  const { data, loading, error, reload, setData } = useAsync(() => fetchExpiryList(), []);
   // Renew & Document reads the same Deployed-sheet columns this page's
   // Renew/Off-Lease actions write — without this, switching to that page
   // after an action here would still show whatever it last had cached
@@ -88,6 +89,12 @@ export function LeaseExpiryPage() {
   const [offLeaseError, setOffLeaseError] = useState('');
   const closeOffLease = () => { setOffLeaseItem(null); setOffLeaseItems(null); setOffLeaseError(''); };
 
+  // "Renew via Sales CRM" — separate from the Renew button above, which
+  // still drives THIS app's own internal renewal-status workflow
+  // unchanged. This one opens the Sales CRM's own form for the salesperson
+  // to log the deal itself; see RenewalHandoffModal.jsx.
+  const [renewalHandoffItem, setRenewalHandoffItem] = useState(null);
+
   const headers = data?.headers || [];
   // Container No. alone isn't a unique row identifier — the same container
   // legitimately recurs across multiple orders/billing cycles (see
@@ -118,6 +125,14 @@ export function LeaseExpiryPage() {
   const salePersonOptions = useMemo(
     () => distinctOptionsForColumn(rows, salePersonColIdx),
     [rows, salePersonColIdx]
+  );
+
+  // For "Renew via Sales CRM" — the exact Customer Name string the picker
+  // scopes its container list by (see RenewalHandoffModal.jsx's doc comment
+  // on why this must be exact, not fuzzy).
+  const customerColIdx = useMemo(
+    () => headers.findIndex((h) => /^(customer name|client name)$/i.test(String(h || '').trim())),
+    [headers]
   );
 
   const bandCounts = useMemo(() => {
@@ -336,6 +351,16 @@ export function LeaseExpiryPage() {
     setOffLeaseItems(selectedItems);
   };
 
+  /* Patch one row's remark in place (Off-Lease RemarkCell pattern) — avoids
+     refetching the whole Deployed list just to reflect a comment save/delete. */
+  const patchRemark = (item, remark) => {
+    setData((prev) => {
+      if (!prev?.data) return prev;
+      const next = prev.data.map((r, i) => (i === item._idx ? { ...r, remark } : r));
+      return { ...prev, data: next };
+    });
+  };
+
   return (
     <>
       <PageHeader
@@ -414,7 +439,8 @@ export function LeaseExpiryPage() {
 
             <DataGrid
               className={styles.wrapTable}
-              headers={[...tableHeaders, 'Ageing', 'Days Left', 'Renewal Status']}
+              bodyMaxHeight="min(62vh, calc(100vh - 340px))"
+              headers={[...tableHeaders, 'Ageing', 'Days Left', 'Renewal Status', 'Remarks']}
               rows={pageRows}
               rowKey={(r) => r._idx}
               loading={loading}
@@ -442,6 +468,11 @@ export function LeaseExpiryPage() {
                 </td>,
                 <td key="renewalStatus" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   {item.actionStatus ? <StatusBadge status={item.actionStatus} /> : '—'}
+                </td>,
+                <td key="remark" className={`${styles.clickCell} ${styles.remarkTd}`} onClick={() => setSelectedIdx(item._idx)}>
+                  {item.remark
+                    ? <span className={styles.remarkPreview} title={item.remark}>{item.remark}</span>
+                    : <span className={styles.remarkEmpty}>—</span>}
                 </td>
               ]}
             />
@@ -459,6 +490,8 @@ export function LeaseExpiryPage() {
             onBack={() => setSelectedIdx(null)}
             onRenew={() => runAction(selected, 'Documents Pending')}
             onOffLease={() => { setOffLeaseError(''); setOffLeaseItem(selected); }}
+            onRenewViaSalesCrm={customerColIdx >= 0 ? () => setRenewalHandoffItem(selected) : null}
+            onRemarkSaved={patchRemark}
           />
         )}
       </Card>
@@ -472,11 +505,18 @@ export function LeaseExpiryPage() {
         onClose={closeOffLease}
         onSubmit={handleOffLeaseSubmit}
       />
+
+      <RenewalHandoffModal
+        open={!!renewalHandoffItem}
+        company={renewalHandoffItem ? String(renewalHandoffItem.row?.[customerColIdx] || '').trim() : ''}
+        defaultContainer={renewalHandoffItem?.row?.[0]}
+        onClose={() => setRenewalHandoffItem(null)}
+      />
     </>
   );
 }
 
-function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKey, onBack, onRenew, onOffLease }) {
+function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKey, onBack, onRenew, onOffLease, onRenewViaSalesCrm, onRemarkSaved }) {
   const containerNo = item.row?.[0];
   // Once Renew has been clicked, this container stays here (it can be
   // renewed again in future) but is already in progress on Renew & Document
@@ -493,6 +533,7 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
   // nothing to compute a window from, so the old "always available" default
   // applies rather than hiding it with no way back.
   const dueSoon = item.daysLeft == null || item.daysLeft <= 15;
+
   return (
     <div>
       <Button variant="secondary" size="sm" onClick={onBack} className={styles.backBtn}>← Back to List ({total})</Button>
@@ -526,6 +567,10 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
           </div>
         </div>
 
+        <div className={styles.remarkBlock}>
+          <ExpiryRemarkCell item={item} canAct={canAct} onSaved={onRemarkSaved} detail />
+        </div>
+
         <div className={styles.detailFooter}>
           {canAct ? (
             <div className={styles.actionsCell}>
@@ -537,12 +582,156 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
                 <span className={styles.viewOnlyIcon}>Not due yet — Renew reappears within 15 days of expiry ({formatDays(item.daysLeft)} left)</span>
               )}
               <Button size="lg" variant="secondary" onClick={onOffLease}>Off-Lease</Button>
+              {/* Separate from the internal Renew above — this opens the
+                  Sales CRM's OWN renewal-entry form (Grade/Rate/Type/
+                  Product/Addendum) for the salesperson to log the deal
+                  there. Available regardless of the 15-day/in-progress
+                  gating above: a company can legitimately be re-negotiated
+                  well ahead of the container's own expiry window. */}
+              {onRenewViaSalesCrm && (
+                <Button size="lg" variant="secondary" onClick={onRenewViaSalesCrm}>Renew via Sales CRM</Button>
+              )}
             </div>
           ) : (
             <span className={styles.viewOnlyIcon}>View Only</span>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Inline remark cell — same interaction shape as Off-Lease OrderBookView's
+ * RemarkCell (New / Edit / Delete in place), but plain text against one
+ * Deployed-sheet cell rather than a rich-text thread.
+ */
+function ExpiryRemarkCell({ item, canAct, onSaved, detail = false }) {
+  const containerNo = item.row?.[0];
+  const [local, setLocal] = useState(null);
+  const saved = local != null ? local : String(item.remark || '').trim();
+
+  useEffect(() => { setLocal(null); }, [item._idx, item.remark]);
+
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const beginNew = () => {
+    setDraft('');
+    setError('');
+    setOpen(true);
+  };
+  const beginEdit = () => {
+    setDraft(saved);
+    setError('');
+    setOpen(true);
+  };
+  const cancel = () => {
+    setOpen(false);
+    setDraft('');
+    setError('');
+  };
+
+  const persist = async (text) => {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await saveExpiryRowRemark(containerNo, text, item._rowNum);
+      const next = String(res?.remark ?? text).trim();
+      setLocal(next);
+      setOpen(false);
+      setConfirmDelete(false);
+      setDraft('');
+      onSaved?.(item, next);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className={`${styles.remarkCol}${detail ? ` ${styles.remarkColDetail}` : ''}`}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <div className={styles.remarkSideLabel}>Remark</div>
+
+      {!open && (
+        <div className={styles.remarkShow}>
+          {saved
+            ? <div className={styles.remarkText}>{saved}</div>
+            : <p className={styles.remarkEmpty}>—</p>}
+
+          {canAct && (
+            <div className={styles.remarkShowActions}>
+              {saved ? (
+                <>
+                  <button type="button" className={styles.remarkAdd} onClick={beginEdit} disabled={busy}>
+                    <Icon name="edit" className={styles.remarkAddIcon} />
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.remarkAdd} ${styles.remarkDelete}`}
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={busy}
+                  >
+                    Delete
+                  </button>
+                </>
+              ) : (
+                <button type="button" className={styles.remarkAdd} onClick={beginNew} disabled={busy}>
+                  <Icon name="edit" className={styles.remarkAddIcon} />
+                  New
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {open && (
+        <div className={styles.remarkEditor}>
+          <textarea
+            className={styles.remarkInput}
+            rows={detail ? 3 : 2}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Add a remark…"
+            disabled={busy}
+            autoFocus
+          />
+          {error && <p className={styles.remarkError}>{error}</p>}
+          <div className={styles.remarkEditorActions}>
+            <Button size="sm" variant="secondary" disabled={busy} onClick={cancel}>Cancel</Button>
+            <Button
+              size="sm"
+              variant="primary"
+              loading={busy}
+              disabled={busy || !draft.trim() || draft.trim() === saved}
+              onClick={() => persist(draft)}
+            >
+              {saved ? 'Update' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete remark?"
+        message="This removes the remark from this lease record. You can add a new one later."
+        confirmLabel="Delete"
+        danger
+        loading={busy}
+        onClose={() => !busy && setConfirmDelete(false)}
+        onConfirm={() => persist('')}
+      />
     </div>
   );
 }

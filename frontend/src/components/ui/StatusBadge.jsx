@@ -5,6 +5,7 @@ import styles from './StatusBadge.module.css';
 const MAP = {
   pending: 'warn',
   'documents pending': 'warn',
+  'renew pending': 'warn',
   approved: 'ok',
   completed: 'ok',
   paid: 'ok',
@@ -19,8 +20,15 @@ const MAP = {
   safe: 'ok'
 };
 
+/* Sheet/API still store "Documents Pending"; show "Renew Pending" in the UI
+   so Renewal Status matches the My Task tile wording. */
+const LABEL = {
+  'documents pending': 'Renew Pending'
+};
+
 export function StatusBadge({ status }) {
   const key = String(status || '').trim().toLowerCase();
   const color = MAP[key] || 'neutral';
-  return <span className={`${styles.badge} ${styles[color]}`}>{status || '—'}</span>;
+  const label = LABEL[key] || status || '—';
+  return <span className={`${styles.badge} ${styles[color]}`}>{label}</span>;
 }

@@ -309,8 +309,9 @@ export const STAGE_FIELDS = {
      own field range (starts col_45); see OL_STAGE5_EXTRA_COLS's doc comment
      in offlease.service.js for the full story. Must stay in step with that
      array — same slots, same order (col_313/314, Accrued Rental Amount/Date,
-     removed from the form per request but left dormant on the backend, same
-     as Move To Stage's Arrival Date — see that column's own comment). */
+     AND col_312, Last Date Of Billing (removed 2026-09-16, per request),
+     removed from the form but left dormant on the backend, same as Move To
+     Stage's Arrival Date — see that column's own comment). */
   5: [
     { key: 'col_305', label: 'Check if rentals are billed up to the last date', type: 'radio', options: YES_NO },
     { key: 'col_306', label: 'Outstanding Amount', type: 'number' },
@@ -319,7 +320,6 @@ export const STAGE_FIELDS = {
     { key: 'col_309', label: 'Transport cost is billed', type: 'radio', options: YES_NO },
     { key: 'col_310', label: 'Adjust Security Deposit if applicable', type: 'radio', options: YES_NO },
     { key: 'col_311', label: 'Security Deposit Amount', type: 'number' },
-    { key: 'col_312', label: 'Last Date Of Billing', type: 'date' },
     { key: 'col_315', label: 'Reconcile entire billing cycle', type: 'radio', options: YES_NO },
     { key: 'col_316', label: 'Remark', type: 'text' }
   ],

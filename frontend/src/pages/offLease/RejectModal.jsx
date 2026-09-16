@@ -18,11 +18,16 @@ import styles from './RejectModal.module.css';
  * `placeholder`, `submitLabel` and `variant` override the Reject-specific
  * defaults below; the one existing Reject call site is unaffected since it
  * never passes them.
+ *
+ * Generalized again 2026-09-16 for Stage 5's own "Send Back" (a container
+ * mid-reconciliation, not an "Intimation") — `titleSubject` overrides the
+ * single-item title's trailing word; every existing caller keeps the
+ * default and is unaffected.
  */
 export function RejectModal({
   open, item, items, submitting, error, onClose, onSubmit,
   titleWord = 'Reject', placeholder = 'Why is this being rejected? (optional)',
-  submitLabel = 'Reject', variant = 'danger'
+  submitLabel = 'Reject', variant = 'danger', titleSubject = 'Intimation'
 }) {
   const [remarks, setRemarks] = useState('');
   const bulk = Array.isArray(items);
@@ -43,7 +48,7 @@ export function RejectModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={bulk ? `${titleWord} — ${items.length} containers` : `${titleWord} Intimation`}
+      title={bulk ? `${titleWord} — ${items.length} containers` : `${titleWord} ${titleSubject}`}
       width="440px"
     >
       <form onSubmit={handleSubmit} className={styles.form}>

@@ -248,6 +248,15 @@ export async function sendBackFromApproval(req, res) {
   res.json({ message });
 }
 
+/** Send Back from Stage 5 (Billing Reconciliation) to Stage 1 — reopens
+ *  BOTH stages (see saveOffLeaseSendBackFromBilling's doc comment).
+ *  Permission ('offlease5') is checked inside the service. */
+export async function sendBackFromBilling(req, res) {
+  const { remarks, rowNum } = req.body;
+  const message = await offLeaseService.saveOffLeaseSendBackFromBilling(req.params.containerNo, req.user.email, remarks, rowNum);
+  res.json({ message });
+}
+
 /** Reverses a Rejected decision, sending the record back to Stage 1's own
  *  pending queue (see saveOffLeaseSendRejectedToStage1's doc comment).
  *  Permission ('offlease1') is checked inside the service. */
@@ -523,7 +532,7 @@ export async function saveMovement(req, res) {
  *  writes. This is the endpoint to hit repeatedly while reviewing what the
  *  feature would do against real data. */
 export async function previewAutoCreateFromFms(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json(await offLeaseService.autoCreateOffLeaseFromFms({ dryRun: true }));
 }
 
@@ -531,7 +540,7 @@ export async function previewAutoCreateFromFms(req, res) {
  *  `{ "confirm": "CREATE" }` so this can never be triggered by an
  *  accidental GET, a bookmarked URL, or a retried request. */
 export async function runAutoCreateFromFms(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   if (req.body?.confirm !== 'CREATE') {
     throw new AppError('Refusing to run live: POST body must be exactly { "confirm": "CREATE" }.');
   }
@@ -541,52 +550,52 @@ export async function runAutoCreateFromFms(req, res) {
 /* ---- Admin-only: one-time maintenance / repair tools + diagnostics ---- */
 
 export async function runCopyApprovedData(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   await offLeaseService.copyApprovedData();
   res.json({ message: 'OK' });
 }
 
 export async function dumpHeaders(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.dumpOffLeaseTrackingHeaders() });
 }
 
 export async function restoreHeaderRow(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.restoreOffLeaseHeaderRowFromLatestBackup() });
 }
 
 export async function fixEmailCollision(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.fixQuotationEmailMarkedCollision() });
 }
 
 export async function reorderColumns(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.reorderOffLeaseTrackingColumns() });
 }
 
 export async function fixStageHeaders(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.fixOffLeaseStageHeaders() });
 }
 
 export async function debugOrderNos(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.debugOrderNosForContainer(req.params.containerNo) });
 }
 
 export async function traceOrder(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.traceOrderNo(req.params.containerNo) });
 }
 
 export async function feedsNewLeaseReff(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.whatFeedsNewLeaseReff() });
 }
 
 export async function feedsAllSheets(req, res) {
-  assertRolesAdmin(req.user.email);
+  await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.whatFeedsAllSheets() });
 }

@@ -32,7 +32,12 @@ export function DataGrid({
      independent of renderActions' own buttons — those live in their own
      cell, which stops the click before it reaches the row, so a button
      press never also triggers onRowClick. */
-  onRowClick
+  onRowClick,
+  /* When set, the table body scrolls inside this height and thead stays
+     sticky at the top of the wrap. Without a vertical scrollport, sticky
+     headers never activate (overflow-x alone still creates a scroll
+     container that traps sticky within an ever-growing wrap). */
+  bodyMaxHeight
 }) {
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
   // The real header row stays visible while loading — it's context the user
@@ -44,7 +49,10 @@ export function DataGrid({
   const allSelected = selectable && rows.length > 0 && rows.every((r, i) => selectedKeys?.has(rowKey(r, i)));
 
   return (
-    <div className={styles.scrollWrap}>
+    <div
+      className={`${styles.scrollWrap}${bodyMaxHeight ? ` ${styles.scrollWrapY}` : ''}`}
+      style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
+    >
       <table className={`${styles.table} ${className}`}>
         <thead>
           <tr>

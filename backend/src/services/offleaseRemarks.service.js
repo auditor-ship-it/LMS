@@ -15,11 +15,11 @@
  */
 import { getSheetData, appendRow, insertSheetIfMissing, updateRange, deleteRows } from './googleSheets.service.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { ROLES_ADMIN_EMAILS } from '../config/permissions.config.js';
 import { safeStr } from '../utils/format.js';
 import { AppError, accessDenied } from '../utils/AppError.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { userHasAction } from './permissions.service.js';
+import { isRolesAdmin } from './roles.service.js';
 import { cacheGet, cachePut, cacheRemove } from '../utils/memoryCache.js';
 
 const R_SHEET = SHEETS.OFF_LEASE_REMARKS;
@@ -237,10 +237,10 @@ export async function addOffLeaseRemark({ containerNo, leaseId, html, stage }, u
  * with off-lease access rewrite another person's comment would make the
  * attribution meaningless. Admins keep a way to remove content that has to go.
  */
-function assertOwns(remark, userEmail) {
+async function assertOwns(remark, userEmail) {
   const mine = safeStr(remark.enteredBy).trim().toLowerCase() === safeStr(userEmail).trim().toLowerCase();
   if (mine) return;
-  if (ROLES_ADMIN_EMAILS.includes(safeStr(userEmail).trim().toLowerCase())) return;
+  if (await isRolesAdmin(safeStr(userEmail).trim().toLowerCase())) return;
   throw accessDenied('You can only edit or delete your own remarks.');
 }
 
@@ -261,7 +261,7 @@ export async function updateOffLeaseRemark(id, html, userEmail) {
        the lock, and a concurrent delete would have shifted every row after
        it — writing to the stale number would overwrite a different remark. */
     const hit = await findById(id);
-    assertOwns(hit, userEmail);
+    await assertOwns(hit, userEmail);
     // Body columns only (D:E), plus the edited stamp — the original author and
     // creation time are the record and are never rewritten.
     await updateRange(R_SHEET, `D${hit._rowNum}:E${hit._rowNum}`, [[clean, text]]);
@@ -276,7 +276,7 @@ export async function deleteOffLeaseRemark(id, userEmail) {
 
   return withSheetLock(R_SHEET, async () => {
     const hit = await findById(id);
-    assertOwns(hit, userEmail);
+    await assertOwns(hit, userEmail);
     await deleteRows(R_SHEET, [hit._rowNum]);
     invalidateIndex();
     return { message: 'DELETED', id: hit.id };
