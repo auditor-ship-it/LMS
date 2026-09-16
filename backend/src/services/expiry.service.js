@@ -51,7 +51,7 @@ import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
-import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
+import { salePersonScopeFor, matchesSalePersonScope, canonicalSalePersonName } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { sendMail } from './email.service.js';
 
@@ -263,8 +263,15 @@ export async function getExpiryDataByFilter(filterType, user) {
   const liveSalePerson = (row) => {
     if (salePersonCol === -1) return '';
     const sheetValue = safeStr(row[salePersonCol]);
-    if (customerCol === -1) return sheetValue;
-    return resolveSalePerson(row[customerCol]) || sheetValue;
+    const raw = customerCol === -1 ? sheetValue : (resolveSalePerson(row[customerCol]) || sheetValue);
+    /* canonicalSalePersonName: the sheet/CRM carry more than one spelling
+       for the same desk (e.g. "Sagar" and "Sagar-A") — normalize to the
+       one business name that should ever be shown, so the same person's
+       rows don't display under two different names depending on which
+       source (CRM vs. sheet) happened to answer for that row. Applied here
+       so filtering below and the value spliced into the display row are
+       always the SAME canonical name. */
+    return canonicalSalePersonName(raw);
   };
 
   const today = new Date();
@@ -856,8 +863,10 @@ export async function getNewLeaseReport(user) {
   const resolveSalePerson = salePersonScope ? await getSalePersonResolver() : null;
   const liveSaleExec = (r) => {
     const sheetValue = safeStr(r[NL.SALE_EXEC]).trim();
-    if (!resolveSalePerson) return sheetValue;
-    return resolveSalePerson(r[NL.CLIENT_NAME]) || sheetValue;
+    // canonicalSalePersonName — see getExpiryDataByFilter's liveSalePerson
+    // for why (same "Sagar"/"Sagar-A" style spelling split applies here).
+    if (!resolveSalePerson) return canonicalSalePersonName(sheetValue);
+    return canonicalSalePersonName(resolveSalePerson(r[NL.CLIENT_NAME]) || sheetValue);
   };
 
   const data = rows
@@ -1012,7 +1021,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
    container (explicit requirement 2026-08-25 — see the identical note on
    verify.service.js's own copy of this function, which both write-paths
    must agree with since they write the same sheet). */
-async function _logRenewal(info) {
+export async function _logRenewal(info) {
   try {
     await insertSheetIfMissing(RENEWAL_LOG_SHEET, RENEWAL_LOG_HEADERS);
     const { headers: curHeaders } = await getSheetData(RENEWAL_LOG_SHEET, undefined, 'A1:1');

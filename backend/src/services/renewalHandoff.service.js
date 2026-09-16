@@ -55,6 +55,12 @@ export async function getCompanyContainers(company) {
     ? findHeaderCol(headers, 'agreement valid upto')
     : (() => { for (let h = 0; h <= 14; h++) { if (String(headers[h] || '').toLowerCase().includes('valid')) return h; } return -1; })();
   const statusCol = 22; // 'Status' — same fixed index the rest of expiry.service.js uses
+  // Best-effort display columns for the Sales OS renewal wizard's container
+  // checklist (services/salesOsRenewal.service.js) — additive only, the
+  // existing "Renew via Sales CRM" modal ignores fields it doesn't render.
+  const productCol = findHeaderCol(headers, 'product type', 'product');
+  const sizeCol = findHeaderCol(headers, 'size');
+  const locationCol = findHeaderCol(headers, 'location', 'site');
 
   if (custCol === -1) return [];
 
@@ -76,7 +82,10 @@ export async function getCompanyContainers(company) {
       containerNo,
       orderNo: _resolveOrderNo(ordMap, containerNo, row[custCol]),
       validUpto: safeStr(validRaw),
-      daysLeft
+      daysLeft,
+      product: productCol !== -1 ? safeStr(row[productCol]) : '',
+      size: sizeCol !== -1 ? safeStr(row[sizeCol]) : '',
+      location: locationCol !== -1 ? safeStr(row[locationCol]) : ''
     });
   }
 

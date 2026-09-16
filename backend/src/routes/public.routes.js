@@ -5,6 +5,7 @@ import * as verifyController from '../controllers/verify.controller.js';
 import * as approveController from '../controllers/approve.controller.js';
 import * as expiryController from '../controllers/expiry.controller.js';
 import * as offLeaseController from '../controllers/offlease.controller.js';
+import * as salesOsRenewalController from '../controllers/salesOsRenewal.controller.js';
 
 /**
  * Public, key-gated API (see publicApiAuth.middleware.js — the X-Api-Key
@@ -88,5 +89,11 @@ router.get('/accounts/:containerNo/outstanding', requirePublicApiKey('accounts')
 /* ---------------- off-lease efficiency (read-only — see WRITE_CAPABLE_DOMAINS) ---------------- */
 // No params — same aggregate every internal caller of GET /offlease/efficiency sees.
 router.get('/offlease/efficiency', requirePublicApiKey('offleaseefficiency'), asyncHandler(reuse(offLeaseController.getEfficiencyData)));
+
+/* ---------------- Sales OS renewal handoff (read-only) ----------------
+   The renewals themselves are SAVED via the session-authenticated SSO flow
+   (routes/sso.routes.js) — this is the read-back Sales OS's own server
+   polls to display what was renewed. ?existingLeadId= or ?from=&to=&employeeCode=. */
+router.get('/sales-os/renewals', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.listRenewals)));
 
 export default router;

@@ -168,6 +168,34 @@ export async function empLogin(empId, password) {
   return { ok: true, token, name: emp.name, email: emp.email, empId: emp.empId, at: nowIso };
 }
 
+/**
+ * SSO session for the Sales OS renewal handoff (services/salesOsRenewal.service.js).
+ * Same session shape/creation as empLogin above, but identity is proven by the
+ * caller (a verified/soft-verified Sales OS deep link — see
+ * salesOsRenewal.service.js#verifyInboundParams), not a password. Matches
+ * `empCode` against the USER sheet's EmpID column ONLY — never by name/email
+ * spelling, per the integration's explicit auth rule. No lockout/OTP path
+ * exists or is needed here: the only failure mode is "not mapped".
+ */
+export async function empSsoLogin(empCode) {
+  empCode = String(empCode == null ? '' : empCode).trim();
+  if (!empCode) return { ok: false, error: 'employee code not mapped' };
+
+  const emp = await authFind(AUTH_COL_EMPID, empCode);
+  if (!emp) return { ok: false, error: 'employee code not mapped' };
+
+  await _ensureSessionIndex();
+  const token = authToken();
+  const nowIso = new Date().toISOString();
+  await getCollection(SESSION_COLLECTION).insertOne({
+    _id: token, empId: emp.empId, name: emp.name, email: emp.email, at: nowIso, srow: null, expiresAt: _sessionExpiry()
+  });
+  await authLogEvent('sso-login', emp);
+  await authStartSession(token, emp);
+  logger.info(`[AUTH] SSO login successful (empCode=${empCode})`);
+  return { ok: true, token, name: emp.name, email: emp.email, empId: emp.empId, at: nowIso };
+}
+
 export async function empSession(token) {
   if (!token) return null;
   const doc = await getCollection(SESSION_COLLECTION).findOneAndUpdate(

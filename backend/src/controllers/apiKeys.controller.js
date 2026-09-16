@@ -1,5 +1,5 @@
 import * as apiKeysService from '../services/apiKeys.service.js';
-import { dynamicHasPermission } from '../services/roles.service.js';
+import { hasDirectPermission } from '../services/roles.service.js';
 import { accessDenied } from '../utils/AppError.js';
 
 /**
@@ -12,9 +12,16 @@ import { accessDenied } from '../utils/AppError.js';
  * fallback (same deliberate choice as roles.service.js's assertRolesAdmin —
  * see the migration script that seeded every prior API_SUPER_ADMIN_EMAILS
  * member's apiAdmin column true before this shipped).
+ *
+ * Uses hasDirectPermission, NOT dynamicHasPermission — the latter's "All
+ * Access" shortcut would silently make every All-Access user an API admin
+ * too (see roles.service.js's hasDirectPermission doc comment for the
+ * identical bug this avoids on the Roles Admin side, confirmed live
+ * 2026-09-16). A standing, no-login API credential is exactly the kind of
+ * grant that must never be inherited from an unrelated blanket checkbox.
  */
 async function assertApiSuperAdmin(email) {
-  if (!(await dynamicHasPermission(email, 'apiAdmin'))) {
+  if (!(await hasDirectPermission(email, 'apiAdmin'))) {
     throw accessDenied('ACCESS_DENIED: API Access is restricted to admins.');
   }
 }

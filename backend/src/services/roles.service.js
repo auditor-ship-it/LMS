@@ -53,9 +53,13 @@ const SIDEBAR_HEADER = ['Email', ...SIDEBAR_KEYS.map((p) => p.label)];
  * hatch — see the migration script that seeded every prior
  * ROLES_ADMIN_EMAILS member's rolesAdmin column true before this shipped).
  * Both now async — every call site needs `await`.
+ *
+ * Uses hasDirectPermission, NOT dynamicHasPermission — see that function's
+ * own doc comment for the privilege-escalation bug that distinction fixes
+ * (an All-Access user must not automatically become a Roles Admin too).
  */
 export async function isRolesAdmin(email) {
-  return dynamicHasPermission(email, 'rolesAdmin');
+  return hasDirectPermission(email, 'rolesAdmin');
 }
 
 export async function assertRolesAdmin(email) {
@@ -223,7 +227,12 @@ export async function loadSidebarTable() {
   });
 }
 
-/** ADDITIVE: OR'd with the hardcoded ACTION_PERMISSIONS in permissions.service.js. */
+/** The single source every feature-permission check consults (removed
+ *  2026-09-16: previously OR'd with a hardcoded ACTION_PERMISSIONS
+ *  baseline — see permissions.config.js's header comment). "All Access"
+ *  bypasses every key here, by design: it's the grid's own blanket-grant
+ *  checkbox for ordinary feature permissions. Do NOT use this for
+ *  rolesAdmin/apiAdmin — see hasDirectPermission below for why. */
 export async function dynamicHasPermission(email, type) {
   try {
     const table = await loadTeamPermTable();
@@ -231,6 +240,33 @@ export async function dynamicHasPermission(email, type) {
     if (!acct) return false;
     if (acct.allAccess) return true;
     return !!acct.perms[type];
+  } catch (e) { return false; }
+}
+
+/**
+ * BUG FOUND AND FIXED 2026-09-16: isRolesAdmin originally called
+ * dynamicHasPermission(email, 'rolesAdmin') — but that function's "All
+ * Access" shortcut applies to EVERY key, so anyone with All Access checked
+ * (a normal, common grant for ordinary feature permissions — verify/expiry/
+ * off-lease stages/etc.) was silently ALSO treated as a Roles & Access
+ * admin, with no way to grant one without the other. Confirmed live:
+ * key.accounts@crystalgroup.in (Sagar) has All Access for their own
+ * sale-person-scoped work, which made isRolesAdmin() return true for them —
+ * and since salePersonScopeFor treats "is a roles admin" as "sees
+ * everyone's data" (isRolesAdmin(email) return null case), Sagar's Lease
+ * Expiry started showing every salesperson's rows instead of just their
+ * own. This is the SAME independence the original hardcoded
+ * ALL_ACCESS_EMAILS/ROLES_ADMIN_EMAILS arrays always had (see the old
+ * ALL_ACCESS_EMAILS comment: "Does NOT grant API Key / API Kit admin —
+ * that stays gated to API_SUPER_ADMIN only") — preserved here by reading
+ * the permission column DIRECTLY, bypassing the All Access shortcut.
+ * rolesAdmin/apiAdmin must be granted explicitly, never inherited.
+ */
+export async function hasDirectPermission(email, type) {
+  try {
+    const table = await loadTeamPermTable();
+    const acct = table[String(email).trim().toLowerCase()];
+    return !!acct?.perms[type];
   } catch (e) { return false; }
 }
 

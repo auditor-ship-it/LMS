@@ -16,6 +16,7 @@ import tasksRoutes from './routes/tasks.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import apiKeysRoutes from './routes/apiKeys.routes.js';
 import publicRoutes from './routes/public.routes.js';
+import ssoRoutes from './routes/sso.routes.js';
 
 /**
  * Lease Management's own, standalone backend — a narrower copy of the
@@ -93,6 +94,11 @@ export function createApp() {
   // Public, read-only, key-gated — no LMS session/login involved. See
   // publicApiAuth.middleware.js + routes/public.routes.js for the auth model.
   app.use('/api/public/v1', publicRoutes);
+  // Sales OS -> Lease Management SSO renewal handoff. /sales-os/session is
+  // deliberately reachable with no prior session (see sso.routes.js) — this
+  // router must stay ahead of nothing else and behind nothing that would
+  // 401 it first.
+  app.use('/api/sso', ssoRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

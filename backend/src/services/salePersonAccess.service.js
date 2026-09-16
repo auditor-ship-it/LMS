@@ -36,11 +36,17 @@ import { safeStr } from '../utils/format.js';
  *  Gargi and Laveena added 2026-08-20 for the same restriction, now also
  *  applied to the Off-Lease module (see offlease.service.js's
  *  _offLeaseAccessGate) — same six-login screenshot, same USER-sheet
- *  credentials, this map just adds the two names that were missing. */
+ *  credentials, this map just adds the two names that were missing.
+ *
+ * key.accounts@crystalgroup.in changed 'Sagar' -> 'Sagar-A' 2026-09-16,
+ * explicit business request: this desk's records must always DISPLAY as
+ * "Sagar-A", not "Sagar" — see SALE_PERSON_ALIASES below for how the plain
+ * "Sagar" spelling (which the CRM/sheet also still carries) keeps matching
+ * and gets normalized to this canonical form wherever it's shown. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',
-  'key.accounts@crystalgroup.in': 'Sagar',
+  'key.accounts@crystalgroup.in': 'Sagar-A',
   'sales1@crystalgroup.in': 'Sapna',
   'sales@crystalgroup.in': 'Gargi',
   'contactsales@crystalgroup.in': 'Laveena'
@@ -59,13 +65,21 @@ const norm = (v) => safeStr(v).trim().toLowerCase();
  * entry only when a real person is confirmed affected, same "grows
  * deliberately" rule as SALE_PERSON_BY_EMAIL above.
  *
- * sagar: ['sagar-a'] added 2026-09-16 — confirmed live the CRM carries 73
- * leads under "Sagar-A" (a second-territory/-desk suffix, not a typo) with
- * none of them matching key.accounts@crystalgroup.in's exact-match scope
- * ("Sagar"), same class of gap as Laveena/Lavina above. */
+ * Keyed by the CANONICAL (displayed) spelling, with every OTHER spelling
+ * that must still match and normalize to it listed as an alias.
+ *
+ * 'sagar-a': ['sagar'] — confirmed live the CRM/sheet carry both "Sagar"
+ * (611 leads) and "Sagar-A" (73 leads) for the same desk. Originally the
+ * canonical spelling was 'Sagar' with 'Sagar-A' as its alias (2026-09-16,
+ * first fix); flipped THE SAME DAY per explicit business request that the
+ * desk display consistently as "Sagar-A" instead — canonicalSalePersonName
+ * now normalizes plain "Sagar" UP to "Sagar-A", not the other way round.
+ * Matching (aliasesFor/matchesSalePersonScope) is unaffected either way —
+ * both spellings always resolve to the same identity, only which spelling
+ * wins the DISPLAY changed. */
 const SALE_PERSON_ALIASES = {
   laveena: ['lavina'],
-  sagar: ['sagar-a']
+  'sagar-a': ['sagar']
 };
 
 /** `scope`'s own normalized name plus any known aliases (see
