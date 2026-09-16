@@ -1,57 +1,24 @@
 /**
- * Static permission baseline — ported verbatim from LMS.js (ACTION_PERMISSIONS,
- * ALL_ACCESS_EMAILS, ROLES_ADMIN_EMAILS, PERMISSION_KEYS, SIDEBAR_KEYS).
- * The dynamic Roles & Access sheets (Team Accounts / Sidebar Access) sit
- * ADDITIVELY on top of this — see services/roles.service.js. Do not remove
- * emails from here as part of a "cleanup"; that changes production access.
+ * Roles & Access schema — PERMISSION_KEYS/SIDEBAR_KEYS, the append-only
+ * positional column definitions for the live "Team Accounts"/"Sidebar
+ * Access" Google Sheets (services/roles.service.js). This is now the ONLY
+ * content in this file.
+ *
+ * REMOVED 2026-09-16: ACTION_PERMISSIONS, ALL_ACCESS_EMAILS,
+ * ROLES_ADMIN_EMAILS, API_SUPER_ADMIN_EMAILS — the hardcoded baseline every
+ * dynamic permission check used to OR against, so the grid could only ever
+ * ADD access on top of code nobody could see or edit, never fully govern
+ * it. Every email any of those four ever granted was migrated into the live
+ * sheet first (scripts/migrate-legacy-permissions.mjs, run 2026-09-16 —
+ * see that script if you need the exact historical grants it read) so
+ * removing them here changed no one's actual access. Roles & Access is now
+ * the single, sole source every permission check consults
+ * (services/permissions.service.js's userHasAction,
+ * services/roles.service.js's isRolesAdmin, and
+ * controllers/apiKeys.controller.js's assertApiSuperAdmin — the latter two
+ * via the new `rolesAdmin`/`apiAdmin` keys below, also grid-editable now,
+ * also migrated, also with no hardcoded fallback).
  */
-
-export const ACTION_PERMISSIONS = {
-  verify: ['sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'pushpa.shetty@crystalgroup.in', 'swati.barot@crystalgroup.in', 'support@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  approve: ['pushpa.shetty@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'sc@crystalgroup.in', 'swati.barot@crystalgroup.in', 'support@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  expiry: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'dmo@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  renew: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  document: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  offleaseapproval: ['pushpa.shetty@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease1: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease2: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease3: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in', 'service@crystalgroup.in'],
-  offlease4: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease5: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease6: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease7: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  offlease8: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  /* Stage 9 (movement entry) draws its containers from Stage 2, so it starts
-     with exactly the offlease6 (Transportation) list — the people already
-     working that queue, Kshirod Khatua included. Roles & Access can widen it. */
-  offlease9: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in'],
-  /* 2026-08-18: Dashboard and Container Lookup, the two tabs inside the
-     Off-Lease page that aren't tied to any one stage, had NO permission gate
-     at all before this — anyone with any Off-Lease access saw both. This is
-     the union of every email across offleaseapproval + offlease1..9 above:
-     everyone who can already act on some part of Off-Lease keeps both tabs
-     exactly as before; Roles & Access can now narrow either individually. */
-  offleasedashboard: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in', 'service@crystalgroup.in'],
-  offleaselookup: ['pushpa.shetty@crystalgroup.in', 'sc@crystalgroup.in', 'intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'ar@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'kshirod.khatua@crystalgroup.in', 'pc@crystalgroup.in', 'service@crystalgroup.in'],
-  billing: ['shivani.dhall@crystalgroup.in', 'intern@crystalgroup.in', 'pushpa.shetty@crystalgroup.in', 'swati.barot@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'dmo@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  receivables: ['ar@crystalgroup.in', 'intern@crystalgroup.in', 'pushpa.shetty@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'swati.barot@crystalgroup.in', 'support@crystalgroup.in', 'crystaladmin@crystalgroup.in', 'pc@crystalgroup.in'],
-  'default': ['intern@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'ar@crystalgroup.in', 'swati.barot@crystalgroup.in', 'crm@crystalgroup.in', 'support@crystalgroup.in', 'pc@crystalgroup.in']
-};
-
-// All-access users: allowed to perform EVERY action above (all workflow points).
-// Does NOT grant API Key / API Kit admin — that stays gated to API_SUPER_ADMIN only.
-export const ALL_ACCESS_EMAILS = ['aa@crystalgroup.in'];
-
-export const ROLES_ADMIN_EMAILS = ['dmo@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'aa@crystalgroup.in'];
-
-/* Who can create/revoke public API keys (services/apiKeys.service.js,
-   routes/apiKeys.routes.js) — deliberately its own list, not reused from
-   ROLES_ADMIN_EMAILS or ALL_ACCESS_EMAILS, since a public API key is a
-   standing credential to read data with no LMS login at all, a materially
-   bigger blast radius than anything else this file gates. Defaulted to the
-   same trusted circle as Roles & Access; edit this array directly to
-   narrow or widen it, same as every other list here. */
-export const API_SUPER_ADMIN_EMAILS = ['dmo@crystalgroup.in', 'support@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'aa@crystalgroup.in'];
 
 export const PERMISSION_KEYS = [
   { key: 'verify', label: 'Verify Lease' },
@@ -95,17 +62,26 @@ export const PERMISSION_KEYS = [
      read POSITIONALLY against the live "Team Accounts" sheet
      (roles.service.js: perms[p.key] = row[3 + k]), so putting offlease9 next
      to offlease8 would shift Billing and Receivables one column right and
-     hand every user the wrong permission. A new key must land at the END, and
-     its sheet column does not exist yet — so it reads false until Roles &
-     Access adds it, which is why ACTION_PERMISSIONS above carries the working
-     baseline. */
+     hand every user the wrong permission. A new key must land at the END,
+     reading false for everyone until Roles & Access explicitly grants it —
+     no hardcoded baseline exists to fall back on any more (removed
+     2026-09-16; see this file's header comment). */
   { key: 'offlease9', label: 'Off-Lease Stage 9: Movement Entry' },
-  // Appended (not inserted) — same positional rule as offlease9 above. Until
-  // Roles & Access explicitly sets these for someone, ACTION_PERMISSIONS'
-  // offleasedashboard/offleaselookup baseline is what's actually in effect
-  // (see dynamicHasPermission's additive-OR in roles.service.js).
+  // Appended (not inserted) — same positional rule as offlease9 above.
   { key: 'offleasedashboard', label: 'Off-Lease Dashboard' },
-  { key: 'offleaselookup', label: 'Off-Lease Container Lookup' }
+  { key: 'offleaselookup', label: 'Off-Lease Container Lookup' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * Replace the old hardcoded ROLES_ADMIN_EMAILS/API_SUPER_ADMIN_EMAILS
+   * arrays: "who can administer Roles & Access" / "who can manage API keys"
+   * is now itself a Roles & Access permission, editable in this same grid,
+   * not a separate list living in code. See roles.service.js's
+   * isRolesAdmin/assertRolesAdmin and apiKeys.controller.js's
+   * assertApiSuperAdmin — both now just check this key dynamically, with NO
+   * hardcoded fallback (explicit choice, 2026-09-16: a lockout is recovered
+   * by editing the live sheet directly, same as any other permission
+   * mistake, not by a code-level escape hatch). */
+  { key: 'rolesAdmin', label: 'Roles & Access Admin' },
+  { key: 'apiAdmin', label: 'API Access Admin' }
 ];
 
 export const SIDEBAR_KEYS = [
@@ -154,5 +130,10 @@ export const SIDEBAR_KEYS = [
   // existed here yet). See roles.service.js's _ensureSidebarHeaderWidth for
   // how the live sheet picks up this new column without hiding it from
   // existing users.
-  { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency' }
+  { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency' },
+  // Appended 2026-09-16, same reasoning/mechanism as offLeaseEfficiency
+  // directly above — Reports had no sidebar column at all (nav.js left it
+  // unkeyed/always-visible), backfilled true for every existing row by
+  // _ensureSidebarHeaderWidth so nobody loses it the moment this ships.
+  { key: 'reports', label: 'Reports' }
 ];

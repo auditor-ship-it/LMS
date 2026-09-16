@@ -74,6 +74,31 @@ export const env = {
      the cache and re-reads immediately for anyone who cannot wait. */
   salesCrmCacheSecs: Number(process.env.SALES_CRM_CACHE_SECONDS) || 1800,
 
+  /* -- Sales CRM renewal handoff ------------------------------------------
+     "Renew via Sales CRM" (Lease Expiry) mints a signed link to the Sales
+     CRM's own renewal-entry form (the "Success" form with Grade/Rev
+     Share/LM/Client/Product/Addendum fields) so a salesperson doesn't have
+     to log in twice or retype the company/container. See
+     services/renewalHandoff.service.js.
+
+     BOTH sides of this are optional-until-configured, same convention as
+     salesCrmUri above:
+       - salesCrmRenewalFormUrl: the target form's URL. Unknown as of writing
+         this — the button is wired and will mint a real token the moment
+         this is set, no code change needed.
+       - salesCrmHandoffSecret: HS256 signing key for the token (a standard
+         JWT — see utils/jwtLite.js). Signing it here is only half the
+         contract: the Sales CRM side needs matching verification code added
+         by whoever owns that app, sharing this same secret out of band
+         (never commit it to either repo). Until that exists, the link still
+         opens the form (once the URL above is set) but doesn't actually log
+         the salesperson in — the token rides along unused.
+     Minting refuses (503) with a clear message while either is unset,
+     rather than silently handing out an unsigned or unusable link. */
+  salesCrmRenewalFormUrl: process.env.SALES_CRM_RENEWAL_FORM_URL || '',
+  salesCrmHandoffSecret: process.env.SALES_CRM_HANDOFF_SECRET || '',
+  salesCrmHandoffTtlSecs: Number(process.env.SALES_CRM_HANDOFF_TTL_SECONDS) || 600,
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
@@ -88,6 +113,10 @@ export const env = {
 
 if (!env.salesCrmUri) {
   console.warn('[env] SALES_CRM_MONGODB_URI not set — Lease Expiry will show the Deployed sheet\'s own "Sale Person" values instead of the live Sales CRM assignment. See README.md.');
+}
+
+if (!env.salesCrmRenewalFormUrl || !env.salesCrmHandoffSecret) {
+  console.warn('[env] SALES_CRM_RENEWAL_FORM_URL and/or SALES_CRM_HANDOFF_SECRET not set — "Renew via Sales CRM" will show an error until both are configured. See README.md.');
 }
 
 if (!env.googleDriveFolderId) {

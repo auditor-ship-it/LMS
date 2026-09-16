@@ -6,8 +6,9 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchNextLeaseId, submitStage, submitStage1Invoice, submitMoveToStage, submitSendBack } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchNextLeaseId, submitStage, submitStage1Invoice, submitMoveToStage, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
+import { RejectModal } from '../offLease/RejectModal.jsx';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { exportLookupToPdf } from '../offLease/lookupExport.js';
@@ -69,6 +70,28 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [uploading, setUploading] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
+
+  /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
+     stages for correction (see backend saveOffLeaseSendBackFromBilling's
+     doc comment). Same capture-a-remark-first shape as the Approval desk's
+     own Send Back (OffLeasePage.jsx), reusing the same modal. */
+  const [sendBackOpen, setSendBackOpen] = useState(false);
+  const [sendBackBusy, setSendBackBusy] = useState(false);
+  const [sendBackError, setSendBackError] = useState('');
+  const handleSendBackSubmit = async (remarks) => {
+    setSendBackBusy(true);
+    setSendBackError('');
+    try {
+      await submitSendBackFromBilling(containerNo, remarks, rowNum);
+      setSendBackOpen(false);
+      onSaved?.();
+      onClose();
+    } catch (e) {
+      setSendBackError(apiErrorMessage(e));
+    } finally {
+      setSendBackBusy(false);
+    }
+  };
 
   /* Invoices for this container, from the Billing Sales sheet. Fetched only on
      the Billing stage, and scoped by Lease ID so a container off-leased twice
@@ -295,11 +318,25 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     }
   }
 
+  /* BUG FOUND AND FIXED 2026-09-16: the title always called stageCaption(1)
+     ("Stage 1 — Off-Lease Intimation") even when fieldContext === 'invoice'
+     — i.e. this same modal opened from the separate "Stage 1.1 (Invoice)"
+     tab, showing an entirely different field set (Invoice No/Amount/Upload/
+     Date/Remarks, not Off-Lease Intimation's own fields at all — see
+     stageFields.js's context:'invoice' comment). Confusing on its own, and
+     actively misleading here: reported live on a real container
+     (BMOU9721062) where the Invoice-tab modal's title claimed to be the
+     Intimation form while showing none of the Return Transportation PO
+     data entered on the actual Stage 1 form — someone reviewing it had no
+     way to tell, from the title alone, which form they were even looking
+     at. */
+  const modalTitle = fieldContext === 'invoice' ? 'Stage 1.1 — Invoice' : stageCaption(stageNumber);
+
   return (
     <div className={styles.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={styles.modal} role="dialog" aria-modal="true" aria-label={stageCaption(stageNumber)}>
+      <div className={styles.modal} role="dialog" aria-modal="true" aria-label={modalTitle}>
         <div className={styles.header}>
-          <h2 className={styles.title}>{stageCaption(stageNumber)}</h2>
+          <h2 className={styles.title}>{modalTitle}</h2>
           <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Close">✕</button>
         </div>
 
@@ -398,6 +435,19 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   <Stage1DataNote data={data?._stage1Data} />
                 </>
               )}
+
+              {/* Read-only reference, added 2026-09-16: this view only shows
+                  the Invoice fields (col_320-324) — "Return Transportation
+                  PO Required"/PO/PO Amount (col_319/317/318) are Stage 1's
+                  OWN fields, filtered out here by design (see
+                  stageFields.js's context:'invoice' comment). Without this,
+                  someone filling in invoice details had no way to see
+                  whether a PO was even required, or check its amount/file,
+                  without leaving this modal to reopen the plain Stage 1
+                  form. `data` already carries the full row regardless of
+                  fieldContext — getOffLeaseStageDetail doesn't filter by it,
+                  only this modal's EDITABLE field list does. */}
+              {fieldContext === 'invoice' && <ReturnPoReferenceNote data={data} />}
 
               {/* Gate In's own form was removed 2026-08-24: gate/depot staff
                   already fill out a separate Google Form for every container
@@ -507,6 +557,11 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>
                   {readOnly ? 'Close' : 'Cancel'}
                 </Button>
+                {!readOnly && stageNumber === BILLING_STAGE && !data?._skipped && canAct('offlease5') && (
+                  <Button type="button" variant="secondary" disabled={busy} onClick={() => setSendBackOpen(true)}>
+                    Send Back to Stage 1
+                  </Button>
+                )}
                 {!readOnly && fields.length > 0 && !data?._skipped && (
                   <Button type="submit" variant="primary" loading={busy}>
                     {uploading ? 'Uploading files…' : saving ? 'Saving…' : 'Save Stage'}
@@ -517,6 +572,22 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
           )}
         </div>
       </div>
+
+      {/* Outside the form above — RejectModal renders its own <form>, and
+          nesting forms is invalid HTML / unpredictable across browsers. */}
+      <RejectModal
+        open={sendBackOpen}
+        item={{ row: [containerNo] }}
+        submitting={sendBackBusy}
+        error={sendBackError}
+        onClose={() => { setSendBackOpen(false); setSendBackError(''); }}
+        onSubmit={handleSendBackSubmit}
+        titleWord="Send Back"
+        titleSubject="to Stage 1"
+        placeholder="What needs fixing before this can be resubmitted? (optional)"
+        submitLabel="Send Back"
+        variant="secondary"
+      />
     </div>
   );
 }
@@ -826,6 +897,39 @@ function Stage1DataNote({ data }) {
         <span className={styles.outstandingValue}>{renderCellValue(data.emailNotification)}</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Read-only reference for the Stage 1.1 (Invoice) view — the "Return
+ * Transportation PO Required"/PO/PO Amount answers Stage 1's OWN form
+ * captures (col_319/317/318), invisible here otherwise since they carry no
+ * `context` and are filtered out of this view's editable field list. See
+ * this component's call site for the full reasoning.
+ */
+function ReturnPoReferenceNote({ data }) {
+  if (!data) return null;
+  const required = String(data.col_319 || '').trim();
+  if (!required) return null; // Stage 1 hasn't answered this yet — nothing to show
+  return (
+    <>
+      <h3 className={styles.sectionTitle}>Return Transportation PO (Stage 1)</h3>
+      <p className={styles.sectionHint}>Answered on Stage 1's own form — reference only, not editable here.</p>
+      <div className={styles.outstandingRow}>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>PO Required</span>
+          <span className={styles.outstandingValue}>{required}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Return Transportation PO</span>
+          <span className={styles.outstandingValue}>{renderCellValue(data.col_317)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>PO Amount</span>
+          <span className={styles.outstandingValue}>{renderCellValue(data.col_318)}</span>
+        </div>
+      </div>
+    </>
   );
 }
 

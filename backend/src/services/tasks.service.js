@@ -50,6 +50,7 @@ const MY_TASK_KEY_META = {
    * offlease.service.js's OL_STAGE_INFO internal stage numbers and are
    * unchanged; only the human-readable text changes. */
   olStage1: ['Off-Lease Stage 1: Intimation', 'olStage1'],
+  olStage1Invoice: ['Off-Lease Stage 1.1: Invoice', 'olStage1Invoice'],
   olStage2: ['Off-Lease (Retired) Lifting / Arrival', 'olStage2'],
   olStage3: ['Off-Lease Stage 4: Inspection Checklist', 'olStage3'],
   olStage4: ['Off-Lease (Retired) Quotation / Order', 'olStage4'],
@@ -78,7 +79,7 @@ const MY_TASK_KEY_META = {
  * scope's numbers into what every other caller sees for the next 90s.
  */
 export async function getMyTasks(user, force) {
-  const scope = salePersonScopeFor(user);
+  const scope = await salePersonScopeFor(user);
   const cacheKey = `${MYTASKS_CACHE_KEY}:${scopeCacheKey(scope)}`;
   if (force) { cacheRemove(cacheKey); cacheRemove('dash_v1'); } // force fresh counts
 
@@ -92,7 +93,7 @@ export async function getMyTasks(user, force) {
     const out = {
       pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
       expiring7: 0, expired: 0, renewPending: 0,
-      olStage1: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
+      olStage1: 0, olStage1Invoice: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
       /* Which cards the caller should see, or null for "show everything" (the
        * pre-existing, still-default behaviour for anyone not in this map).
        *
@@ -131,8 +132,9 @@ export async function getMyTasks(user, force) {
        on MY_TASK_KEY_META above. Stages 2 and 4 are retired (no active queue,
        never in OL_ACTIVE_STAGE_NUMS) and simply stay at the 0 default above. */
     try {
-      const { counts: olc, approval } = await getOffLeaseStageCounts();
+      const { counts: olc, approval, stage1Invoice } = await getOffLeaseStageCounts();
       out.offleaseApproval = approval ?? 0;
+      out.olStage1Invoice = stage1Invoice ?? 0;
       for (const n of [1, 3, 5, 6, 7, 8]) out[`olStage${n}`] = olc[n] ?? 0;
     } catch (e) { /* noop */ }
 

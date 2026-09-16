@@ -27,6 +27,16 @@ router.post('/documents/complete', requirePermission('document'), asyncHandler(e
 
 router.post('/action', requirePermission('expiry'), asyncHandler(expiryController.saveAction));
 
+router.post('/remark', requirePermission('expiry'), asyncHandler(expiryController.saveRemark));
+
 router.post('/renewal/complete-document-stage', requirePermission('renew'), asyncHandler(expiryController.completeRenewalDocStage));
+
+/* "Renew via Sales CRM" handoff. The picker list is read-only (same
+   open-read convention as the GETs above); minting the actual signed link
+   sits behind the 'renew' permission — same gate as the renewal workflow's
+   other action above, since a minted link identifies the caller to another
+   system. */
+router.get('/renewal-companies/containers', asyncHandler(expiryController.companyContainers));
+router.post('/renewal-link', requirePermission('renew'), asyncHandler(expiryController.renewalLink));
 
 export default router;

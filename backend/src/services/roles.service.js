@@ -1,8 +1,11 @@
 /**
  * Ported from LMS.js lines ~264-520: dynamic, admin-editable Roles & Access
- * system layered ADDITIVELY on top of the static ACTION_PERMISSIONS map
- * (config/permissions.config.js). A grant here can only ever ADD access
- * relative to the static map, never remove it.
+ * system. Originally layered ADDITIVELY on top of a static hardcoded
+ * ACTION_PERMISSIONS map (config/permissions.config.js) — that map was
+ * retired 2026-09-16 (migrated into these sheets via
+ * scripts/migrate-legacy-permissions.mjs; see permissions.service.js's
+ * userHasAction). This IS the whole authorization system now, not an
+ * add-on layer.
  *
  * Sheets (auto-created + seeded on first use):
  *   "Team Accounts"  — Email | Name | All Access | one column per PERMISSION_KEYS
@@ -20,18 +23,19 @@ import {
 } from './googleSheets.service.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { SHEETS } from '../config/sheets.config.js';
-import { PERMISSION_KEYS, SIDEBAR_KEYS, ROLES_ADMIN_EMAILS } from '../config/permissions.config.js';
+import { PERMISSION_KEYS, SIDEBAR_KEYS } from '../config/permissions.config.js';
 import { safeStr } from '../utils/format.js';
 import { cacheRemove, cacheGetOrLoad } from '../utils/memoryCache.js';
 import { accessDenied } from '../utils/AppError.js';
-import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 
 /**
- * SHEETS-FIRST (reverted 2026-08-21). Every read/write in this file goes
- * directly to the live Google Sheet; Mongo is not consulted for reads or
- * writes here at all — Roles & Access is low-traffic admin-only data, so
- * the quota cost of always reading live is negligible, and manual edits to
- * either sheet are visible immediately.
+ * SHEETS-FIRST (reverted 2026-08-21, actually enforced again 2026-09-16 —
+ * see loadTeamPermTable/loadSidebarTable's own comments for the gap this
+ * closed). Every read/write in this file goes directly to the live Google
+ * Sheet; Mongo is not consulted for reads or writes here at all — Roles &
+ * Access is low-traffic admin-only data, so the quota cost of always
+ * reading live is negligible, and manual edits to either sheet are visible
+ * immediately.
  */
 
 const TEAM_SHEET = SHEETS.TEAM_ACCOUNTS;
@@ -39,12 +43,27 @@ const SIDEBAR_SHEET = SHEETS.SIDEBAR_ACCESS;
 const TEAM_HEADER = ['Email', 'Name', 'All Access', ...PERMISSION_KEYS.map((p) => p.label)];
 const SIDEBAR_HEADER = ['Email', ...SIDEBAR_KEYS.map((p) => p.label)];
 
-export function isRolesAdmin(email) {
-  return ROLES_ADMIN_EMAILS.includes(email);
+/**
+ * REWORKED 2026-09-16: used to check a hardcoded ROLES_ADMIN_EMAILS array —
+ * "who administers Roles & Access" had no representation in Roles & Access
+ * itself. Now a real dynamic permission (`rolesAdmin`, PERMISSION_KEYS),
+ * editable in the same grid it governs, with NO hardcoded fallback
+ * (deliberate choice: a lockout is recovered by editing the live sheet
+ * directly, same as any other permission mistake, not a code-level escape
+ * hatch — see the migration script that seeded every prior
+ * ROLES_ADMIN_EMAILS member's rolesAdmin column true before this shipped).
+ * Both now async — every call site needs `await`.
+ *
+ * Uses hasDirectPermission, NOT dynamicHasPermission — see that function's
+ * own doc comment for the privilege-escalation bug that distinction fixes
+ * (an All-Access user must not automatically become a Roles Admin too).
+ */
+export async function isRolesAdmin(email) {
+  return hasDirectPermission(email, 'rolesAdmin');
 }
 
-export function assertRolesAdmin(email) {
-  if (!isRolesAdmin(email)) throw accessDenied('ACCESS_DENIED: Roles & Access is restricted to admins.');
+export async function assertRolesAdmin(email) {
+  if (!(await isRolesAdmin(email))) throw accessDenied('ACCESS_DENIED: Roles & Access is restricted to admins.');
 }
 
 function vec(trueKeys) {
@@ -158,10 +177,19 @@ export function clearRolesCache() {
 export async function loadTeamPermTable() {
   return cacheGetOrLoad(TEAM_CACHE_KEY, ROLES_CACHE_TTL, async () => {
     await ensureRolesSeeded();
-    // Read-only permission-table load, no write derives a row number from
-    // it — saveEmailPermission always re-resolves its own row live via
-    // findRowIndexByEmail. Safe for the Mongo mirror.
-    const { rows } = await getSheetDataFromMongo(TEAM_SHEET);
+    // BUG FOUND AND FIXED 2026-09-16: this read used getSheetDataFromMongo
+    // (the 5-minute-lagged reconcile mirror) despite this file's own header
+    // comment insisting every read/write here goes live — a leftover from
+    // the broader Mongo-first migration that swept other services and
+    // apparently touched this one too without updating the comment. The
+    // effect: saveEmailPermission's clearRolesCache() correctly evicted the
+    // in-process cache on every admin edit, but the very next read still
+    // hit a STALE mirror for up to 5 more minutes — an admin revoking access
+    // did not actually take effect immediately, silently contradicting the
+    // whole point of this being the live source of truth. getSheetData is
+    // the live read (same one findRowIndexByEmail below already uses to
+    // resolve a row to WRITE to) — genuinely live now, matching the comment.
+    const { rows } = await getSheetData(TEAM_SHEET);
     const out = {};
     for (const row of rows) {
       const email = safeStr(row[0]).trim().toLowerCase();
@@ -185,7 +213,8 @@ export async function isKnownTeamAccount(email) {
 export async function loadSidebarTable() {
   return cacheGetOrLoad(SIDEBAR_CACHE_KEY, ROLES_CACHE_TTL, async () => {
     await ensureRolesSeeded();
-    const { rows } = await getSheetDataFromMongo(SIDEBAR_SHEET);
+    // Same live-read fix as loadTeamPermTable above — see its comment.
+    const { rows } = await getSheetData(SIDEBAR_SHEET);
     const out = {};
     for (const row of rows) {
       const email = safeStr(row[0]).trim().toLowerCase();
@@ -198,7 +227,12 @@ export async function loadSidebarTable() {
   });
 }
 
-/** ADDITIVE: OR'd with the hardcoded ACTION_PERMISSIONS in permissions.service.js. */
+/** The single source every feature-permission check consults (removed
+ *  2026-09-16: previously OR'd with a hardcoded ACTION_PERMISSIONS
+ *  baseline — see permissions.config.js's header comment). "All Access"
+ *  bypasses every key here, by design: it's the grid's own blanket-grant
+ *  checkbox for ordinary feature permissions. Do NOT use this for
+ *  rolesAdmin/apiAdmin — see hasDirectPermission below for why. */
 export async function dynamicHasPermission(email, type) {
   try {
     const table = await loadTeamPermTable();
@@ -206,6 +240,33 @@ export async function dynamicHasPermission(email, type) {
     if (!acct) return false;
     if (acct.allAccess) return true;
     return !!acct.perms[type];
+  } catch (e) { return false; }
+}
+
+/**
+ * BUG FOUND AND FIXED 2026-09-16: isRolesAdmin originally called
+ * dynamicHasPermission(email, 'rolesAdmin') — but that function's "All
+ * Access" shortcut applies to EVERY key, so anyone with All Access checked
+ * (a normal, common grant for ordinary feature permissions — verify/expiry/
+ * off-lease stages/etc.) was silently ALSO treated as a Roles & Access
+ * admin, with no way to grant one without the other. Confirmed live:
+ * key.accounts@crystalgroup.in (Sagar) has All Access for their own
+ * sale-person-scoped work, which made isRolesAdmin() return true for them —
+ * and since salePersonScopeFor treats "is a roles admin" as "sees
+ * everyone's data" (isRolesAdmin(email) return null case), Sagar's Lease
+ * Expiry started showing every salesperson's rows instead of just their
+ * own. This is the SAME independence the original hardcoded
+ * ALL_ACCESS_EMAILS/ROLES_ADMIN_EMAILS arrays always had (see the old
+ * ALL_ACCESS_EMAILS comment: "Does NOT grant API Key / API Kit admin —
+ * that stays gated to API_SUPER_ADMIN only") — preserved here by reading
+ * the permission column DIRECTLY, bypassing the All Access shortcut.
+ * rolesAdmin/apiAdmin must be granted explicitly, never inherited.
+ */
+export async function hasDirectPermission(email, type) {
+  try {
+    const table = await loadTeamPermTable();
+    const acct = table[String(email).trim().toLowerCase()];
+    return !!acct?.perms[type];
   } catch (e) { return false; }
 }
 
@@ -274,7 +335,7 @@ const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'expiry', 'renewDocum
 const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables', 'offlease2', 'offlease4', 'offlease9']);
 
 export async function getRolesAndAccessData(callerEmail) {
-  assertRolesAdmin(callerEmail);
+  await assertRolesAdmin(callerEmail);
   await ensureRolesSeeded();
   const team = await loadTeamPermTable();
   const sidebar = await loadSidebarTable();
@@ -294,7 +355,7 @@ async function findRowIndexByEmail(sheetName, email) {
 }
 
 export async function saveEmailPermission(callerEmail, email, key, value) {
-  assertRolesAdmin(callerEmail);
+  await assertRolesAdmin(callerEmail);
   email = safeStr(email).trim().toLowerCase();
   const keys = PERMISSION_KEYS.map((p) => p.key);
   if (key !== 'allAccess' && !keys.includes(key)) throw new Error('Unknown permission key');
@@ -311,7 +372,7 @@ export async function saveEmailPermission(callerEmail, email, key, value) {
 }
 
 export async function saveEmailSidebar(callerEmail, email, key, value) {
-  assertRolesAdmin(callerEmail);
+  await assertRolesAdmin(callerEmail);
   email = safeStr(email).trim().toLowerCase();
   const keys = SIDEBAR_KEYS.map((p) => p.key);
   const idx = keys.indexOf(key);
@@ -328,7 +389,7 @@ export async function saveEmailSidebar(callerEmail, email, key, value) {
 }
 
 export async function addTeamAccount(callerEmail, email, name) {
-  assertRolesAdmin(callerEmail);
+  await assertRolesAdmin(callerEmail);
   email = safeStr(email).trim().toLowerCase();
   name = safeStr(name).trim();
   if (!email || !email.includes('@')) throw new Error('Valid email is required');
@@ -346,7 +407,7 @@ export async function addTeamAccount(callerEmail, email, name) {
 }
 
 export async function removeTeamAccount(callerEmail, email) {
-  assertRolesAdmin(callerEmail);
+  await assertRolesAdmin(callerEmail);
   email = safeStr(email).trim().toLowerCase();
 
   let tFound = false;

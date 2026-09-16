@@ -11,7 +11,7 @@ import {
   saveOffLeaseStage, saveOffLeaseApprovalAction, saveOffLeaseMoveToStage, saveOffLeaseSendBack,
   saveOffLeaseHold, saveOffLeaseSendBackToStage1, saveOffLeaseSendRejectedToStage1
 } from '../services/offlease.service.js';
-import { saveExpiryAction, completeDocumentStage } from '../services/expiry.service.js';
+import { saveExpiryAction, completeDocumentStage, saveExpiryRemark } from '../services/expiry.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
@@ -22,7 +22,8 @@ export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseSendBackToStage1': saveOffLeaseSendBackToStage1,
   'offlease.saveOffLeaseSendRejectedToStage1': saveOffLeaseSendRejectedToStage1,
   'expiry.saveExpiryAction': saveExpiryAction,
-  'expiry.completeDocumentStage': completeDocumentStage
+  'expiry.completeDocumentStage': completeDocumentStage,
+  'expiry.saveExpiryRemark': saveExpiryRemark
 };
 
 export function resolveReplay(kind) {

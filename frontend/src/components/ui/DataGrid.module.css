@@ -4,6 +4,12 @@
   border-radius: var(--r-md);
   border: 1px solid var(--line);
 }
+/* Vertical scrollport so sticky thead (top: 0) actually pins while the
+   body scrolls. Without this, overflow-x alone still creates a scroll
+   container but the wrap grows with content, so sticky never engages. */
+.scrollWrapY {
+  overflow-y: auto;
+}
 /* Cells WRAP rather than forcing the table wider than its container.
    `nowrap` guaranteed a horizontal scrollbar on any grid with more than a few
    columns — a wide client name alone was enough — and reading a table you have
@@ -24,6 +30,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
+  /* Opaque so scrolling body rows never show through the frozen header. */
   background: var(--surface-2);
   color: var(--text-2);
   font-family: var(--f-mono);
@@ -34,6 +41,7 @@
   padding: 10px 13px;
   text-align: left;
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px 0 var(--line);
 }
 .table tbody td {
   padding: 11px 13px;

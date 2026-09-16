@@ -40,7 +40,7 @@ const KEY_PREFIX = 'lms_pub_';
  *  Lowercase only: normalizeScopes() below lowercases every incoming scope
  *  token before checking it against this list, so a mixed-case key here
  *  could never actually be granted. */
-export const API_DOMAINS = ['leases', 'offlease', 'accounts', 'offleaseefficiency'];
+export const API_DOMAINS = ['leases', 'offlease', 'accounts', 'offleaseefficiency', 'salesos'];
 
 /** Domains with an actual write endpoint wired in public.routes.js. `accounts`
  *  and `offleaseefficiency` are read-only everywhere in this app — the

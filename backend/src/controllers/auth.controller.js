@@ -51,14 +51,14 @@ export async function loginActivity(req, res) {
   // Original getEmpLoginActivity() had no explicit permission gate of its own
   // (see the exposure note in api.js Api_Config.gs header) — restrict to
   // Roles & Access admins here since it's staff-monitoring data.
-  if (!isRolesAdmin(req.user.email)) {
+  if (!(await isRolesAdmin(req.user.email))) {
     return res.status(403).json({ error: 'ACCESS_DENIED: Login activity is restricted to admins.' });
   }
   res.json(await authService.getEmpLoginActivity());
 }
 
 export async function addUser(req, res) {
-  if (!isRolesAdmin(req.user.email)) {
+  if (!(await isRolesAdmin(req.user.email))) {
     return res.status(403).json({ error: 'ACCESS_DENIED: Restricted to admins.' });
   }
   const { name, empId, password, email } = req.body;

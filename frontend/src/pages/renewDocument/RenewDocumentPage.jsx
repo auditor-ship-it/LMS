@@ -218,7 +218,7 @@ export function RenewDocumentPage() {
 
       <div className={styles.kpiRow}>
         <StatCard
-          icon="edit" label="Documents Pending" value={rows.length} tint="amber"
+          icon="edit" label="Renew Pending" value={rows.length} tint="amber"
           footnote={rows.length > 0 ? 'Needs agreement/PO upload' : undefined}
         />
       </div>

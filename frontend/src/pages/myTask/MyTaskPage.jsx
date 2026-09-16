@@ -40,6 +40,7 @@ const CARD_DEFS = [
    * untouched on the ones that remain — they still index getMyTasks()'s
    * response 1:1 by internal stage number. */
   { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage1Invoice', label: 'Off-Lease Stage 1.1: Invoice', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   /* The approval gate sits BETWEEN Stage 1 and Stage 2 — same reasoning as
    * the Off-Lease tab strip ("Stage 1A (Approval)") and the Dashboard KPI
    * row ("Stage 1A · Pending approval"). Used to live in the Pending

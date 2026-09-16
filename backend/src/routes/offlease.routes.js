@@ -67,6 +67,12 @@ router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprov
    2026-09-11; see saveOffLeaseSendBackFromApproval's doc comment. */
 router.post('/:containerNo/approval/send-back', asyncHandler(offLeaseController.sendBackFromApproval));
 
+/* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
+   stages (see saveOffLeaseSendBackFromBilling's doc comment). Declared
+   alongside the approval one above for the same reason (not a normal
+   stage-column save). */
+router.post('/:containerNo/billing/send-back', asyncHandler(offLeaseController.sendBackFromBilling));
+
 /* Dashboard: pipeline overview (all containers) + single-container lookup */
 router.get('/dashboard', asyncHandler(offLeaseController.getDashboardData));
 router.get('/efficiency', asyncHandler(offLeaseController.getEfficiencyData));

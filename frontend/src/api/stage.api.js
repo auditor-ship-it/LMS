@@ -73,3 +73,12 @@ export const saveSendBackToStage1 = (containerNo, rowNum) =>
  *  doc comment. */
 export const saveSendRejectedToStage1 = (containerNo, rowNum) =>
   apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/reject/send-back`, { rowNum }).then((r) => r.data.message);
+
+/** POST /api/offlease/:containerNo/billing/send-back — Stage 5 (Billing
+ *  Reconciliation) "Send Back" to Stage 1: reopens BOTH stages (see backend
+ *  saveOffLeaseSendBackFromBilling's doc comment) — Stage 1 for the actual
+ *  correction, Stage 5 so it re-enters the Billing queue for a fresh review
+ *  once Stage 1 is resubmitted. `remarks` is optional free text (what needs
+ *  fixing); `rowNum`: see getStageDetail's doc comment. */
+export const saveSendBackFromBilling = (containerNo, remarks, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/billing/send-back`, { remarks, rowNum }).then((r) => r.data.message);

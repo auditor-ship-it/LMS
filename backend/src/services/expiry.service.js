@@ -51,7 +51,7 @@ import { AppError, notFound } from '../utils/AppError.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
 import { normKey as _normKey, splitContainers as _splitContainers } from '../utils/normalize.js';
-import { salePersonScopeFor, matchesSalePersonScope } from './salePersonAccess.service.js';
+import { salePersonScopeFor, matchesSalePersonScope, canonicalSalePersonName } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { sendMail } from './email.service.js';
 
@@ -73,7 +73,7 @@ function padRow(row, len) {
  *  sheet has had columns inserted/removed by hand before (see the Off-Lease
  *  Tracking drift elsewhere in this codebase), and a positional read would
  *  silently use the wrong column instead of failing loudly. */
-function findHeaderCol(headers, ...names) {
+export function findHeaderCol(headers, ...names) {
   for (let h = 0; h < headers.length; h++) {
     const hd = String(headers[h] || '').trim().toLowerCase();
     if (names.includes(hd)) return h;
@@ -162,6 +162,26 @@ export function _resolveOrderNo(ordMap, containerNo, clientName) {
 export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
 const DEPLOYED_RAW_TTL_SECS = 30;
 
+/* Lease Expiry free-text notes live in Deployed column AI (0-based index 34).
+ * Explicitly NOT AE (30) — that is "Renewal History Dates" and was briefly
+ * mis-read as remarks (showed dates like 01-09-2026). Also not AD (29)
+ * "Remarks", which belongs to Renew & Document. */
+export const EXPIRY_REMARK_COL = 34; // AI
+export const EXPIRY_REMARK_HEADER = 'Expiry Remarks';
+
+function findExpiryRemarkCol(headers) {
+  /* Dedicated names first (anywhere on the sheet). */
+  const byName = findHeaderCol(headers, 'expiry remarks', 'lease expiry remarks', 'expiry comment');
+  if (byName >= 0) return byName;
+  /* Sheet column AI may already be labelled plain "Remarks" (confirmed live
+     header[34] === "Remarks "). Only accept that on AI — never AD (29), which
+     is Renew & Document's own Remarks column. Never fall back to AE (30)
+     Renewal History Dates. */
+  const aiHdr = String(headers[EXPIRY_REMARK_COL] || '').trim().toLowerCase();
+  if (aiHdr === 'remarks' || aiHdr === 'expiry remarks') return EXPIRY_REMARK_COL;
+  return -1;
+}
+
 /** The Deployed sheet's raw values, shared across every filterType and
  *  every caller — added 2026-08-26. My Task calls this function twice in
  *  one load ('pending' then 'documents'), each of which used to
@@ -186,8 +206,10 @@ export async function getExpiryDataByFilter(filterType, user) {
   const { values, _stale, _staleSince } = await _deployedRawValues();
   if (values.length < 2) return { headers: [], data: [], validColIdx: -1 };
 
-  const allHeaders = padRow(values[0], 26);
-  const allRows = values.slice(1).map((r) => padRow(r, 26));
+  const readWidth = Math.max(values[0]?.length || 0, 39);
+  const allHeaders = padRow(values[0], readWidth);
+  const allRows = values.slice(1).map((r) => padRow(r, readWidth));
+  const expiryRemarkCol = findExpiryRemarkCol(allHeaders);
 
   let colIdx = -1;
   for (let h = 0; h <= 14; h++) {
@@ -217,7 +239,7 @@ export async function getExpiryDataByFilter(filterType, user) {
    *
    * Located by header, not hardcoded to its current index 9 — see
    * findHeaderCol above. */
-  const salePersonScope = salePersonScopeFor(user);
+  const salePersonScope = await salePersonScopeFor(user);
   const salePersonCol = findHeaderCol(allHeaders, 'sale person');
   if (salePersonScope && salePersonCol === -1) {
     /* The column could not be located — fail CLOSED (show nothing) rather
@@ -241,8 +263,15 @@ export async function getExpiryDataByFilter(filterType, user) {
   const liveSalePerson = (row) => {
     if (salePersonCol === -1) return '';
     const sheetValue = safeStr(row[salePersonCol]);
-    if (customerCol === -1) return sheetValue;
-    return resolveSalePerson(row[customerCol]) || sheetValue;
+    const raw = customerCol === -1 ? sheetValue : (resolveSalePerson(row[customerCol]) || sheetValue);
+    /* canonicalSalePersonName: the sheet/CRM carry more than one spelling
+       for the same desk (e.g. "Sagar" and "Sagar-A") — normalize to the
+       one business name that should ever be shown, so the same person's
+       rows don't display under two different names depending on which
+       source (CRM vs. sheet) happened to answer for that row. Applied here
+       so filtering below and the value spliced into the display row are
+       always the SAME canonical name. */
+    return canonicalSalePersonName(raw);
   };
 
   const today = new Date();
@@ -366,7 +395,16 @@ export async function getExpiryDataByFilter(filterType, user) {
        why a container-number-only lookup there isn't safe (a returned
        lease's old row stays on the sheet, not deleted, so a container can
        have more than one row and a plain search can grab the wrong one). */
-    const item = { row: displayRow, daysLeft: days, band, validSource, actionDate: safeStr(vVal), actionStatus: safeStr(wVal), _rowNum: ri + 2 };
+    const item = {
+      row: displayRow,
+      daysLeft: days,
+      band,
+      validSource,
+      actionDate: safeStr(vVal),
+      actionStatus: safeStr(wVal),
+      remark: expiryRemarkCol >= 0 ? safeStr(row[expiryRemarkCol]) : '',
+      _rowNum: ri + 2
+    };
     if (filterType === 'documents') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);
@@ -621,6 +659,99 @@ export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail
   return 'OK';
 }
 
+/**
+ * Live-Sheets write for Lease Expiry remarks (column AI). Used by the outbox
+ * worker to replay what saveExpiryRemarkFast already applied to Mongo.
+ *
+ * Writes ONLY AI ("Expiry Remarks"). Does not touch Renewal History Dates
+ * (AE), Renew & Document Remarks (AD), or Update/Status (V/W).
+ */
+export async function saveExpiryRemark(containerNo, remark, callerEmail, knownRow) {
+  await checkActionPermission('expiry', callerEmail);
+  return withSheetLock(SHEETS.DEPLOYED, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+    const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
+    if (!rows.length) throw new AppError('No data rows');
+
+    const hdrs = headers.slice();
+    while (hdrs.length <= EXPIRY_REMARK_COL) hdrs.push('');
+    const existingHdr = String(hdrs[EXPIRY_REMARK_COL] || '').trim();
+    const existingNorm = existingHdr.toLowerCase();
+    const allowed = !existingHdr
+      || existingNorm === EXPIRY_REMARK_HEADER.toLowerCase()
+      || existingNorm === 'remarks';
+    if (!allowed) {
+      throw new AppError(`Deployed column AI is already "${existingHdr}" — cannot store Expiry Remarks there.`);
+    }
+    if (!existingHdr) {
+      hdrs[EXPIRY_REMARK_COL] = EXPIRY_REMARK_HEADER;
+      await updateCell(SHEETS.DEPLOYED, 1, EXPIRY_REMARK_COL, EXPIRY_REMARK_HEADER);
+      try {
+        await getCollection(SHEETS.DEPLOYED).updateOne({ _id: '__meta__' }, { $set: { headers: hdrs } });
+      } catch (e) { /* non-fatal */ }
+    }
+
+    const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
+    if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
+
+    const text = safeStr(remark).trim();
+    const updates = [
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(EXPIRY_REMARK_COL)}${targetRow}`, values: [[text]] }
+    ];
+    await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
+    cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+    return { result: 'OK', remark: text };
+  });
+}
+
+/**
+ * Mongo-first fast path for Lease Expiry remarks — write column AI on the
+ * Deployed mirror immediately, then replay saveExpiryRemark against the live
+ * sheet via the outbox (same pattern as saveExpiryActionFast).
+ */
+export async function saveExpiryRemarkFast(containerNo, remark, callerEmail, knownRow) {
+  await checkActionPermission('expiry', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+
+  const text = safeStr(remark).trim();
+  const col = getCollection(SHEETS.DEPLOYED);
+
+  /* Stamp AI header on the Mongo meta doc first so the next list read
+     resolves Expiry Remarks by name/column immediately. */
+  const meta = await col.findOne({ _id: '__meta__' });
+  const hdrs = Array.isArray(meta?.headers) ? meta.headers.slice() : [];
+  while (hdrs.length <= EXPIRY_REMARK_COL) hdrs.push('');
+  const existingHdr = String(hdrs[EXPIRY_REMARK_COL] || '').trim();
+  const existingNorm = existingHdr.toLowerCase();
+  const allowed = !existingHdr
+    || existingNorm === EXPIRY_REMARK_HEADER.toLowerCase()
+    || existingNorm === 'remarks';
+  if (!allowed) {
+    throw new AppError(`Deployed column AI is already "${existingHdr}" — cannot store Expiry Remarks there.`);
+  }
+  if (!existingHdr) {
+    hdrs[EXPIRY_REMARK_COL] = EXPIRY_REMARK_HEADER;
+    await col.updateOne({ _id: '__meta__' }, { $set: { headers: hdrs } });
+  }
+
+  await col.updateOne(
+    { key: found.key },
+    { $set: { [`row.${EXPIRY_REMARK_COL}`]: text, updatedAt: new Date() } }
+  );
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+  cacheRemove(`mongo_raw_v1:${SHEETS.DEPLOYED}`);
+
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.saveExpiryRemark', [containerNo, text, callerEmail, resolvedRow], { actor: callerEmail });
+  return { result: 'OK', remark: text };
+}
+
 /* =============================================
    completeDocStage — LMS.js 5892-5985 (renewal-log dependencies also ported
    here: _deployedClientName @681, _logRenewal @701 — see file header note)
@@ -663,7 +794,7 @@ export async function getRenewalLogReport(user) {
     return { headers: RENEWAL_LOG_HEADERS, data: [], error: e?.message || 'Could not read Renewal Log' };
   }
 
-  const salePersonScope = salePersonScopeFor(user);
+  const salePersonScope = await salePersonScopeFor(user);
   const resolveSalePerson = salePersonScope ? await getSalePersonResolver() : null;
 
   const data = rows
@@ -718,7 +849,7 @@ export async function getNewLeaseReport(user) {
     return { data: [], error: e?.message || 'Could not read New Lease' };
   }
 
-  const salePersonScope = salePersonScopeFor(user);
+  const salePersonScope = await salePersonScopeFor(user);
   /* LIVE SALE PERSON, CRM-first with a fallback to this sheet's own Sale
    * Exec cell — identical reasoning to getExpiryDataByFilter's liveSalePerson:
    * the sheet cell is a snapshot from whenever this row was created and can
@@ -732,8 +863,10 @@ export async function getNewLeaseReport(user) {
   const resolveSalePerson = salePersonScope ? await getSalePersonResolver() : null;
   const liveSaleExec = (r) => {
     const sheetValue = safeStr(r[NL.SALE_EXEC]).trim();
-    if (!resolveSalePerson) return sheetValue;
-    return resolveSalePerson(r[NL.CLIENT_NAME]) || sheetValue;
+    // canonicalSalePersonName — see getExpiryDataByFilter's liveSalePerson
+    // for why (same "Sagar"/"Sagar-A" style spelling split applies here).
+    if (!resolveSalePerson) return canonicalSalePersonName(sheetValue);
+    return canonicalSalePersonName(resolveSalePerson(r[NL.CLIENT_NAME]) || sheetValue);
   };
 
   const data = rows
@@ -888,7 +1021,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
    container (explicit requirement 2026-08-25 — see the identical note on
    verify.service.js's own copy of this function, which both write-paths
    must agree with since they write the same sheet). */
-async function _logRenewal(info) {
+export async function _logRenewal(info) {
   try {
     await insertSheetIfMissing(RENEWAL_LOG_SHEET, RENEWAL_LOG_HEADERS);
     const { headers: curHeaders } = await getSheetData(RENEWAL_LOG_SHEET, undefined, 'A1:1');

@@ -36,11 +36,17 @@ import { safeStr } from '../utils/format.js';
  *  Gargi and Laveena added 2026-08-20 for the same restriction, now also
  *  applied to the Off-Lease module (see offlease.service.js's
  *  _offLeaseAccessGate) — same six-login screenshot, same USER-sheet
- *  credentials, this map just adds the two names that were missing. */
+ *  credentials, this map just adds the two names that were missing.
+ *
+ * key.accounts@crystalgroup.in changed 'Sagar' -> 'Sagar-A' 2026-09-16,
+ * explicit business request: this desk's records must always DISPLAY as
+ * "Sagar-A", not "Sagar" — see SALE_PERSON_ALIASES below for how the plain
+ * "Sagar" spelling (which the CRM/sheet also still carries) keeps matching
+ * and gets normalized to this canonical form wherever it's shown. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',
-  'key.accounts@crystalgroup.in': 'Sagar',
+  'key.accounts@crystalgroup.in': 'Sagar-A',
   'sales1@crystalgroup.in': 'Sapna',
   'sales@crystalgroup.in': 'Gargi',
   'contactsales@crystalgroup.in': 'Laveena'
@@ -57,9 +63,23 @@ const norm = (v) => safeStr(v).trim().toLowerCase();
  * app never writes assignments back), so the spelling can't be fixed at the
  * source; treat known aliases as the same identity here instead. Add an
  * entry only when a real person is confirmed affected, same "grows
- * deliberately" rule as SALE_PERSON_BY_EMAIL above. */
+ * deliberately" rule as SALE_PERSON_BY_EMAIL above.
+ *
+ * Keyed by the CANONICAL (displayed) spelling, with every OTHER spelling
+ * that must still match and normalize to it listed as an alias.
+ *
+ * 'sagar-a': ['sagar'] — confirmed live the CRM/sheet carry both "Sagar"
+ * (611 leads) and "Sagar-A" (73 leads) for the same desk. Originally the
+ * canonical spelling was 'Sagar' with 'Sagar-A' as its alias (2026-09-16,
+ * first fix); flipped THE SAME DAY per explicit business request that the
+ * desk display consistently as "Sagar-A" instead — canonicalSalePersonName
+ * now normalizes plain "Sagar" UP to "Sagar-A", not the other way round.
+ * Matching (aliasesFor/matchesSalePersonScope) is unaffected either way —
+ * both spellings always resolve to the same identity, only which spelling
+ * wins the DISPLAY changed. */
 const SALE_PERSON_ALIASES = {
-  laveena: ['lavina']
+  laveena: ['lavina'],
+  'sagar-a': ['sagar']
 };
 
 /** `scope`'s own normalized name plus any known aliases (see
@@ -72,18 +92,22 @@ function aliasesFor(scope) {
 
 /**
  * The Sale Person name `user` must be restricted to, or null if they see
- * every record — an admin (ROLES_ADMIN_EMAILS; "Admin sees all" per spec),
- * or a login with no mapped Sale Person identity, which keeps today's
- * unfiltered behaviour rather than hiding data with no clear owner.
+ * every record — an admin (dynamic `rolesAdmin` permission; "Admin sees
+ * all" per spec), or a login with no mapped Sale Person identity, which
+ * keeps today's unfiltered behaviour rather than hiding data with no clear
+ * owner.
  *
  * `user` is always the AUTHENTICATED session object (req.user), sourced from
  * the bearer token — never from a request body/query field a caller could
  * substitute another person's name/email/id into.
+ *
+ * Async since 2026-09-16 (isRolesAdmin became a live permission lookup,
+ * not a hardcoded array check) — every call site needs `await`.
  */
-export function salePersonScopeFor(user) {
+export async function salePersonScopeFor(user) {
   const email = norm(user?.email);
   if (!email) return null;
-  if (isRolesAdmin(email)) return null;
+  if (await isRolesAdmin(email)) return null;
   return SALE_PERSON_BY_EMAIL[email] || null;
 }
 

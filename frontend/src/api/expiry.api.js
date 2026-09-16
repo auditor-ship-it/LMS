@@ -24,3 +24,21 @@ export const refreshSalePersons = () =>
  *  pass it when known. */
 export const saveExpiryAction = (rowId, timestamp, status, rowNum) =>
   apiClient.post('/expiry/action', { rowId, timestamp, status, rowNum }).then((r) => r.data.result);
+
+/** POST /api/expiry/remark — save / clear the Lease Expiry comment for one
+ *  Deployed row. Resolves to { result, remark }. Always pass `rowNum`
+ *  (item._rowNum) — same exact-row rule as saveExpiryAction. */
+export const saveExpiryRemark = (containerNo, remark, rowNum) =>
+  apiClient.post('/expiry/remark', { containerNo, remark, rowNum }).then((r) => r.data);
+
+/** GET /api/expiry/renewal-companies/containers?company=... — every still-
+ *  live container under that exact company name, for the "Renew via Sales
+ *  CRM" picker. */
+export const getCompanyContainers = (company) =>
+  apiClient.get('/expiry/renewal-companies/containers', { params: { company } }).then((r) => r.data);
+
+/** POST /api/expiry/renewal-link — mints the signed handoff link to the
+ *  Sales CRM's own renewal form for the selected containers. Resolves to
+ *  { url, containers, expiresInSecs }. */
+export const createRenewalLink = (company, containers) =>
+  apiClient.post('/expiry/renewal-link', { company, containers }).then((r) => r.data);

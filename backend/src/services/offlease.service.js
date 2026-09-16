@@ -1770,7 +1770,7 @@ export async function getOffLeaseEntryStamp(containerNo) {
  * Off-Lease endpoint, including by guessing a container number.
  */
 export async function _offLeaseAccessGate(user) {
-  const scope = salePersonScopeFor(user);
+  const scope = await salePersonScopeFor(user);
   if (!scope) return null;
   const resolveSalePerson = await getSalePersonResolver();
   return (clientName) => {
@@ -4915,6 +4915,81 @@ export async function saveOffLeaseSendBackFromApproval(containerNo, userEmail, r
       await getCollection(OL_SHEET).updateOne(
         { key: `row_${rn - 2}` },
         { $set: { [`row.${stage1StatusCol}`]: '', 'row.14': rmk, updatedAt: new Date() } }
+      );
+    } catch (e) {
+      console.error('[OL-SEND-BACK] mirror patch failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/**
+ * "Send Back" from Stage 5 (Billing Reconciliation) to Stage 1 — same shape
+ * and philosophy as saveOffLeaseSendBackFromApproval above (does not cancel
+ * the off-lease request or touch the Deployed sheet), extended to also
+ * reopen Stage 5 itself: by the time reconciliation is underway the
+ * container has already passed Stage 1, so unlike the Approval-desk version
+ * (nothing downstream exists yet at that point) a correction here needs BOTH
+ * ends reset — Stage 1 for the actual fix, Stage 5 so the corrected data
+ * re-enters the Billing queue for a fresh review rather than sitting
+ * permanently "complete" against numbers that may no longer match. Explicit
+ * request 2026-09-16: "add the send back button and remarks, move stage 1,
+ * then stage 1 edit the data then submitted, then show stage 5."
+ *
+ * Only Stage 5's STATUS (col 44) is cleared — its own already-entered
+ * figures (outstanding amount, billed-till date, etc., in
+ * OL_STAGE5_EXTRA_COLS) are left exactly as they were, same as how the
+ * approval version leaves Stage 1's timestamp/user stamps untouched.
+ * Nothing is deleted, only unmarked as complete; whoever reopens Stage 5
+ * after the Stage 1 fix sees the old figures pre-filled and corrects what
+ * needs correcting.
+ *
+ * The send-back note is written to col_316 — Stage 5's own user-facing
+ * "Remark" field (stageFields.js), the same box visible on the form itself
+ * — not to columns 29-44's legacy auto-quad (that range predates
+ * OL_STAGE5_EXTRA_COLS and Stage 5's real fields no longer read/write it;
+ * see OL_STAGE5_EXTRA_COLS' own doc comment for why they moved). Using the
+ * field that's actually rendered means the note is genuinely visible to
+ * whoever reopens Stage 5, not buried in a column nothing displays.
+ */
+export async function saveOffLeaseSendBackFromBilling(containerNo, userEmail, remarks = '', knownRow) {
+  await checkActionPermission('offlease5', userEmail);
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+    const stage5StatusCol = OL_STAGE_INFO[5].statusCol;
+    const stage5RemarkCol = OL_STAGE5_EXTRA_COLS[11]; // col_316 — Stage 5's own "Remark" form field
+    const row = rows[rn - 2] || [];
+    if (!safeStr(row[stage5StatusCol]).trim()) {
+      throw new AppError('Stage 5 is not completed yet — nothing pending review to send back.');
+    }
+
+    const rmk = safeStr(remarks).trim() || `Sent back to Stage 1 on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+    const cellUpdates = [
+      { range: `'${OL_SHEET}'!${colLetter(stage1StatusCol)}${rn}`, values: [['']] },
+      { range: `'${OL_SHEET}'!${colLetter(14)}${rn}`, values: [[rmk]] },
+      { range: `'${OL_SHEET}'!${colLetter(stage5StatusCol)}${rn}`, values: [['']] },
+      { range: `'${OL_SHEET}'!${colLetter(stage5RemarkCol)}${rn}`, values: [[rmk]] }
+    ];
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      await getCollection(OL_SHEET).updateOne(
+        { key: `row_${rn - 2}` },
+        {
+          $set: {
+            [`row.${stage1StatusCol}`]: '', 'row.14': rmk,
+            [`row.${stage5StatusCol}`]: '', [`row.${stage5RemarkCol}`]: rmk,
+            updatedAt: new Date()
+          }
+        }
       );
     } catch (e) {
       console.error('[OL-SEND-BACK] mirror patch failed (reconcile will correct):', e?.message || e);
