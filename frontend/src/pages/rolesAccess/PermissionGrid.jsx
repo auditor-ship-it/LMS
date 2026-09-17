@@ -17,6 +17,8 @@ export function PermissionGrid({ emails, permKeys, emailPerms, onToggle }) {
 
   return (
     <DataGrid
+      className={styles.frozenGrid}
+      bodyMaxHeight="min(62vh, calc(100vh - 340px))"
       headers={[
         'What they can do',
         // Column is already scoped to one email per row below (onToggle,

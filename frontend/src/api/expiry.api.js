@@ -42,3 +42,9 @@ export const getCompanyContainers = (company) =>
  *  { url, containers, expiresInSecs }. */
 export const createRenewalLink = (company, containers) =>
   apiClient.post('/expiry/renewal-link', { company, containers }).then((r) => r.data);
+
+/** POST /api/expiry/export-sheet — turns the caller's own already-filtered
+ *  table into a brand-new standalone Google Sheet. Resolves to
+ *  { url, spreadsheetId }. */
+export const exportToGoogleSheet = (title, headers, rows) =>
+  apiClient.post('/expiry/export-sheet', { title, headers, rows }).then((r) => r.data);

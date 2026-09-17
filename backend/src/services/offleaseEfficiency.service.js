@@ -105,8 +105,8 @@ const msToMin = (ms) => (ms == null ? null : round2(ms / MIN_MS));
  * the implementation report for confirmation.
  */
 const STAGE_OWNERS = {
-  1: 'Christopher', approval: 'Pushpa Maam', [OL_STAGE2_INTERNAL]: 'Kshirod Khatua',
-  [OL_STAGE3_INTERNAL]: 'Pritam', [OL_INSPECTION_STAGE]: 'Sitaram', [OL_BILLING_STAGE]: 'Shivani Maam',
+  1: 'Christopher', approval: 'Pushpa', [OL_STAGE2_INTERNAL]: 'Kshirod Khatua',
+  [OL_STAGE3_INTERNAL]: 'Pritam', [OL_INSPECTION_STAGE]: 'Sitaram', [OL_BILLING_STAGE]: 'Shivani',
   [OL_CLOSURE_STAGE]: 'Unassigned'
 };
 

@@ -26,7 +26,7 @@ import styles from './OffLeasePage.module.css';
    Stage 2 — so it is numbered 1.2 and placed immediately after Stage 1 rather
    than floating at the front of the strip, where the tab order implied
    approvals happened before intimation. */
-const APPROVAL_TAB = { key: 'approval', label: 'Stage 1.2 (Approval)', countKey: 'approval' };
+const APPROVAL_TAB = { key: 'approval', label: 'Stage 1.2 (Pushpa)', countKey: 'approval' };
 
 /* Not a stage of its own either — a filtered view of Stage 1's own rows
    (Transportation PO required, invoice not yet uploaded — see
@@ -34,7 +34,7 @@ const APPROVAL_TAB = { key: 'approval', label: 'Stage 1.2 (Approval)', countKey:
    it reads the same way "Stage 1.2 (Approval)" does. Opens the exact same
    Stage 1 form (StagePageBase with forcedFilter="invoice"), not a separate
    queue/backend stage. Added 2026-09-04. */
-const STAGE11_TAB = { key: 'stage1invoice', label: 'Stage 1.1 (Invoice)', countKey: 'stage1Invoice' };
+const STAGE11_TAB = { key: 'stage1invoice', label: 'Stage 1.1 (Shivani)', countKey: 'stage1Invoice' };
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
