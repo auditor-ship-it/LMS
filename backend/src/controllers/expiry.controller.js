@@ -1,6 +1,7 @@
 import * as expiryService from '../services/expiry.service.js';
 import { refreshSalesCrmLeadIndex } from '../services/salesCrmLeads.service.js';
 import { getCompanyContainers, createRenewalLink } from '../services/renewalHandoff.service.js';
+import { exportRowsToGoogleSheet } from '../services/sheetExport.service.js';
 import { cacheRemoveByPrefix } from '../utils/memoryCache.js';
 
 /** GET /api/expiry?filter=pending|renewed|documents
@@ -87,6 +88,16 @@ export async function saveAction(req, res) {
 export async function saveRemark(req, res) {
   const { containerNo, remark, rowNum } = req.body;
   res.json(await expiryService.saveExpiryRemarkFast(containerNo, remark, req.user.email, rowNum));
+}
+
+/** POST /api/expiry/export-sheet — turns whatever headers/rows the caller
+ *  already has on screen into a brand-new Google Sheet (see
+ *  sheetExport.service.js). Never reads app data itself — the frontend
+ *  sends exactly what it's already rendering (already scoped/filtered),
+ *  same trust level as a client-side Excel export. */
+export async function exportToGoogleSheet(req, res) {
+  const { title, headers, rows } = req.body;
+  res.json(await exportRowsToGoogleSheet(title, headers, rows));
 }
 
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */

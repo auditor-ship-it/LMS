@@ -47,6 +47,11 @@
  * (298/299 = Move To Stage's own client-scope/arrival-date columns,
  * 300..302 = Hold, 303/304 = Off-Lease Tracking Remarks/Requested By — all
  * already in live use, just not individually commented here).
+ *
+ * Index 325 ("Invoice Additional (JSON)") is the same kind of deliberate,
+ * hand-added exception — added 2026-09-17 for the Stage 1.1 tab's "+ Add
+ * Invoice" button (every invoice after the first, as one JSON array; see
+ * OL_STAGE1_EXTRA_COLS's own doc comment in offlease.service.js).
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -133,4 +138,5 @@ export const OL_HEADERS = [
   "Billing Accrued Rental Amount Date", "Billing Reconcile Entire Cycle", "Billing Remark",
   "Transportation PO", "Transportation PO Amount", "Transportation PO Required",
   "Invoice Amount", "Invoice Upload", "Invoice Date", "Invoice Remarks", "Invoice No",
+  "Invoice Additional (JSON)",
 ];

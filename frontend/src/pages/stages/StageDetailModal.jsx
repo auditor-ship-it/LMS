@@ -71,6 +71,33 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
 
+  /* Stage 1.1's "+ Add Invoice" — every invoice beyond the first one, held
+     as plain component state rather than going through values/col_N like
+     the rest of the form. col_325 stores them as a single JSON array (see
+     OL_STAGE1_EXTRA_COLS's doc comment in offlease.service.js for why one
+     JSON column instead of a fixed block of columns per slot); this state
+     is that array parsed out into editable rows, each with its own pending
+     file until Save Stage uploads it. */
+  const [extraInvoices, setExtraInvoices] = useState([]);
+  useEffect(() => {
+    if (fieldContext !== 'invoice') return;
+    let parsed = [];
+    try {
+      const raw = JSON.parse(data?.col_325 || '[]');
+      if (Array.isArray(raw)) parsed = raw;
+    } catch { /* blank/corrupt cell — start empty rather than blocking the form */ }
+    setExtraInvoices(parsed.map((inv) => ({
+      no: inv?.no || '', amount: inv?.amount || '', uploadUrl: inv?.uploadUrl || '',
+      date: inv?.date || '', remarks: inv?.remarks || '', pendingFile: null
+    })));
+  }, [data, fieldContext]);
+  const updateExtraInvoice = (idx, patch) =>
+    setExtraInvoices((prev) => prev.map((inv, i) => (i === idx ? { ...inv, ...patch } : inv)));
+  const addExtraInvoice = () =>
+    setExtraInvoices((prev) => [...prev, { no: '', amount: '', uploadUrl: '', date: '', remarks: '', pendingFile: null }]);
+  const removeExtraInvoice = (idx) =>
+    setExtraInvoices((prev) => prev.filter((_, i) => i !== idx));
+
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
      doc comment). Same capture-a-remark-first shape as the Approval desk's
@@ -298,6 +325,31 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
       if (v !== '' && v != null) payload[f.key] = v;
     }
 
+    if (fieldContext === 'invoice') {
+      const pending = extraInvoices.map((inv, i) => ({ inv, i })).filter(({ inv }) => inv.pendingFile);
+      let finalExtra = extraInvoices;
+      if (pending.length) {
+        setUploading(true);
+        try {
+          const uploaded = {};
+          for (const { inv, i } of pending) uploaded[i] = await uploadStageFile(inv.pendingFile);
+          finalExtra = extraInvoices.map((inv, i) => (uploaded[i] ? { ...inv, uploadUrl: uploaded[i], pendingFile: null } : inv));
+          setExtraInvoices(finalExtra);
+        } catch (err) {
+          setSaveError(`File upload failed — save aborted. ${apiErrorMessage(err)}`);
+          setUploading(false);
+          return;
+        }
+        setUploading(false);
+      }
+      // Fully-blank rows (added via "+ Add Invoice" then left empty) don't
+      // belong in the saved list.
+      const cleaned = finalExtra
+        .filter((inv) => inv.no || inv.amount || inv.uploadUrl || inv.date || inv.remarks)
+        .map(({ no, amount, uploadUrl, date, remarks }) => ({ no, amount, uploadUrl, date, remarks }));
+      payload.col_325 = JSON.stringify(cleaned);
+    }
+
     setSaving(true);
     try {
       const message = fieldContext === 'invoice'
@@ -502,6 +554,20 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   />
                 ))}
               </div>
+              )}
+
+              {/* "+ Add Invoice" — a container can come back with more than
+                  one invoice against the same Transportation PO; see
+                  extraInvoices' own doc comment above for why these live
+                  outside the generic fields/values mechanism. */}
+              {fieldContext === 'invoice' && !identityOnly && !data?._skipped && (
+                <ExtraInvoicesSection
+                  invoices={extraInvoices}
+                  disabled={readOnly || busy}
+                  onChange={updateExtraInvoice}
+                  onAdd={addExtraInvoice}
+                  onRemove={removeExtraInvoice}
+                />
               )}
 
               {!identityOnly && !data?._skipped && checklists.map((c) => (
@@ -930,6 +996,50 @@ function ReturnPoReferenceNote({ data }) {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * "+ Add Invoice" on the Stage 1.1 tab — every invoice beyond the first one
+ * (which stays on its own fixed fields above, in the "Stage 1.1 — Return
+ * Transportation PO & Invoice" group). Each row reuses the same Field/
+ * FileFieldInput components the rest of the form uses, just addressed by
+ * array index instead of a col_N key — see extraInvoices' own doc comment
+ * in StageDetailModal for why (col_325 stores them all as one JSON array).
+ */
+function ExtraInvoicesSection({ invoices, disabled, onChange, onAdd, onRemove }) {
+  return (
+    <section className={styles.formSection}>
+      <h4 className={styles.formSectionTitle}>Additional Invoices</h4>
+      {!invoices.length && <p className={styles.sectionHint}>No additional invoices yet.</p>}
+      {invoices.map((inv, i) => (
+        <div key={i} className={styles.extraInvoiceRow}>
+          <div className={styles.fieldGrid}>
+            <Field field={{ key: 'no', label: 'Invoice No', type: 'text' }} value={inv.no} onChange={(v) => onChange(i, { no: v })} disabled={disabled} />
+            <Field field={{ key: 'amount', label: 'Invoice Amount', type: 'number' }} value={inv.amount} onChange={(v) => onChange(i, { amount: v })} disabled={disabled} />
+            <Field
+              field={{ key: 'upload', label: 'Invoice Upload', type: 'file' }}
+              value={inv.uploadUrl}
+              pendingFileName={inv.pendingFile?.fileName}
+              onFile={(payload) => onChange(i, { pendingFile: payload, uploadUrl: '' })}
+              disabled={disabled}
+            />
+            <Field field={{ key: 'date', label: 'Invoice Date', type: 'date' }} value={inv.date} onChange={(v) => onChange(i, { date: v })} disabled={disabled} />
+            <Field field={{ key: 'remarks', label: 'Remarks', type: 'text' }} value={inv.remarks} onChange={(v) => onChange(i, { remarks: v })} disabled={disabled} />
+          </div>
+          {!disabled && (
+            <button type="button" className={styles.removeInvoiceBtn} onClick={() => onRemove(i)}>
+              <Icon name="trash" className={styles.stageRemarksAddIcon} /> Remove this invoice
+            </button>
+          )}
+        </div>
+      ))}
+      {!disabled && (
+        <button type="button" className={styles.stageRemarksAdd} onClick={onAdd}>
+          <Icon name="plus" className={styles.stageRemarksAddIcon} /> Add Invoice
+        </button>
+      )}
+    </section>
   );
 }
 

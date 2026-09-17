@@ -71,7 +71,39 @@
 .centerCell { text-align: center; }
 
 /* Permission / sidebar grids */
-.rowLabelCell { font-weight: 600; white-space: nowrap; color: var(--text); }
 .rowLabelHint { display: block; font-weight: 500; color: var(--text-3); font-size: 10px; }
 .checkCell { text-align: center; }
 .checkCell input[type='checkbox'] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+
+/* Frozen header row + frozen first column, both grids: with 15+ permission
+   rows and a dozen-plus email columns, scrolling either direction used to
+   lose the "what row/column am I even looking at" context entirely.
+   DataGrid's own thead is already sticky top:0 (DataGrid.module.css) but
+   only actually engages with a vertical scrollport — see PermissionGrid.jsx/
+   SidebarGrid.jsx passing bodyMaxHeight for that half; this half freezes the
+   row-label column the same way, scoped to just these two grids via the
+   className DataGrid forwards onto <table> (not a DataGrid.jsx change,
+   since most tables in this app have no need for a frozen column). */
+.rowLabelCell {
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+  position: sticky;
+  left: 0;
+  z-index: 1; /* above ordinary body cells, below the sticky header row (z-index 2) */
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+/* Row hover already recolors every <td> in the row (DataGrid.module.css) —
+   the frozen cell just needs to stay in that same lockstep so it doesn't
+   read as a different, unhovered column while the rest of the row highlights. */
+.frozenGrid tbody tr:hover .rowLabelCell { background: var(--surface-2); }
+/* The corner cell (first header cell) must win over BOTH: other header
+   cells sliding under it horizontally, and the frozen column sliding under
+   it vertically — hence the higher z-index than either alone uses. */
+.frozenGrid thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  border-right: 1px solid var(--line);
+}

@@ -15,7 +15,7 @@ export const ALL_STAGES = [
   { number: 2, label: 'Lifting / Arrival', owner: 'Kshirod Khatua', retired: true },
   { number: 3, label: 'Inspection Checklist', owner: 'Sitaram' },
   { number: 4, label: 'Quotation / Order', owner: 'Sitaram', retired: true },
-  { number: 5, label: 'Billing Reconciliation', owner: 'Shivani Maam' },
+  { number: 5, label: 'Billing Reconciliation', owner: 'Shivani' },
   { number: 6, label: 'Transportation', owner: 'Kshirod Khatua' },
   { number: 7, label: 'Gate In', owner: 'Pritam' },
   { number: 8, label: 'FMS Closure' }

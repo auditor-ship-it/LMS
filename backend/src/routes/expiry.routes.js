@@ -39,4 +39,11 @@ router.post('/renewal/complete-document-stage', requirePermission('renew'), asyn
 router.get('/renewal-companies/containers', asyncHandler(expiryController.companyContainers));
 router.post('/renewal-link', requirePermission('renew'), asyncHandler(expiryController.renewalLink));
 
+/* "Export to Google Sheet" — writes a NEW, standalone spreadsheet from
+   whatever the caller already has on screen; never reads or mutates any of
+   this app's own tracked sheets. No permission gate beyond being signed
+   in — same trust level as the client-side Excel export other pages
+   already offer with none either (DeployedSummaryPage.jsx). */
+router.post('/export-sheet', asyncHandler(expiryController.exportToGoogleSheet));
+
 export default router;

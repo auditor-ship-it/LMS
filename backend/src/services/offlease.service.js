@@ -346,9 +346,22 @@ const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
  * see stageFields.js's poRequiredShown predicate; explicit request 2026-09-04
  * was for conditional fields on Stage 1's own form (labelled "Stage 1.1" in
  * the UI), not a new workflow stage. [poUpload, poAmount, poRequired,
- * invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo].
+ * invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo,
+ * invoiceExtra].
+ *
+ * invoiceExtra (col 325, added 2026-09-17) holds every invoice BEYOND the
+ * first one as a single JSON array — the "+ Add Invoice" button on the
+ * Stage 1.1 tab (StageDetailModal.jsx's ExtraInvoicesSection). One JSON
+ * column instead of a fixed block of columns per extra invoice slot: the
+ * sheet is shared with a separate "Accounts & Collection" app and columns
+ * can only ever be appended, never reordered/removed, so a truly open-ended
+ * "how many invoices" has no fixed-column answer that doesn't either cap
+ * the count arbitrarily or grow the shared sheet every time someone needs
+ * one more. The FIRST invoice (320-324 above) is untouched — existing data
+ * and the queue-gating check in getOffLeaseStage11InvoiceData both still
+ * read those columns exactly as before.
  */
-const OL_STAGE1_EXTRA_COLS = [317, 318, 319, 320, 321, 322, 323, 324];
+const OL_STAGE1_EXTRA_COLS = [317, 318, 319, 320, 321, 322, 323, 324, 325];
 
 /**
  * Billing Reconciliation's (internal Stage 5) own data fields. NOT part of
@@ -2431,13 +2444,14 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     if (Number(stage) === 1) {
       // [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload,
-      // invoiceDate, invoiceRemarks, invoiceNo] — see OL_STAGE1_EXTRA_COLS'
-      // own doc comment. safeStr for uploads (Drive URLs — fmtCell's
-      // parseDate() can misread a digit-bearing string as a date, the exact
-      // bug Stage 5's own extra-cols read is documented as avoiding), the
-      // Yes/No radio and plain text remarks/invoice no; fmtNumCell for the
-      // amount, fmtCell only for the genuine date field.
-      const [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo] = OL_STAGE1_EXTRA_COLS;
+      // invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra] — see
+      // OL_STAGE1_EXTRA_COLS' own doc comment. safeStr for uploads (Drive
+      // URLs — fmtCell's parseDate() can misread a digit-bearing string as a
+      // date, the exact bug Stage 5's own extra-cols read is documented as
+      // avoiding), the Yes/No radio, plain text remarks/invoice no and the
+      // JSON blob; fmtNumCell for the amount, fmtCell only for the genuine
+      // date field.
+      const [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra] = OL_STAGE1_EXTRA_COLS;
       result[`col_${poUpload}`] = safeStr(row[poUpload]);
       result[`col_${poAmount}`] = fmtNumCell(row[poAmount]);
       result[`col_${poRequired}`] = safeStr(row[poRequired]);
@@ -2446,6 +2460,7 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result[`col_${invoiceRemarks}`] = safeStr(row[invoiceRemarks]);
       result[`col_${invoiceDate}`] = fmtCell(row[invoiceDate]);
       result[`col_${invoiceNo}`] = safeStr(row[invoiceNo]);
+      result[`col_${invoiceExtra}`] = safeStr(row[invoiceExtra]);
     }
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
@@ -4545,9 +4560,10 @@ export async function getOffLeaseStage11InvoiceData(user, preFetchedSheetData) {
  * (Invoice) queue — Stage 1 itself is already Completed by the time a row
  * reaches here, so this deliberately does NOT go through saveOffLeaseStage
  * (its ALREADY_PROCESSED guard would reject any further write to a
- * completed stage 1). Only the 5 invoice columns are writable; anything
- * else in the payload is silently ignored — this is not a general Stage 1
- * editor.
+ * completed stage 1). Only the 6 invoice columns (the first invoice's 5
+ * fields plus col_325's "every invoice after the first" JSON blob) are
+ * writable; anything else in the payload is silently ignored — this is not
+ * a general Stage 1 editor.
  */
 export async function saveOffLeaseStage1Invoice(containerNo, data, userEmail, knownRow) {
   await checkActionPermission('offlease1', userEmail);
@@ -4565,7 +4581,7 @@ export async function saveOffLeaseStage1Invoice(containerNo, data, userEmail, kn
     const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
     if (!poRequired) throw new AppError('Return Transportation PO is not required for this record.');
 
-    // [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo]
+    // [invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra]
     const invoiceCols = new Set(OL_STAGE1_EXTRA_COLS.slice(3));
 
     const payload = { ...(data || {}) };
@@ -4808,7 +4824,7 @@ export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmai
  *     per-row loop with `if (!row[0] ...) continue`, so a blank Container No
  *     alone is enough to make the row invisible everywhere — clearing the
  *     rest of the row too is just not leaving stale data behind.
- *  3. Shivani Maam is emailed the rejection (_sendOffLeaseRejectionEmail).
+ *  3. Shivani is emailed the rejection (_sendOffLeaseRejectionEmail).
  *
  * Deliberately fully live (not the Mongo-first Fast pattern the rest of this
  * approval flow uses) — rejections are rare, and coordinating a

@@ -11,6 +11,8 @@ export function SidebarGrid({ emails, sidebarKeys, emailSidebar, onToggle }) {
 
   return (
     <DataGrid
+      className={styles.frozenGrid}
+      bodyMaxHeight="min(62vh, calc(100vh - 340px))"
       headers={[
         'Menu item',
         // Display-only shortening — see PermissionGrid.jsx's identical

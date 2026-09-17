@@ -52,7 +52,7 @@ export const PERMISSION_KEYS = [
   // Retired 2026-08-10 — no live tab corresponds to this. Deliberately NOT
   // labelled "Stage 4", which now means Inspection Checklist (offlease3, above).
   { key: 'offlease4', label: 'Off-Lease (Retired) Quotation / Order' },
-  { key: 'offlease5', label: 'Off-Lease Stage 5: Billing Reconciliation (Shivani Maam)' },
+  { key: 'offlease5', label: 'Off-Lease Stage 5: Billing Reconciliation (Shivani)' },
   { key: 'offlease6', label: 'Off-Lease Stage 2: Transportation (Kshirod Khatua)' },
   { key: 'offlease7', label: 'Off-Lease Stage 3: Gate In (Pritam)' },
   { key: 'offlease8', label: 'Off-Lease Stage 6: FMS Closure' },
