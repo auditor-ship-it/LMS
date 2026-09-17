@@ -2513,6 +2513,25 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       };
     }
 
+    /* Stage 6 (FMS Closure, internal stage 8)'s read-only reference to Stage
+       5 (Billing Reconciliation)'s own answers — Transport cost billed
+       (col_309), Outstanding Amount (col_306) and Estimated repair charges
+       billed (col_308), the 3 figures FMS Closure needs to check were
+       actually reconciled before closing the record out. Same reasoning as
+       Stage 5's own _stage1Data read just above: Stage 6's column range
+       (info.startCol..endCol, 100-106) never reaches Stage 5's (29-44/
+       305-316), so this needs its own explicit read. Read-only here —
+       editing these stays on Stage 5's own form. */
+    if (Number(stage) === 8) {
+      const [, outstanding, , repairCharges, transportBilled] = OL_STAGE5_EXTRA_COLS;
+      result._stage5Data = {
+        status: safeStr(row[OL_STAGE_INFO[5].statusCol]),
+        transportCostBilled: safeStr(row[transportBilled]),
+        outstandingAmount: fmtNumCell(row[outstanding]),
+        repairChargesBilled: safeStr(row[repairCharges])
+      };
+    }
+
     /* REMOVED 2026-09-07 (leftover from before the 2026-09-04 change): this
        used to mark the row `_skipped` — hiding the real checklist behind a
        "Skipped — Repair Not Required" panel — whenever the Gate-In form

@@ -102,13 +102,44 @@ function fuzzyKey(name) {
   return normClientName(canonicalName(name));
 }
 
-/** When two CRM leads collapse to the same key, the most recently touched
- *  one wins — a reassignment stamps `_reassignedAt`, and a master-sheet
- *  refresh stamps `_lastUpdatedAt`. */
-function leadTimestamp(lead) {
-  const a = lead?._reassignedAt ? new Date(lead._reassignedAt).getTime() : 0;
-  const b = lead?._lastUpdatedAt ? new Date(lead._lastUpdatedAt).getTime() : 0;
-  return Math.max(Number.isFinite(a) ? a : 0, Number.isFinite(b) ? b : 0);
+/**
+ * When two CRM leads collapse to the same key, this decides which one wins.
+ *
+ * BUG FOUND AND FIXED 2026-09-17: the two stamps are not equally trustworthy.
+ * `_reassignedAt` means a person deliberately reassigned this exact company;
+ * `_lastUpdatedAt` alone means a bulk resync merely touched the document —
+ * and a resync can replay an OLDER snapshot of the roster than a real
+ * reassignment that happened in between. Treating both as interchangeable
+ * (the old code took `Math.max` of the two) let a later passive resync
+ * silently outrank an earlier genuine reassignment.
+ *
+ * Concretely: "Akshayakalpa Farms and Foods Private Ltd" was reassigned to
+ * Gauri on 2026-08-23 (`_reassignedAt` set). A 2026-09-02 bulk resync then
+ * created a SECOND lead document for the same company still naming its
+ * pre-reassignment owner ("Lavina"), stamped only with `_lastUpdatedAt`. Its
+ * later timestamp used to win, showing "Lavina" everywhere Sale Person is
+ * displayed for that company even though Gauri owns it. A repo-wide check
+ * found 77 of 464 companies with this exact same shape of duplicate — this
+ * is not a one-off.
+ *
+ * Fix: a lead with an explicit `_reassignedAt` always outranks one that only
+ * has `_lastUpdatedAt`, regardless of which timestamp is later. Recency only
+ * decides between two leads that are both explicit reassignments, or both
+ * passive touches.
+ */
+function leadRank(lead) {
+  const reassignedAt = lead?._reassignedAt ? new Date(lead._reassignedAt).getTime() : NaN;
+  const hasReassign = Number.isFinite(reassignedAt);
+  const lastUpdatedAt = lead?._lastUpdatedAt ? new Date(lead._lastUpdatedAt).getTime() : NaN;
+  return { tier: hasReassign ? 1 : 0, ts: hasReassign ? reassignedAt : (Number.isFinite(lastUpdatedAt) ? lastUpdatedAt : 0) };
+}
+
+/** true when rank `a` should win over the current holder `b` — a strictly
+ *  higher tier always wins; within the same tier, the later timestamp wins
+ *  (>= so the last-seen lead of an exact tie keeps winning, matching the
+ *  old code's tie-breaking behavior). */
+function rankBeats(a, b) {
+  return a.tier !== b.tier ? a.tier > b.tier : a.ts >= b.ts;
 }
 
 /* Module-level cache. `inFlight` collapses concurrent builds into one CRM
@@ -122,26 +153,30 @@ async function buildIndex() {
   const gen = ++generation;
   const leads = await findLeads({}, { companyName: 1, assignedTo: 1, _reassignedAt: 1, _lastUpdatedAt: 1 });
 
-  const exact = new Map();          // key -> { who, ts }
-  const fuzzyRaw = new Map();       // key -> Map(who -> ts)
+  const exact = new Map();          // key -> { who, rank }
+  const fuzzyRaw = new Map();       // key -> Map(who -> ts) — see below, dedup only, not ranked
 
   for (const lead of leads) {
     const who = String(lead?.assignedTo == null ? '' : lead.assignedTo).trim();
     if (!who) continue;             // an unassigned lead must not blank out the sheet value
-    const ts = leadTimestamp(lead);
+    const rank = leadRank(lead);
 
     const ek = exactKey(lead.companyName);
     if (ek) {
       const prev = exact.get(ek);
-      if (!prev || ts >= prev.ts) exact.set(ek, { who, ts });
+      if (!prev || rankBeats(rank, prev.rank)) exact.set(ek, { who, rank });
     }
 
+    /* Fuzzy pass only needs to know how many DISTINCT owners a key has (see
+       the uniqueness filter below) — every lead sharing a key is otherwise
+       interchangeable evidence for its own `who`, so this dedup doesn't need
+       leadRank's tier distinction, just "have we seen this owner before". */
     const fk = fuzzyKey(lead.companyName);
     if (fk) {
       if (!fuzzyRaw.has(fk)) fuzzyRaw.set(fk, new Map());
       const owners = fuzzyRaw.get(fk);
       const prevTs = owners.get(who);
-      if (prevTs == null || ts > prevTs) owners.set(who, ts);
+      if (prevTs == null || rank.ts > prevTs) owners.set(who, rank.ts);
     }
   }
 
