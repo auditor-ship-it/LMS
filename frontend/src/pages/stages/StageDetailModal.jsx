@@ -500,6 +500,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   fieldContext — getOffLeaseStageDetail doesn't filter by it,
                   only this modal's EDITABLE field list does. */}
               {fieldContext === 'invoice' && <ReturnPoReferenceNote data={data} />}
+              {stageNumber === FMS_CLOSURE_STAGE && <Stage5ReferenceNote data={data} />}
 
               {/* Gate In's own form was removed 2026-08-24: gate/depot staff
                   already fill out a separate Google Form for every container
@@ -677,6 +678,9 @@ const REPORT_STAGES = [3, 5];
 /** Billing Reconciliation (internally stage 5, shown as Stage 4) — the person
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
+
+/** FMS Closure (internally stage 8, shown as Stage 6) — see Stage5ReferenceNote. */
+const FMS_CLOSURE_STAGE = 8;
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for
  *  Not Required, nothing while unset. */
@@ -993,6 +997,38 @@ function ReturnPoReferenceNote({ data }) {
         <div className={styles.outstandingCard}>
           <span className={styles.outstandingLabel}>PO Amount</span>
           <span className={styles.outstandingValue}>{renderCellValue(data.col_318)}</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Read-only reference for Stage 6 (FMS Closure) — the 3 figures Stage 5
+ * (Billing Reconciliation) already reconciled: whether Transport cost was
+ * billed, the Outstanding (Lease) Amount, and the Estimated repair charges
+ * billed (the Inspection/Quotation estimate). Editing these stays on Stage
+ * 5's own form; this is reference only, same pattern as ReturnPoReferenceNote.
+ */
+function Stage5ReferenceNote({ data }) {
+  const s5 = data?._stage5Data;
+  if (!s5 || !String(s5.status || '').trim()) return null; // Stage 5 hasn't run yet — nothing to show
+  return (
+    <>
+      <h3 className={styles.sectionTitle}>Billing Reconciliation (Stage 5)</h3>
+      <p className={styles.sectionHint}>Answered on Stage 5's own form — reference only, not editable here.</p>
+      <div className={styles.outstandingRow}>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Transportation Payment</span>
+          <span className={styles.outstandingValue}>{s5.transportCostBilled || '—'}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Lease Outstanding</span>
+          <span className={styles.outstandingValue}>{renderCellValue(s5.outstandingAmount)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Inspection / Quotation Amount</span>
+          <span className={styles.outstandingValue}>{renderCellValue(s5.repairChargesBilled)}</span>
         </div>
       </div>
     </>
