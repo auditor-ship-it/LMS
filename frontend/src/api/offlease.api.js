@@ -7,9 +7,13 @@ export const getOffLeaseApprovalData = () => apiClient.get('/offlease/approval')
  *  `remarks` (RejectModal) is only ever meaningful when status is 'Rejected'.
  *  `rowNum` (item._rowNum from the approval queue list) — Container No is
  *  not unique in Off-Lease Tracking, so without it this can silently act on
- *  a different lease's row for the same container. Always pass it when known. */
-export const saveOffLeaseApprovalAction = (containerNo, status, remarks, rowNum) =>
-  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval`, { status, remarks, rowNum }).then((r) => r.data.message);
+ *  a different lease's row for the same container. Always pass it when known.
+ *  `poData` ({ poRequired, poFileUrl, poAmount }) — "Return Transportation PO
+ *  Required/PO/Amount", moved 2026-09-18 (explicit request) off Stage 1's own
+ *  form onto this approval decision. Optional — only the single-row Approval
+ *  detail view collects it; quick-list/bulk Approve omit it entirely. */
+export const saveOffLeaseApprovalAction = (containerNo, status, remarks, rowNum, poData) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval`, { status, remarks, rowNum, ...poData }).then((r) => r.data.message);
 
 /** POST /api/offlease/:containerNo/reject/send-back — reverses a Rejected
  *  decision, returning the record to Stage 1's own pending queue (Stage 1's

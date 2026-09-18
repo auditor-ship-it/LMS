@@ -63,10 +63,18 @@ const isReefer = (v) => String(v.col_3 || '').trim().toLowerCase().includes('ree
 
 const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
 
-/** Transportation PO Required = Yes opens the PO upload/amount and Invoice
- *  fields on Stage 1 — explicit 2026-09-04 request, kept as conditional
- *  fields on Stage 1's own form (not a new workflow stage). */
+/** Return Transportation PO Required = Yes opens the PO upload/amount fields
+ *  on Stage 10's own form. Originally added 2026-09-04 as conditional fields
+ *  on Stage 1's own form; moved to Stage 10 2026-09-18 (explicit request) —
+ *  see STAGE_FIELDS[10] below. */
 const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
+
+/** Each Payment Confirmation Yes/No on Stage 6 opens its own proof-upload
+ *  field once marked Paid — explicit 2026-09-17 request, extended same day
+ *  from just Inspection/Quotation to all three questions. */
+const transportPaidShown = (v) => String(v.col_326 || '').toLowerCase() === 'yes';
+const outstandingPaidShown = (v) => String(v.col_327 || '').toLowerCase() === 'yes';
+const inspectionPaidShown = (v) => String(v.col_328 || '').toLowerCase() === 'yes';
 
 /**
  * Stage 3 inspection checklist — the 8 container inspection points from the
@@ -248,20 +256,6 @@ export const STAGE_FIELDS = {
     { key: 'col_11', label: 'Off-Lease Date', type: 'date', required: true },
     { key: 'col_12', label: 'Email Notification', type: 'file' },
     { key: 'col_13', label: 'Final Billing Date', type: 'date', required: true },
-    { key: 'col_319', label: 'Return Transportation PO Required', type: 'radio', options: YES_NO, group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    { key: 'col_317', label: 'Return Transportation PO', type: 'file', showIf: poRequiredShown, group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    { key: 'col_318', label: 'Return Transportation PO Amount', type: 'number', showIf: poRequiredShown, group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    /* context: 'invoice' — these 4 fields are filled from the "Stage 1.1
-       (Invoice)" tab's own form (StagePageBase forcedFilter="invoice" ->
-       StageDetailModal fieldContext="invoice"), NOT Stage 1's own form.
-       Explicit request 2026-09-04: once Transportation PO Required is Yes,
-       the row moves to the Stage 1.1 tab and the invoice details are
-       captured there, not mixed into Stage 1's own Intimation form. */
-    { key: 'col_324', label: 'Invoice No', type: 'text', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    { key: 'col_320', label: 'Invoice Amount', type: 'number', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    { key: 'col_321', label: 'Invoice Upload', type: 'file', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    { key: 'col_322', label: 'Invoice Date', type: 'date', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
-    { key: 'col_323', label: 'Remarks', type: 'text', showIf: poRequiredShown, context: 'invoice', group: 'Stage 1.1 — Return Transportation PO & Invoice' },
     { key: 'col_14', label: 'Remark', type: 'text' }
   ],
 
@@ -392,10 +386,37 @@ export const STAGE_FIELDS = {
   7: [],
 
   8: [
-    { key: 'col_122', label: 'Billing & Filing', type: 'file' },
-    { key: 'col_123', label: 'FMS Closure', type: 'file' },
-    { key: 'col_124', label: 'All documents uploaded to FMS?', type: 'radio', options: YES_NO_MAYBE },
-    { key: 'col_125', label: 'Remark', type: 'text' }
+    // REMOVED 2026-09-17 (explicit request): 'Billing & Filing' (col_122),
+    // 'FMS Closure' (col_123) upload fields and 'All documents uploaded to
+    // FMS?' (col_124). Existing data on already-saved rows is untouched —
+    // this only stops asking for them on new/unsaved records.
+    { key: 'col_125', label: 'Remark', type: 'text' },
+    /* Payment Confirmation — explicit 2026-09-17 request: FMS Closure asks
+       whether the amounts Stage 5 reconciled were actually PAID, not just
+       reconciled. See OL_STAGE8_EXTRA_COLS in offlease.service.js. */
+    { key: 'col_326', label: 'Transportation Amount Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
+    { key: 'col_330', label: 'Transportation Payment Proof', type: 'file', showIf: transportPaidShown, group: 'Payment Confirmation' },
+    { key: 'col_327', label: 'Total Outstanding Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
+    { key: 'col_331', label: 'Total Outstanding Payment Proof', type: 'file', showIf: outstandingPaidShown, group: 'Payment Confirmation' },
+    { key: 'col_328', label: 'Inspection / Quotation Amount Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
+    { key: 'col_329', label: 'Inspection / Quotation Payment Proof', type: 'file', showIf: inspectionPaidShown, group: 'Payment Confirmation' }
+  ],
+
+  /* Internal stage 10, "LR & Return Transportation" — displays as Stage 3.
+     Added 2026-09-18 (explicit request), between Transportation and Gate In.
+     LR details (LR No, vehicle, DO number, loading date, destination,
+     transporter) are fetched live from the external FMS STAGE-9 sheet and
+     shown read-only via StageDetailModal's LrReferenceNote (data._lrData) —
+     never stored in this app's own sheet, so no field for them here. The
+     Return Transportation PO fields (col_319/317/318) are this stage's own
+     editable data — see OL_STAGE10_EXTRA_COLS in offlease.service.js;
+     originally on Stage 1's own form (2026-09-04), briefly on the Approval
+     decision, landing here the same day. */
+  10: [
+    { key: 'col_319', label: 'Return Transportation PO Required', type: 'radio', options: YES_NO },
+    { key: 'col_317', label: 'Return Transportation PO', type: 'file', showIf: poRequiredShown },
+    { key: 'col_318', label: 'Return Transportation PO Amount', type: 'number', showIf: poRequiredShown },
+    { key: 'col_332', label: 'Remark', type: 'text' }
   ]
 };
 

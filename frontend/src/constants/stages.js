@@ -1,5 +1,5 @@
 /**
- * The 8 Off-Lease stages — labels match the existing app's OL_STAGE_INFO /
+ * The Off-Lease stages — labels match the existing app's OL_STAGE_INFO /
  * offlease.service.js exactly. `owner` matches CARD_OWNER's olStage1..7 in
  * the original app's frontend/src/pages/myTask/MyTaskPage.jsx (Stage 8 has
  * no assigned owner there either).
@@ -15,16 +15,26 @@ export const ALL_STAGES = [
   { number: 2, label: 'Lifting / Arrival', owner: 'Kshirod Khatua', retired: true },
   { number: 3, label: 'Inspection Checklist', owner: 'Sitaram' },
   { number: 4, label: 'Quotation / Order', owner: 'Sitaram', retired: true },
-  { number: 5, label: 'Billing Reconciliation', owner: 'Shivani' },
+  // RENAMED 2026-09-18 (explicit request): 'Billing Reconciliation' -> 'Final Billing'.
+  { number: 5, label: 'Final Billing', owner: 'Shivani' },
   { number: 6, label: 'Transportation', owner: 'Kshirod Khatua' },
   { number: 7, label: 'Gate In', owner: 'Pritam' },
-  { number: 8, label: 'FMS Closure' }
+  // RENAMED 2026-09-18 (explicit request): 'FMS Closure' -> 'KAM', owner added ('Sales').
+  { number: 8, label: 'KAM', owner: 'Sales' },
+  /* ADDED 2026-09-18 (explicit request) — a genuinely new stage, not a
+     synthetic sub-tab like Approval (1A). Sits between Transportation and
+     Gate In, displaying as "Stage 3". Shows LR details fetched live from
+     the external FMS STAGE-9 sheet (read-only, never stored here) plus the
+     Return Transportation PO Required/Upload/Amount fields (moved here the
+     same day, via a brief detour through Stage 1's own form and then the
+     Approval decision, before landing here for good). */
+  { number: 10, label: 'LR & Return Transportation', owner: 'Shivani' }
 ];
 
 /**
  * The live workflow — Stage 4 (Quotation / Order) was retired 2026-08-10, so
  * a container goes straight from Stage 3 (Inspection Checklist) to Stage 5
- * (Billing Reconciliation). Mirrors OL_RETIRED_STAGES in
+ * (Final Billing). Mirrors OL_RETIRED_STAGES in
  * backend/src/services/offlease.service.js.
  *
  * Use this for tabs, the pipeline board and anything that offers a stage for
@@ -32,18 +42,23 @@ export const ALL_STAGES = [
  */
 /**
  * `display` is the number users see, so the workflow reads 1..7 with no gap
- * where Stage 4 used to be — Billing Reconciliation is internally stage 5 and
- * shows as "Stage 4".
+ * where Stage 4 used to be. DISPLAY ONLY — `number` stays the stage's
+ * identity: it picks the sheet column range, the offlease1..8/10 permission
+ * key and the /stages/:n route. Never feed a display number back into either.
  *
- * DISPLAY ONLY. `number` stays the stage's identity: it picks the sheet
- * column range, the offlease1..8 permission key and the /stages/:n route.
- * Never feed a display number back into any of those.
+ * "Stage 1A (Approval)" is NOT in this array — it's a synthetic tab hand-
+ * built in OffLeasePage.jsx/OrderBookView.jsx (a filtered view of Stage 1's
+ * own row, not a stage of its own), inserted right after Stage 1 without
+ * consuming a numbered slot. Stage 10 ("LR & Return Transportation"), by
+ * contrast, IS a real stage now (added 2026-09-18) — it has its own column
+ * range/status quad, so it belongs in WORKFLOW like any other real stage.
  */
 /**
- * The live workflow IN ORDER — 1 Intimation, 2 Transportation, 3 Gate In,
- * 4 Inspection, 5 Billing Reconciliation, 6 FMS Closure, with the Approval
- * gate after Stage 1. Listed by internal number because that is each stage's
- * identity; the array order sets the sequence and the displayed number.
+ * The live workflow IN ORDER — 1 Intimation, 2 Transportation, 3 LR & Return
+ * Transportation, 4 Gate In, 5 Inspection, 6 Final Billing, 7 KAM, with the
+ * Approval gate (1A) between Stage 1 and Stage 2. Listed by internal number
+ * because that is each stage's identity; the array order sets the sequence
+ * and the displayed number.
  *
  * Gate In (internal 7) and Inspection (internal 3) swapped on 2026-08-12: a
  * container is inspected AFTER it is received, not before. Must stay in step
@@ -52,7 +67,7 @@ export const ALL_STAGES = [
  * Retired and therefore absent: 2 (Lifting / Arrival) and 4 (Quotation /
  * Order). Their data is preserved and still shown on the container report.
  */
-const WORKFLOW = [1, 6, 7, 3, 5, 8];
+const WORKFLOW = [1, 6, 10, 7, 3, 5, 8];
 
 /**
  * Stages that are READ ONLY — the grid is shown (searchable, sortable,
@@ -79,7 +94,7 @@ export function stageDisplayNumber(number) {
   return STAGES.find((s) => s.number === number)?.display ?? null;
 }
 
-/** "Stage 4 — Billing Reconciliation", or "Quotation / Order (retired)". */
+/** "Stage 4 — Gate In", or "Quotation / Order (retired)". */
 export function stageCaption(number, separator = '—') {
   const stage = ALL_STAGES.find((s) => s.number === number);
   const display = stageDisplayNumber(number);

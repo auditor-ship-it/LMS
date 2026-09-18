@@ -157,10 +157,15 @@ export const OL_STAGE_INFO = {
   1: { statusCol: 17, startCol: 10, endCol: 17, label: 'Off-Lease Intimation' },   // K..R
   2: { statusCol: 23, startCol: 18, endCol: 23, label: 'Lifting / Arrival' },      // S..X
   3: { statusCol: 28, startCol: 24, endCol: 28, label: 'Inspection Checklist' },   // Y..AC
-  5: { statusCol: 44, startCol: 29, endCol: 44, label: 'Billing Reconciliation' }, // AD..AS
+  5: { statusCol: 44, startCol: 29, endCol: 44, label: 'Final Billing' },          // AD..AS
   6: { statusCol: 99, startCol: 45, endCol: 99, label: 'Transportation' },         // AT..CV
   7: { statusCol: 135, startCol: 114, endCol: 135, label: 'Gate In' },             // DK..EF
-  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'FMS Closure' }          // CW..DC
+  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'KAM' },                 // CW..DC
+  /* Added 2026-09-18 (explicit request) — displays as "Stage 3", between
+     Transportation (2) and Gate In (4). Its own Remark/Timestamp/User/Status
+     quad is appended at 332-335 (own contiguous block, not part of the
+     317-319 PO fields it also owns — see OL_STAGE10_EXTRA_COLS below). */
+  10: { statusCol: 335, startCol: 332, endCol: 335, label: 'LR & Return Transportation' }
 };
 /* 133/134/135 deliberately excluded -- confirmed via the live sheet those
    columns are the Marked sync flag / Email ID / Mail Status feature, not
@@ -335,33 +340,25 @@ const OL_STAGE3_EXTRA_COLS = [
 const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
 
 /**
- * Off-Lease Intimation's (internal Stage 1) Transportation PO / Invoice
- * fields — NOT part of OL_STAGE_INFO[1]'s startCol..endCol range (10..17),
- * same "appended beyond the stage's own contiguous range" shape as every
- * other *_EXTRA_COLS array here. Added 2026-09-04 at the sheet's true
- * next-free columns (317-324 — verified via OL_HEADERS.length before
- * adding; see that file's own header comment for why 298-304 looked free
- * but weren't). The Invoice fields (320-324) and the PO upload/amount
- * (317/318) only matter when Transportation PO Required (319) is "Yes" —
- * see stageFields.js's poRequiredShown predicate; explicit request 2026-09-04
- * was for conditional fields on Stage 1's own form (labelled "Stage 1.1" in
- * the UI), not a new workflow stage. [poUpload, poAmount, poRequired,
- * invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo,
- * invoiceExtra].
+ * Stage 10's ("LR & Return Transportation", displays as Stage 3) Return
+ * Transportation PO fields — NOT part of OL_STAGE_INFO[10]'s startCol..endCol
+ * range (332-335, its own Remark/Timestamp/User/Status quad), same
+ * "appended beyond the stage's own contiguous range" shape as every other
+ * *_EXTRA_COLS array here. [poUpload, poAmount, poRequired]. The PO upload/
+ * amount (317/318) only matter when Return Transportation PO Required (319)
+ * is "Yes" — see stageFields.js's poRequiredShown predicate.
  *
- * invoiceExtra (col 325, added 2026-09-17) holds every invoice BEYOND the
- * first one as a single JSON array — the "+ Add Invoice" button on the
- * Stage 1.1 tab (StageDetailModal.jsx's ExtraInvoicesSection). One JSON
- * column instead of a fixed block of columns per extra invoice slot: the
- * sheet is shared with a separate "Accounts & Collection" app and columns
- * can only ever be appended, never reordered/removed, so a truly open-ended
- * "how many invoices" has no fixed-column answer that doesn't either cap
- * the count arbitrarily or grow the shared sheet every time someone needs
- * one more. The FIRST invoice (320-324 above) is untouched — existing data
- * and the queue-gating check in getOffLeaseStage11InvoiceData both still
- * read those columns exactly as before.
+ * HISTORY: these 3 columns were added 2026-09-04 as conditional fields on
+ * Stage 1's own form ("Stage 1.1" in the UI at the time), alongside 5
+ * Invoice fields (320-324) and later a 6th "additional invoices" JSON column
+ * (325, "+ Add Invoice" button, 2026-09-17). The whole Invoice feature was
+ * REMOVED 2026-09-18 (explicit request) — cols 320-325 are no longer read or
+ * written anywhere in this app (existing data, if any, is simply orphaned,
+ * same as any other retired column) — and these 3 PO columns moved first to
+ * the Approval decision, then same day to this genuinely new Stage 10, which
+ * is what "LR & Return Transportation" actually turned out to mean.
  */
-const OL_STAGE1_EXTRA_COLS = [317, 318, 319, 320, 321, 322, 323, 324, 325];
+const OL_STAGE10_EXTRA_COLS = [317, 318, 319];
 
 /**
  * Billing Reconciliation's (internal Stage 5) own data fields. NOT part of
@@ -381,6 +378,22 @@ const OL_STAGE1_EXTRA_COLS = [317, 318, 319, 320, 321, 322, 323, 324, 325];
  * Technician fields were similarly appended once they outgrew a contiguous
  * block — see OL_STAGE_INFO's own header comment for that precedent. */
 const OL_STAGE5_EXTRA_COLS = [305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316];
+
+/**
+ * Stage 6 (FMS Closure, internal stage 8)'s "did we actually get paid"
+ * questions — added 2026-09-17, appended at the sheet's next-free columns
+ * (326-331, after col_325's Invoice Additional JSON). Not part of
+ * OL_STAGE_INFO[8]'s startCol..endCol range (100-106) — same reasoning as
+ * every other *_EXTRA_COLS array here, this stage outgrew its original
+ * contiguous block. [transportPaid, outstandingPaid, inspectionPaid,
+ * inspectionPaidProof, transportPaidProof, outstandingPaidProof] — the last
+ * two added same day, once "add attachment for Yes" was extended from just
+ * Inspection to all three questions. Written through the ordinary
+ * saveOffLeaseStage path like Stage 5's own extras (no special save
+ * function needed — that function writes any col_N key in the payload, not
+ * just ones inside info.startCol..endCol).
+ */
+const OL_STAGE8_EXTRA_COLS = [326, 327, 328, 329, 330, 331];
 
 /* FIXED, not derived — see LMS.js's long comment on this constant. A prior
    derived value (OL_HEADERS.length + 1) collided with real data whenever a
@@ -420,8 +433,8 @@ const OL_LEASE_ID_PAD = 4;
  */
 /**
  * The live workflow, IN ORDER:
- *   1 Intimation -> Approval gate -> 2 Transportation -> 3 Gate In
- *   -> 4 Inspection -> 5 Billing Reconciliation -> 6 FMS Closure
+ *   1 Intimation -> Approval gate (1A) -> 2 Transportation -> 3 LR & Return
+ *   Transportation -> 4 Gate In -> 5 Inspection -> 6 Final Billing -> 7 KAM
  *
  * These are INTERNAL stage numbers and the array order IS the workflow order —
  * it no longer ascends. Internal numbers stay fixed because they select the
@@ -432,8 +445,16 @@ const OL_LEASE_ID_PAD = 4;
  *
  * Retired: 2 (Lifting / Arrival) and 4 (Quotation / Order, whose columns were
  * deleted from the sheet). Their data is preserved and still reported.
+ *
+ * RENUMBERED 2026-09-18 (explicit request): a real internal stage 10 ("LR &
+ * Return Transportation" — see OL_STAGE_INFO[10]) is inserted between
+ * Transportation and Gate In, displaying as "Stage 3". This REPLACES an
+ * earlier same-day attempt at a synthetic (non-internal) "Stage 3 (Invoice)"
+ * — that feature is removed entirely; "Invoice" was never part of the
+ * intended design. Gate In/Inspection/Billing/KAM's own displayed numbers
+ * shift up by one each to make room, same as before.
  */
-export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 8];
+export const OL_ACTIVE_STAGE_NUMS = [1, 6, 10, 7, 3, 5, 8];
 const OL_RETIRED_STAGES = new Set([2, 4]);
 
 /* Internal numbers for the two stages the STAGE-10 hand-off moves between:
@@ -470,8 +491,8 @@ const _containerKey = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
  */
 function _prevActiveStage(stage) {
   /* By POSITION in the workflow, not by numeric value — the sequence is
-     1 -> 6 -> 7 -> 3 -> 5 -> 8, so "the previous stage" is the element before
-     this one, which numeric comparison would get wrong. */
+     1 -> 6 -> 10 -> 7 -> 3 -> 5 -> 8, so "the previous stage" is the element
+     before this one, which numeric comparison would get wrong. */
   const i = OL_ACTIVE_STAGE_NUMS.indexOf(Number(stage));
   if (i > 0) return OL_ACTIVE_STAGE_NUMS[i - 1];
   if (i === 0) return null;
@@ -481,16 +502,19 @@ function _prevActiveStage(stage) {
 
 const OL_STAGE_DISPLAY = new Map(OL_ACTIVE_STAGE_NUMS.map((s, i) => [s, i + 1]));
 const displayStageNum = (s) => OL_STAGE_DISPLAY.get(s) ?? null;
-/** "Stage 4 · Billing Reconciliation", or "Quotation / Order (retired)". */
+/** "Stage 4 · Gate In", or "Quotation / Order (retired)". */
 const stageCaption = (s) => {
   const d = displayStageNum(s);
   return d ? `Stage ${d} · ${OL_STAGE_LABELS[s]}` : `${OL_STAGE_LABELS[s]} (retired)`;
 };
 
+// RENAMED 2026-09-18 (explicit request): 5 'Billing Reconciliation' -> 'Final
+// Billing', 8 'FMS Closure' -> 'KAM'. Must stay in step with ALL_STAGES in
+// frontend/src/constants/stages.js.
 const OL_STAGE_LABELS = {
   1: 'Off-Lease Intimation', 2: 'Lifting / Arrival', 3: 'Inspection Checklist',
-  4: 'Quotation / Order', 5: 'Billing Reconciliation', 6: 'Transportation', 7: 'Gate In',
-  8: 'FMS Closure'
+  4: 'Quotation / Order', 5: 'Final Billing', 6: 'Transportation', 7: 'Gate In',
+  8: 'KAM', 10: 'LR & Return Transportation'
 };
 
 /* The real home of Order No and Client Name is "New Lease" only (see LMS.js
@@ -1492,7 +1516,7 @@ async function _sendOffLeaseRejectionEmail(row, remarks, userEmail) {
   ];
   const subject = `Off-Lease Rejected & Cancelled – ${fields[0][1] || 'Unknown Container'}`;
   const body = fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n'
-    + '\nThis off-lease request was rejected at Stage 1.2 (Approval) — the container has been removed from Off-Lease Tracking and handed back to Lease Expiry as a normal active lease.';
+    + '\nThis off-lease request was rejected at Stage 1A (Approval) — the container has been removed from Off-Lease Tracking and handed back to Lease Expiry as a normal active lease.';
 
   const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
   const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s || '-'}</td>`;
@@ -1500,7 +1524,7 @@ async function _sendOffLeaseRejectionEmail(row, remarks, userEmail) {
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
       ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
     </table>
-    <p style="font-family:Arial,sans-serif;font-size:13px;">This off-lease request was rejected at Stage 1.2 (Approval) — the container has been removed from Off-Lease Tracking and handed back to Lease Expiry as a normal active lease.</p>
+    <p style="font-family:Arial,sans-serif;font-size:13px;">This off-lease request was rejected at Stage 1A (Approval) — the container has been removed from Off-Lease Tracking and handed back to Lease Expiry as a normal active lease.</p>
   `;
 
   await sendMail({ to: 'shivani.dhall@crystalgroup.in', subject, body, html });
@@ -1957,15 +1981,7 @@ export async function getOffLeaseData(stage, opts = {}, user) {
        shows everything else (a held or rejected record disappears from the
        normal pending list the moment it's put on hold or rejected).
        Irrelevant to every other stage, so this only ever branches for
-       Stage 1.
-       NOTE: the Stage 1.1 (Invoice) tab is NOT a filter of THIS queue — a
-       row only gets Transportation PO Required (col_319) answered as part
-       of the very same submission that completes Stage 1, so by the time
-       col_319 is ever "Yes" the row has already failed the statusVal check
-       above and never reaches here. See getOffLeaseStage11InvoiceData
-       (separate function, mirrors getOffLeaseApprovalData's shape) for that
-       queue instead — it reads COMPLETED Stage 1 rows, same as Approval
-       does, just gated differently. */
+       Stage 1. */
     if (Number(stage) === 1) {
       const held = _isOnHold(row);
       if (opts.filter === 'hold') { if (!held) continue; }
@@ -2013,7 +2029,17 @@ export async function getOffLeaseData(stage, opts = {}, user) {
          at the same time, which is how 7 + 20 + 10 came to 37 against 36
          records. */
       const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
-      const releasedByDelivery = Number(stage) === OL_STAGE3_INTERNAL && (delivered || movedOut) && stage1Done;
+      /* BUG FOUND AND FIXED 2026-09-18: internal Stage 10 ("LR & Return
+         Transportation") was inserted directly after Transportation in the
+         workflow, taking over the exact slot Gate In used to occupy — so it
+         now inherits Gate In's old problem of gating on Transportation's own
+         status column, which is NEVER filled (see OL_STAGE2_INTERNAL's own
+         bypass just above). Without also releasing stage 10 here, it could
+         never become reachable at all. OL_STAGE3_INTERNAL (still 7, Gate In)
+         stays in this check too — a container whose Gate-In form already
+         fired physically outran even Stage 10's own paperwork, same
+         "progress outran paperwork" shape the comment below describes. */
+      const releasedByDelivery = (Number(stage) === 10 || Number(stage) === OL_STAGE3_INTERNAL) && (delivered || movedOut) && stage1Done;
       /* Gate In being confirmed says nothing about whether Transportation
          itself was ever completed — the external form only tracks physical
          gate movements, not this app's own Stage 2. A container gated in
@@ -2128,14 +2154,7 @@ export async function getOffLeaseStageCounts(user) {
   let approval = null;
   try { approval = (await getOffLeaseApprovalData(user, sheetData)).data.length; } catch (e) { /* leave null */ }
 
-  // "Stage 1.1 (Invoice)" tab badge — same queue logic as its own list
-  // (getOffLeaseStage11InvoiceData, defined near getOffLeaseApprovalData).
-  let stage1Invoice = null;
-  try {
-    stage1Invoice = (await getOffLeaseStage11InvoiceData(user, sheetData)).data.length;
-  } catch (e) { /* leave null */ }
-
-  return { counts, approval, stage1Invoice };
+  return { counts, approval };
 }
 
 /**
@@ -2442,25 +2461,24 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 
-    if (Number(stage) === 1) {
-      // [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload,
-      // invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra] — see
-      // OL_STAGE1_EXTRA_COLS' own doc comment. safeStr for uploads (Drive
-      // URLs — fmtCell's parseDate() can misread a digit-bearing string as a
-      // date, the exact bug Stage 5's own extra-cols read is documented as
-      // avoiding), the Yes/No radio, plain text remarks/invoice no and the
-      // JSON blob; fmtNumCell for the amount, fmtCell only for the genuine
-      // date field.
-      const [poUpload, poAmount, poRequired, invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra] = OL_STAGE1_EXTRA_COLS;
-      result[`col_${poUpload}`] = safeStr(row[poUpload]);
-      result[`col_${poAmount}`] = fmtNumCell(row[poAmount]);
-      result[`col_${poRequired}`] = safeStr(row[poRequired]);
-      result[`col_${invoiceAmount}`] = fmtNumCell(row[invoiceAmount]);
-      result[`col_${invoiceUpload}`] = safeStr(row[invoiceUpload]);
-      result[`col_${invoiceRemarks}`] = safeStr(row[invoiceRemarks]);
-      result[`col_${invoiceDate}`] = fmtCell(row[invoiceDate]);
-      result[`col_${invoiceNo}`] = safeStr(row[invoiceNo]);
-      result[`col_${invoiceExtra}`] = safeStr(row[invoiceExtra]);
+    /* Stage 10 ("LR & Return Transportation", displays as Stage 3) — the
+       Return Transportation PO Required/PO/Amount fields (col_319/317/318),
+       moved here 2026-09-18 (explicit request) from Stage 1's own form via
+       a brief same-day detour through the Approval decision. Also fetches
+       LR details live from the external FMS STAGE-9 sheet (never stored in
+       this app's own sheet) — see stage8.service.js's getMatchedFmsForContainer. */
+    if (Number(stage) === 10) {
+      for (const eci of OL_STAGE10_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+      let fms = null;
+      try { fms = await getMatchedFmsForContainer(safeStr(row[0]), safeStr(row[5])); } catch (e) { fms = null; }
+      result._lrData = fms?.transport ? {
+        lrNo: fms.transport.lrNo,
+        vehicleNo: fms.transport.vehicleNo,
+        doNumber: fms.transport.doNumber,
+        loadingDate: fms.transport.loadingDate,
+        destinationCity: fms.transport.destinationCity,
+        transporter: fms.transport.transporter
+      } : null;
     }
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
@@ -2513,22 +2531,34 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       };
     }
 
-    /* Stage 6 (FMS Closure, internal stage 8)'s read-only reference to Stage
-       5 (Billing Reconciliation)'s own answers — Transport cost billed
-       (col_309), Outstanding Amount (col_306) and Estimated repair charges
-       billed (col_308), the 3 figures FMS Closure needs to check were
-       actually reconciled before closing the record out. Same reasoning as
-       Stage 5's own _stage1Data read just above: Stage 6's column range
-       (info.startCol..endCol, 100-106) never reaches Stage 5's (29-44/
-       305-316), so this needs its own explicit read. Read-only here —
-       editing these stays on Stage 5's own form. */
+    /* Stage 6 (FMS Closure, internal stage 8): both the read-only Stage 5
+       (Billing Reconciliation) reference AND Stage 6's own payment-
+       confirmation questions (OL_STAGE8_EXTRA_COLS) — added back together
+       2026-09-17 per explicit request, after first shipping only the
+       payment questions. _stage5Data mirrors every field on Stage 5's own
+       form (stageFields.js); col_312/313/314 (Last Date Of Billing/Accrued
+       Rental Amount/Date) stay excluded — removed from Stage 5's own form
+       2026-09-16, so they're not "Stage 5 data" any more. Stage 6's column
+       range (info.startCol..endCol, 100-106) never reaches Stage 5's
+       (29-44/305-316) or the payment columns (326-329), so both need their
+       own explicit read, same reasoning as Stage 5's own _stage1Data read
+       just above. */
     if (Number(stage) === 8) {
-      const [, outstanding, , repairCharges, transportBilled] = OL_STAGE5_EXTRA_COLS;
+      for (const eci of OL_STAGE8_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+
+      const [rentalsBilled, outstanding, dateBilledTill, repairCharges, transportBilled,
+        adjustDeposit, depositAmount, , , , reconcileCycle, remark] = OL_STAGE5_EXTRA_COLS;
       result._stage5Data = {
         status: safeStr(row[OL_STAGE_INFO[5].statusCol]),
-        transportCostBilled: safeStr(row[transportBilled]),
+        rentalsBilledTillDate: safeStr(row[rentalsBilled]),
         outstandingAmount: fmtNumCell(row[outstanding]),
-        repairChargesBilled: safeStr(row[repairCharges])
+        dateBilledTill: fmtCell(row[dateBilledTill]),
+        repairChargesBilled: safeStr(row[repairCharges]),
+        transportCostBilled: safeStr(row[transportBilled]),
+        adjustSecurityDeposit: safeStr(row[adjustDeposit]),
+        securityDepositAmount: fmtNumCell(row[depositAmount]),
+        reconcileEntireCycle: safeStr(row[reconcileCycle]),
+        remark: safeStr(row[remark])
       };
     }
 
@@ -2913,13 +2943,21 @@ const OL_MOVE_ALL_COLS = [
 export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other'];
 
 /** DISPLAY stage number (what the UI and this Move To Stage dropdown show,
- *  e.g. 3/4/5) -> INTERNAL stage number (what selects the sheet column
- *  range everywhere else in this file) — the reverse of displayStageNum. */
-const OL_INTERNAL_BY_DISPLAY = new Map(OL_ACTIVE_STAGE_NUMS.map((s, i) => [i + 1, s]));
+ *  e.g. 4/5/6) -> INTERNAL stage number (what selects the sheet column
+ *  range everywhere else in this file) — the reverse of displayStageNum.
+ *  BUG FOUND AND FIXED 2026-09-18: this used to recompute its own `i + 1`
+ *  mapping instead of reusing OL_STAGE_DISPLAY, so the 2026-09-18 renumbering
+ *  (display 3 reserved for Invoice, everything from Gate In on shifted up
+ *  one) updated OL_STAGE_DISPLAY but silently left this one on the OLD
+ *  numbers — a submitted jump target of display "4" (meant as Gate In under
+ *  the new numbering) would have resolved to Inspection instead. Derived
+ *  from OL_STAGE_DISPLAY directly now so the two can never drift apart
+ *  again. */
+const OL_INTERNAL_BY_DISPLAY = new Map([...OL_STAGE_DISPLAY.entries()].map(([internal, display]) => [display, internal]));
 
 /** The only stages a "Move To Stage" jump may target — Gate In, Inspection,
- *  Billing (internal 7/3/5 — display Stage 3/4/5). Intimation (1) and FMS
- *  Closure (8) are not valid jump destinations. */
+ *  Final Billing (internal 7/3/5 — display Stage 4/5/6). Intimation (1) and
+ *  KAM (8) are not valid jump destinations. */
 const OL_JUMP_TARGET_INTERNALS = [OL_STAGE3_INTERNAL, OL_INSPECTION_INTERNAL, OL_BILLING_INTERNAL];
 
 /** True once a row has been moved out of Stage 2 via either Reason — the
@@ -2944,7 +2982,7 @@ function _jumpTargetInternal(row) {
  *  entirely, so `s`'s own pending queue must never show this row (it isn't
  *  genuinely pending there; it jumped past it). Ordered by POSITION in
  *  OL_ACTIVE_STAGE_NUMS, same reasoning as _prevActiveStage — the workflow
- *  is 1 -> 6 -> 7 -> 3 -> 5 -> 8, not numeric order. */
+ *  is 1 -> 6 -> 10 -> 7 -> 3 -> 5 -> 8, not numeric order. */
 function _jumpSkipsStage(jumpTargetInternal, s) {
   if (jumpTargetInternal == null) return false;
   const iTransport = OL_ACTIVE_STAGE_NUMS.indexOf(OL_STAGE2_INTERNAL);
@@ -3762,15 +3800,6 @@ export async function getOffLeaseDashboardData(user) {
   try {
     approvalPendingRows = new Set((await getOffLeaseApprovalData(user, sheetData)).data.map((d) => d._rowNum));
   } catch (e) { /* leave empty — no approval-queue containers surfaced, not a broken dashboard */ }
-  /* Stage 1.1 (Invoice) — completed-Stage-1 rows held out of Approval
-     pending their invoice (see getOffLeaseStage11InvoiceData's doc
-     comment). Disjoint from approvalPendingRows by construction: the same
-     gate that populates this set is also what excludes these rows from the
-     Approval queue. Added 2026-09-04. */
-  let stage1InvoicePendingRows = new Set();
-  try {
-    stage1InvoicePendingRows = new Set((await getOffLeaseStage11InvoiceData(user, sheetData)).data.map((d) => d._rowNum));
-  } catch (e) { /* leave empty — no Stage 1.1 containers surfaced, not a broken dashboard */ }
 
   const items = [];
   /* byStage seeded directly from each stage's own real queue length
@@ -3787,9 +3816,7 @@ export async function getOffLeaseDashboardData(user) {
   const kpis = {
     active: 0, pendingApproval: 0, byStage: { ...byStageQueueCounts }, completedThisMonth: 0,
     /* Added for the dashboard's Hold/Outstanding scorecards — 2026-09-04. */
-    holdStage1: 0, outstandingCount: 0, outstandingWithDamageCount: 0,
-    /* Stage 1.1 (Invoice) scorecard — 2026-09-04. */
-    stage1Invoice: 0
+    holdStage1: 0, outstandingCount: 0, outstandingWithDamageCount: 0
   };
 
   for (let i = 0; i < rows.length; i++) {
@@ -3808,9 +3835,7 @@ export async function getOffLeaseDashboardData(user) {
     // queue-membership result — see the doc comment above.
     let currentStage = c.currentStage, stageClass = c.stageClass, currentStageNum = c.currentStageNum, completed = c.completed;
     if (c.stages[0].done) { // Stage 1 done — otherwise leave _classifyOffLeaseStages' own "Stage 1" result as-is
-      if (stage1InvoicePendingRows.has(rowNum)) {
-        currentStage = 'Stage 1.1 — Invoice'; stageClass = 'stage1Invoice'; currentStageNum = null; completed = false;
-      } else if (approvalPendingRows.has(rowNum)) {
+      if (approvalPendingRows.has(rowNum)) {
         currentStage = 'Pending Approval'; stageClass = 'approval'; currentStageNum = null; completed = false;
       } else {
         const pending = pendingByRow.get(rowNum);
@@ -3888,7 +3913,6 @@ export async function getOffLeaseDashboardData(user) {
 
     if (!completed) kpis.active++;
     if (stageClass === 'approval') kpis.pendingApproval++;
-    if (stageClass === 'stage1Invoice') kpis.stage1Invoice++;
     // byStage is seeded directly from each stage's own queue length above —
     // not accumulated here, see that comment for why.
     if (completed && _completedThisMonth(c.stages[7])) kpis.completedThisMonth++;
@@ -4145,18 +4169,6 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   res.approvalDate = apTsCol >= 0 ? formatDateVal(row[apTsCol]) : '';
   res.approvalUser = apUsCol >= 0 ? safeStr(row[apUsCol]) : '';
 
-  /* Stage 1.1 (Invoice) card, for the Off-Lease Progress board — a filtered
-     view of Stage 1's own row (Transportation PO Required / Invoice Upload,
-     OL_STAGE1_EXTRA_COLS[2]/[4] = col_319/col_321), not a real stage of its
-     own. "Skipped" when Return Transportation PO Required is anything other
-     than an explicit "Yes" — the same fields never applied to this record at
-     all, not merely "not done yet". Explicit request 2026-09-11. */
-  const [, , poRequiredCol, , invoiceUploadCol] = OL_STAGE1_EXTRA_COLS;
-  const invoicePoRequired = String(row[poRequiredCol] || '').trim().toLowerCase() === 'yes';
-  const invoiceUploaded = String(row[invoiceUploadCol] || '').trim() !== '';
-  res.invoicePoRequired = invoicePoRequired;
-  res.invoiceStatus = !invoicePoRequired ? 'skipped' : invoiceUploaded ? 'done' : 'pending';
-
   // This resolved record's own client — see pickGateFormForClient's doc
   // comment for why container number alone is not enough here.
   const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], res.clientName);
@@ -4170,10 +4182,11 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
 
   const stages = [];
   /* WORKFLOW ORDER, not 1..8 ascending. Internal stage numbers do not run in
-     workflow order (the sequence is 1 -> 6 -> 7 -> 3 -> 5 -> 8), so counting
-     up listed the container's history as Intimation, Inspection, Billing,
-     Transportation, Get In — the stages jumbled, and out of step with the
-     progress board and the dashboard, which both read OL_ACTIVE_STAGE_NUMS.
+     workflow order (the sequence is 1 -> 6 -> 10 -> 7 -> 3 -> 5 -> 8), so
+     counting up listed the container's history as Intimation, Inspection,
+     Billing, Transportation, Get In — the stages jumbled, and out of step
+     with the progress board and the dashboard, which both read
+     OL_ACTIVE_STAGE_NUMS.
 
      Retired stages are skipped EXCEPT when the row already has data for one —
      a container that completed Stage 2 or 4 before they were retired should
@@ -4304,27 +4317,30 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
         fields.push({ label: OL_HEADERS[eci] || `Col ${eci + 1}`, value: sv3 });
       }
     }
-    /* Stage 1's "Filled Stage Data" card was missing these — the normal
+    /* Stage 1's "Filled Stage Data" card was missing this — the normal
        startCol..endCol range above (10..17) never covered Off-Lease
        Requested By (col 304, captured at Off-Lease creation, before Stage 1
-       is even filled — see OL_TRACKING_PERSON_NAME_COL) or the Return
-       Transportation PO fields (OL_STAGE1_EXTRA_COLS, outside that range for
-       the same reason Stage 3/4's own extras are). Explicit request
-       2026-09-11; Invoice fields are deliberately NOT included here — those
-       belong to the separate Stage 1.1 card/tab, not Stage 1's own. */
+       is even filled — see OL_TRACKING_PERSON_NAME_COL). Explicit request
+       2026-09-11. */
     if (s === 1) {
       const requestedBy = safeStr(row[OL_TRACKING_PERSON_NAME_COL]);
       if (requestedBy.trim() !== '') fields.push({ label: OL_HEADERS[OL_TRACKING_PERSON_NAME_COL] || 'Off-Lease Requested By', value: requestedBy });
-      const [poUpload, poAmount, poRequired] = OL_STAGE1_EXTRA_COLS;
+    }
+    /* Stage 10's own "Filled Stage Data" card — the Return Transportation PO
+       fields (OL_STAGE10_EXTRA_COLS, outside its own 332-335 range for the
+       same reason Stage 3/4's own extras are). Moved here 2026-09-18 from
+       Stage 1's own card, alongside the fields' own move to this stage. */
+    if (s === 10) {
+      const [poUpload, poAmount, poRequired] = OL_STAGE10_EXTRA_COLS;
       const poRequiredVal = safeStr(row[poRequired]);
-      if (poRequiredVal.trim() !== '') fields.push({ label: OL_HEADERS[poRequired] || 'Transportation PO Required', value: poRequiredVal });
+      if (poRequiredVal.trim() !== '') fields.push({ label: OL_HEADERS[poRequired] || 'Return Transportation PO Required', value: poRequiredVal });
       // safeStr, not fmtCell — a Drive URL, same reasoning as every other
       // upload field in this file (fmtCell's parseDate() misreads a
       // digit-bearing string as a date).
       const poUploadVal = safeStr(row[poUpload]);
-      if (poUploadVal.trim() !== '') fields.push({ label: OL_HEADERS[poUpload] || 'Transportation PO', value: poUploadVal });
+      if (poUploadVal.trim() !== '') fields.push({ label: OL_HEADERS[poUpload] || 'Return Transportation PO', value: poUploadVal });
       const poAmountVal = fmtNumCell(row[poAmount]);
-      if (poAmountVal.trim() !== '') fields.push({ label: OL_HEADERS[poAmount] || 'Transportation PO Amount', value: poAmountVal });
+      if (poAmountVal.trim() !== '') fields.push({ label: OL_HEADERS[poAmount] || 'Return Transportation PO Amount', value: poAmountVal });
     }
 
     /* Gate In (internal 7) and a repair-not-required Inspection Checklist
@@ -4495,13 +4511,6 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
     const apprStatus = row[approvalStatusCol];
     if (apprStatus && String(apprStatus).trim().toLowerCase() !== '') continue;
 
-    /* Return Transportation PO Required (col_319) = "Yes" holds a row out of
-       Approval until its Invoice Upload (col_321) is filled in — it belongs
-       in the Stage 1.1 (Invoice) queue first (getOffLeaseStage11InvoiceData,
-       same two columns). Explicit request 2026-09-04. */
-    const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
-    if (poRequired && String(row[321] || '').trim() === '') continue;
-
     const displayRow = displayIndices.map((ci) => (dateCols.has(ci) ? fmtCell(row[ci]) : safeStr(row[ci])));
 
     /* TAT — every row here is by definition still pending (the apprStatus
@@ -4527,116 +4536,13 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
   return { headers: displayHeaders, data: finalData, count: finalData.length, tatBudget: budgetLabel(approvalBudget) };
 }
 
-/**
- * Rows where Stage 1 is Completed, Return Transportation PO Required
- * (col_319) = "Yes", and the Invoice hasn't been uploaded yet (col_321
- * blank) — the "Stage 1.1 (Invoice)" tab. Sibling of getOffLeaseApprovalData
- * just above: a completed-Stage-1 row sits HERE instead of Approval until
- * the invoice is filled in (see saveOffLeaseStage1Invoice and the matching
- * gate added to getOffLeaseApprovalData). Explicit request 2026-09-04 — a
- * container never reaches here with col_319 still blank, since Transportation
- * PO Required is only ever answered as part of the same submission that
- * completes Stage 1 (see getOffLeaseData's own doc comment on why this can't
- * be a filter of the pending-Stage-1 queue).
- */
-export async function getOffLeaseStage11InvoiceData(user, preFetchedSheetData) {
-  await _ensureOffLeaseSheet();
-  const { headers, rows } = preFetchedSheetData || await getSheetDataFromMongo(OL_SHEET);
-  if (!rows.length) return { headers: [], data: [], count: 0 };
-
-  const gate = await _offLeaseAccessGate(user);
-  const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
-
-  const displayIndices = [0, 1, 2, 3, 5, 6, 7, 8];
-  const displayHeaders = [
-    'Container No', 'Lease ID', 'Size', 'Type', 'Client Name',
-    'Location', 'Deployed Date', 'Valid Upto'
-  ];
-
-  const finalData = [];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row[0] || String(row[0]).trim() === '') continue;
-    if (gate && !gate(safeStr(row[5]))) continue;
-
-    const s1Status = safeStr(row[stage1StatusCol]).trim().toLowerCase();
-    if (s1Status !== 'completed') continue;
-
-    const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
-    if (!poRequired) continue;
-    const invoiceUploaded = String(row[321] || '').trim() !== '';
-    if (invoiceUploaded) continue;
-
-    const displayRow = displayIndices.map((ci) => ((ci === 7 || ci === 8) ? fmtCell(row[ci]) : safeStr(row[ci])));
-    finalData.push({ row: displayRow, _rowNum: i + 2 });
-  }
-
-  return { headers: displayHeaders, data: finalData, count: finalData.length };
-}
-
-/**
- * Save the invoice fields for a row already sitting in the Stage 1.1
- * (Invoice) queue — Stage 1 itself is already Completed by the time a row
- * reaches here, so this deliberately does NOT go through saveOffLeaseStage
- * (its ALREADY_PROCESSED guard would reject any further write to a
- * completed stage 1). Only the 6 invoice columns (the first invoice's 5
- * fields plus col_325's "every invoice after the first" JSON blob) are
- * writable; anything else in the payload is silently ignored — this is not
- * a general Stage 1 editor.
- */
-export async function saveOffLeaseStage1Invoice(containerNo, data, userEmail, knownRow) {
-  await checkActionPermission('offlease1', userEmail);
-
-  return withSheetLock(OL_SHEET, async () => {
-    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-    await _ensureOffLeaseSheet();
-    const { rows } = await getSheetData(OL_SHEET);
-    const rn = _resolveOlRow(rows, containerNo, knownRow);
-    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
-    const row = rows[rn - 2] || [];
-
-    const s1Status = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim().toLowerCase();
-    if (s1Status !== 'completed') throw new AppError('Stage 1 has not been completed yet.');
-    const poRequired = String(row[319] || '').trim().toLowerCase() === 'yes';
-    if (!poRequired) throw new AppError('Return Transportation PO is not required for this record.');
-
-    // [invoiceAmount, invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra]
-    const invoiceCols = new Set(OL_STAGE1_EXTRA_COLS.slice(3));
-
-    const payload = { ...(data || {}) };
-    _sanitizeRichTextPayload(payload);
-    const cellUpdates = [];
-    const mirrored = {};
-    for (const key of Object.keys(payload)) {
-      if (key.indexOf('col_') !== 0) continue;
-      const colIdx = parseInt(key.replace('col_', ''), 10);
-      if (!invoiceCols.has(colIdx)) continue;
-      const val = payload[key];
-      if (val === '' || val === undefined || val === null) continue;
-      const colName = OL_HEADERS[colIdx] || '';
-      const cellVal = colName.toLowerCase().indexOf('date') !== -1 && typeof val === 'string' && val.length > 0
-        ? (parseFormDate(val) ? safeStr(parseFormDate(val)) : val)
-        : val;
-      cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(colIdx)}${rn}`, values: [[cellVal]] });
-      mirrored[`row.${colIdx}`] = cellVal;
-    }
-    if (!cellUpdates.length) throw new AppError('No invoice fields to save.');
-
-    await batchUpdateValues(cellUpdates);
-
-    // Mirror into Mongo immediately — same reasoning as saveOffLeaseStage's
-    // own mirror block: without it, the row would still show in Stage 1.1
-    // (and stay hidden from Approval) until the next reconcile cycle.
-    try {
-      const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: mirrored });
-      if (!r.matchedCount) console.warn(`[OL-STAGE1-INVOICE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
-    } catch (e) {
-      console.error('[OL-STAGE1-INVOICE] mirror update failed (reconcile will correct):', e?.message || e);
-    }
-
-    return 'OK';
-  });
-}
+/* REMOVED 2026-09-18 (explicit request): getOffLeaseStage11InvoiceData and
+   saveOffLeaseStage1Invoice — the "Stage 1.1 (Invoice)" feature (Invoice No/
+   Amount/Upload/Date/Remarks, "+ Add Invoice") is dropped entirely. It was
+   never the intended design; the real gap it was meant to fill turned out to
+   be "LR & Return Transportation" (internal Stage 10, see OL_STAGE_INFO and
+   getOffLeaseData(10, ...) — that generic function now serves this queue,
+   no dedicated one needed). */
 
 export async function saveOffLeaseApprovalAction(containerNo, status, userEmail, remarks = '', knownRow) {
   await checkActionPermission('offleaseapproval', userEmail);
@@ -4727,7 +4633,6 @@ export async function saveOffLeaseApprovalActionFast(containerNo, status, userEm
   if (status && status.toLowerCase() === 'rejected' && remarkCol >= 0) {
     patch[`row.${remarkCol}`] = safeStr(remarks).trim() || `Rejected on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
   }
-
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
   const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
   await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail, remarks, resolvedRow], { actor: userEmail });

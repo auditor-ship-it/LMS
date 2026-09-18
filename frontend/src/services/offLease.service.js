@@ -16,8 +16,8 @@ export async function fetchApprovalQueue() {
    Stage 9's movement log are deliberately excluded — comments don't change
    any stage/TAT stat, and Stage 9 is its own append-only log outside the
    1..8 pipeline (see fetchMovements' doc comment). */
-export async function decideApproval(containerNo, status, remarks, rowNum) {
-  const res = await saveOffLeaseApprovalAction(containerNo, status, remarks, rowNum);
+export async function decideApproval(containerNo, status, remarks, rowNum, poData) {
+  const res = await saveOffLeaseApprovalAction(containerNo, status, remarks, rowNum, poData);
   invalidate('off-lease');
   return res;
 }

@@ -63,16 +63,6 @@ export async function getData(req, res) {
     ? gateFormIndex()
     : undefined;
 
-  /* ?filter=invoice on stage 1 is NOT a filter of the pending-Stage-1 queue
-     (getOffLeaseData) — it reads COMPLETED Stage 1 rows awaiting their
-     invoice, same shape as the Approval queue. See
-     getOffLeaseStage11InvoiceData's own doc comment for why. */
-  if (stage === 1 && req.query.filter === 'invoice') {
-    const data = await offLeaseService.getOffLeaseStage11InvoiceData(req.user);
-    res.json(data);
-    return;
-  }
-
   /* ?filter=hold — Stage 1's own Hold view (see getOffLeaseData's doc
      comment on that branch). Meaningless for every other stage; harmless to
      pass through unconditionally since getOffLeaseData only reads it when
@@ -100,8 +90,8 @@ export async function getData(req, res) {
  * labels is worse than no badge.
  */
 export async function getStageCounts(req, res) {
-  const { counts, approval, stage1Invoice } = await offLeaseService.getOffLeaseStageCounts(req.user);
-  res.json({ counts: { ...counts, approval, stage1Invoice } });
+  const { counts, approval } = await offLeaseService.getOffLeaseStageCounts(req.user);
+  res.json({ counts: { ...counts, approval } });
 }
 
 export async function getStageDetail(req, res) {
@@ -155,17 +145,6 @@ export async function saveStage(req, res) {
   // for the WRITE, where a wrong-row match would corrupt real data.
   const { rowNum, ...data } = req.body || {};
   const message = await offLeaseService.saveOffLeaseStageFast(req.params.containerNo, stage, data, req.user.email, rowNum);
-  res.json({ message });
-}
-
-/** POST /:containerNo/stage1-invoice — the Stage 1.1 (Invoice) tab's own
- *  save, separate from saveStage above: Stage 1 is already Completed by the
- *  time a row reaches this queue, so the generic save (which rejects any
- *  further write once a stage's status column is filled) can't be reused
- *  here. See saveOffLeaseStage1Invoice's doc comment. */
-export async function saveStage1Invoice(req, res) {
-  const { rowNum, ...data } = req.body || {};
-  const message = await offLeaseService.saveOffLeaseStage1Invoice(req.params.containerNo, data, req.user.email, rowNum);
   res.json({ message });
 }
 

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  PageHeader, Card, Button, SearchBar, Pagination, DataGrid, LoadingState, ErrorState, EmptyState, renderCellValue
+  PageHeader, Card, Button, SearchBar, Pagination, DataGrid, LoadingState, ErrorState, EmptyState, renderCellValue, FileUpload
 } from '../../components/ui/index.js';
+import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
@@ -23,18 +24,11 @@ import { STAGES } from '../../constants/stages.js';
 import styles from './OffLeasePage.module.css';
 
 /* The approval gate is not a stage of its own — it sits BETWEEN Stage 1 and
-   Stage 2 — so it is numbered 1.2 and placed immediately after Stage 1 rather
+   Stage 2 — so it is numbered 1A and placed immediately after Stage 1 rather
    than floating at the front of the strip, where the tab order implied
-   approvals happened before intimation. */
-const APPROVAL_TAB = { key: 'approval', label: 'Stage 1.2 (Pushpa)', countKey: 'approval' };
-
-/* Not a stage of its own either — a filtered view of Stage 1's own rows
-   (Transportation PO required, invoice not yet uploaded — see
-   getOffLeaseData's opts.filter === 'invoice' branch), given its own tab so
-   it reads the same way "Stage 1.2 (Approval)" does. Opens the exact same
-   Stage 1 form (StagePageBase with forcedFilter="invoice"), not a separate
-   queue/backend stage. Added 2026-09-04. */
-const STAGE11_TAB = { key: 'stage1invoice', label: 'Stage 1.1 (Shivani)', countKey: 'stage1Invoice' };
+   approvals happened before intimation. RENAMED 2026-09-18 (explicit
+   request) from "Stage 1.2" to "Stage 1A" — no position change. */
+const APPROVAL_TAB = { key: 'approval', label: 'Stage 1A (Pushpa)', countKey: 'approval' };
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -49,7 +43,7 @@ const TABS = [
       countKey: String(s.number),
       label: s.owner ? `Stage ${s.display} (${s.owner})` : `Stage ${s.display}`
     };
-    return s.display === 1 ? [tab, STAGE11_TAB, APPROVAL_TAB] : [tab];
+    return s.display === 1 ? [tab, APPROVAL_TAB] : [tab];
   })
 ];
 
@@ -74,7 +68,9 @@ export function OffLeasePage() {
   }), [canAct]);
 
   const [tab, setTab] = useState(() => visibleTabs[0]?.key || 'dashboard');
-  const stageMatch = tab.match(/^stage(\d)$/);
+  // \d+, not \d — internal stage numbers went double-digit (10) 2026-09-18;
+  // a single-digit-only regex silently never matched that tab's key at all.
+  const stageMatch = tab.match(/^stage(\d+)$/);
   /* One request for every badge — six stage-list calls from the client would
      be six round trips to render a row of numbers.
 
@@ -120,7 +116,6 @@ export function OffLeasePage() {
           (e.g. a stale value from before a permission was revoked). */}
       {tab === 'dashboard' && canAct('offleasedashboard') && <PipelineDashboard onOpenTab={setTab} />}
       {tab === 'approval' && <ApprovalQueue />}
-      {tab === 'stage1invoice' && <StagePageBase stageNumber={1} embedded forcedFilter="invoice" />}
       {tab === 'lookup' && canAct('offleaselookup') && <ContainerLookup />}
       {stageMatch && <StagePageBase stageNumber={Number(stageMatch[1])} embedded />}
     </>
@@ -208,12 +203,12 @@ function ApprovalQueue() {
     return next;
   });
 
-  const decide = async (item, status) => {
+  const decide = async (item, status, poData) => {
     const key = `${item._rowNum}-${status}`;
     setBusyKey(key);
     setActionError('');
     try {
-      const message = await decideApproval(item.row[0], status, undefined, item._rowNum);
+      const message = await decideApproval(item.row[0], status, undefined, item._rowNum, poData);
       if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
       // Write, then read — one sequential reload, nothing racing it.
       await reload();
@@ -399,6 +394,7 @@ function ApprovalQueue() {
         </>
       ) : (
         <ApprovalDetail
+          key={selected._rowNum}
           item={selected}
           headers={headers}
           detailColIdx={detailColIdx}
@@ -406,7 +402,7 @@ function ApprovalQueue() {
           canAct={canActApproval}
           busy={busyKey === `${selected._rowNum}-Approved`}
           onBack={() => setSelectedIdx(null)}
-          onApprove={async () => { await decide(selected, 'Approved'); setSelectedIdx(null); }}
+          onApprove={async (poData) => { await decide(selected, 'Approved', poData); setSelectedIdx(null); }}
           onSendBack={() => { setSelectedIdx(null); setSendBackItem(selected); }}
           onReject={() => { setSelectedIdx(null); setRejectItem(selected); }}
         />
@@ -444,9 +440,42 @@ function ApprovalQueue() {
  * excepted) rather than just the ones the table kept visible, plus
  * Approve/Send Back/Reject right here so a record can be decided on without
  * going back to the table first. Explicit request 2026-09-11.
+ *
+ * "Return Transportation PO Required?" (+ PO Upload/Amount when Yes) — moved
+ * 2026-09-18 (explicit request) off Stage 1's own form onto this Approval
+ * decision: the approver answers it here, and it's required before Approve
+ * is enabled. Deliberately only THIS single-row detail view collects it —
+ * the quick list-row Approve and bulk Approve (OffLeasePage's own table)
+ * stay one-click actions and simply leave these columns unanswered, same as
+ * today, rather than blocking the fast bulk workflow. The parent renders
+ * this with `key={item._rowNum}` so switching rows resets this local state.
  */
 function ApprovalDetail({ item, headers, detailColIdx, total, canAct, busy, onBack, onApprove, onSendBack, onReject }) {
   const containerNo = item.row?.[0];
+  const [poRequired, setPoRequired] = useState('');
+  const [poAmount, setPoAmount] = useState('');
+  const [poFile, setPoFile] = useState(null);
+  const [poUploading, setPoUploading] = useState(false);
+  const [poError, setPoError] = useState('');
+
+  const handleApprove = async () => {
+    if (!poRequired) { setPoError('Please answer "Return Transportation PO Required?" first.'); return; }
+    setPoError('');
+    let poFileUrl = '';
+    if (poRequired === 'Yes' && poFile) {
+      setPoUploading(true);
+      try {
+        poFileUrl = await uploadStageFile(poFile);
+      } catch (e) {
+        setPoError(`File upload failed — approval not saved. ${apiErrorMessage(e)}`);
+        setPoUploading(false);
+        return;
+      }
+      setPoUploading(false);
+    }
+    await onApprove({ poRequired, poFileUrl, poAmount });
+  };
+
   return (
     <div>
       <Button variant="secondary" size="sm" onClick={onBack} className={styles.backBtn}>← Back to List ({total})</Button>
@@ -466,11 +495,40 @@ function ApprovalDetail({ item, headers, detailColIdx, total, canAct, busy, onBa
         </div>
 
         {canAct && (
-          <div className={styles.detailFooter}>
-            <Button size="sm" variant="primary" loading={busy} onClick={onApprove}>Approve</Button>
-            <Button size="sm" variant="secondary" onClick={onSendBack}>Send Back</Button>
-            <Button size="sm" variant="danger" onClick={onReject}>Reject</Button>
-          </div>
+          <>
+            <div className={styles.detailField} style={{ marginTop: 16 }}>
+              <span className={styles.detailLabel}>Return Transportation PO Required? *</span>
+              <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}>
+                  <input type="radio" name={`poRequired-${item._rowNum}`} checked={poRequired === 'Yes'} onChange={() => setPoRequired('Yes')} />
+                  Yes
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}>
+                  <input type="radio" name={`poRequired-${item._rowNum}`} checked={poRequired === 'No'} onChange={() => setPoRequired('No')} />
+                  No
+                </label>
+              </div>
+            </div>
+            {poRequired === 'Yes' && (
+              <div className={styles.detailGrid} style={{ marginTop: 8 }}>
+                <div className={styles.detailField}>
+                  <span className={styles.detailLabel}>Return Transportation PO</span>
+                  <FileUpload label="Upload PO" onSelected={setPoFile} />
+                  {poFile && <span className={styles.detailValue}>{poFile.fileName}</span>}
+                </div>
+                <div className={styles.detailField}>
+                  <span className={styles.detailLabel}>Return Transportation PO Amount</span>
+                  <input type="number" value={poAmount} onChange={(e) => setPoAmount(e.target.value)} />
+                </div>
+              </div>
+            )}
+            {poError && <p className={styles.actionError}>{poError}</p>}
+            <div className={styles.detailFooter}>
+              <Button size="sm" variant="primary" loading={busy || poUploading} onClick={handleApprove}>Approve</Button>
+              <Button size="sm" variant="secondary" onClick={onSendBack}>Send Back</Button>
+              <Button size="sm" variant="danger" onClick={onReject}>Reject</Button>
+            </div>
+          </>
         )}
       </div>
     </div>

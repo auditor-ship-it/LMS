@@ -41,21 +41,19 @@ export const PERMISSION_KEYS = [
    * `offlease6` is still the third-from-last entry, still governs the same
    * sheet column, and now simply SAYS "Stage 2" because that is what Stage 2
    * has meant since the reorder. */
-  { key: 'offleaseapproval', label: 'Off-Lease Stage 1.2: Approval' },
-  // Also governs the Stage 1.1 (Invoice) tab — same permission, no separate
-  // key, since that tab is a filtered view of Stage 1's own data/form.
-  { key: 'offlease1', label: 'Off-Lease Stage 1 / 1.1: Intimation & Invoice (Christopher)' },
+  { key: 'offleaseapproval', label: 'Off-Lease Stage 1A: Approval' },
+  { key: 'offlease1', label: 'Off-Lease Stage 1: Intimation (Christopher)' },
   // Retired 2026-08-10 — no live tab corresponds to this. Deliberately NOT
   // labelled "Stage 2", which now means Transportation (offlease6, below).
   { key: 'offlease2', label: 'Off-Lease (Retired) Lifting / Arrival' },
-  { key: 'offlease3', label: 'Off-Lease Stage 4: Inspection Checklist (Sitaram)' },
+  { key: 'offlease3', label: 'Off-Lease Stage 5: Inspection Checklist (Sitaram)' },
   // Retired 2026-08-10 — no live tab corresponds to this. Deliberately NOT
-  // labelled "Stage 4", which now means Inspection Checklist (offlease3, above).
+  // labelled "Stage 5", which now means Inspection Checklist (offlease3, above).
   { key: 'offlease4', label: 'Off-Lease (Retired) Quotation / Order' },
-  { key: 'offlease5', label: 'Off-Lease Stage 5: Billing Reconciliation (Shivani)' },
+  { key: 'offlease5', label: 'Off-Lease Stage 6: Final Billing (Shivani)' },
   { key: 'offlease6', label: 'Off-Lease Stage 2: Transportation (Kshirod Khatua)' },
-  { key: 'offlease7', label: 'Off-Lease Stage 3: Gate In (Pritam)' },
-  { key: 'offlease8', label: 'Off-Lease Stage 6: FMS Closure' },
+  { key: 'offlease7', label: 'Off-Lease Stage 4: Gate In (Pritam)' },
+  { key: 'offlease8', label: 'Off-Lease Stage 7: KAM (Sales)' },
   { key: 'billing', label: 'Billing' },
   { key: 'receivables', label: 'Receivables' },
   /* APPENDED, never inserted — exactly like SIDEBAR_KEYS below. This array is
@@ -81,7 +79,11 @@ export const PERMISSION_KEYS = [
    * by editing the live sheet directly, same as any other permission
    * mistake, not by a code-level escape hatch). */
   { key: 'rolesAdmin', label: 'Roles & Access Admin' },
-  { key: 'apiAdmin', label: 'API Access Admin' }
+  { key: 'apiAdmin', label: 'API Access Admin' },
+  // Appended (not inserted) — same positional rule as offlease9 above. New
+  // internal Stage 10 ("LR & Return Transportation"), added 2026-09-18,
+  // displays as "Stage 3".
+  { key: 'offlease10', label: 'Off-Lease Stage 3: LR & Return Transportation (Shivani)' }
 ];
 
 export const SIDEBAR_KEYS = [
