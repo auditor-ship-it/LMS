@@ -1,5 +1,5 @@
 import {
-  getStageData, getStageDetail, saveStage, saveStage1Invoice, getNextLeaseId, saveMoveToStage, saveSendBack, getMoveHistory,
+  getStageData, getStageDetail, saveStage, getNextLeaseId, saveMoveToStage, saveSendBack, getMoveHistory,
   saveHold, saveSendBackToStage1, saveSendRejectedToStage1, saveSendBackFromBilling
 } from '../api/stage.api.js';
 import { invalidate } from '../shared/dataBus.js';
@@ -20,11 +20,6 @@ export async function fetchStageDetail(containerNo, stage, rowNum) {
    means an already-mounted page never sees another page's write on its own. */
 export async function submitStage(containerNo, stage, data, rowNum) {
   const res = await saveStage(containerNo, stage, data, rowNum);
-  invalidate('off-lease');
-  return res;
-}
-export async function submitStage1Invoice(containerNo, data, rowNum) {
-  const res = await saveStage1Invoice(containerNo, data, rowNum);
   invalidate('off-lease');
   return res;
 }

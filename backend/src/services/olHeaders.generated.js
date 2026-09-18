@@ -52,6 +52,21 @@
  * hand-added exception — added 2026-09-17 for the Stage 1.1 tab's "+ Add
  * Invoice" button (every invoice after the first, as one JSON array; see
  * OL_STAGE1_EXTRA_COLS's own doc comment in offlease.service.js).
+ *
+ * Indices 326..331 ("Transportation Amount Paid", "Total Outstanding Paid",
+ * "Inspection/Quotation Amount Paid", "Inspection/Quotation Payment Proof",
+ * "Transportation Payment Proof", "Total Outstanding Payment Proof") are the
+ * same kind of deliberate, hand-added exception — added 2026-09-17 for
+ * Stage 6 (FMS Closure)'s own payment-confirmation questions (see
+ * OL_STAGE8_EXTRA_COLS in offlease.service.js); the last two added same day
+ * once the proof-upload-on-Yes behavior was extended to all three questions.
+ *
+ * Indices 332..335 ("LR Return Transportation Remark", "LR Return
+ * Transportation Timestamp", "LR Return Transportation User", "LR Return
+ * Transportation Status") are the same kind of deliberate, hand-added
+ * exception — added 2026-09-18 as the new internal Stage 10's own Remark/
+ * Timestamp/User/Status quad (see OL_STAGE_INFO[10] in offlease.service.js).
+ * Internal stage 10 displays as "Stage 3" — see OL_ACTIVE_STAGE_NUMS.
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -139,4 +154,7 @@ export const OL_HEADERS = [
   "Transportation PO", "Transportation PO Amount", "Transportation PO Required",
   "Invoice Amount", "Invoice Upload", "Invoice Date", "Invoice Remarks", "Invoice No",
   "Invoice Additional (JSON)",
+  "Transportation Amount Paid", "Total Outstanding Paid", "Inspection/Quotation Amount Paid", "Inspection/Quotation Payment Proof",
+  "Transportation Payment Proof", "Total Outstanding Payment Proof",
+  "LR Return Transportation Remark", "LR Return Transportation Timestamp", "LR Return Transportation User", "LR Return Transportation Status",
 ];

@@ -14,7 +14,7 @@ import { OrderBookView } from './OrderBookView.jsx';
 import { ContainerDetailModal } from './ContainerDetailModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
-const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock' };
+const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 10: 'container' };
 
 /**
  * Off-Lease pipeline overview — KPI counts + every active container's
@@ -66,7 +66,6 @@ export function PipelineDashboard({ onOpenTab }) {
     else if (stageFilter === 'done') out = out.filter((it) => it.stageClass === 'done');
     else if (stageFilter === 'hold') out = out.filter((it) => it.onHold);
     else if (stageFilter === 'outstanding') out = out.filter((it) => it.hasOutstanding);
-    else if (stageFilter === 'stage1Invoice') out = out.filter((it) => it.stageClass === 'stage1Invoice');
     /* pendingStages, not currentStageNum: a container can genuinely be
        pending in more than one stage's queue at once (see pendingStages'
        doc comment on the backend), and the KPI card's own count is a real
@@ -95,23 +94,29 @@ export function PipelineDashboard({ onOpenTab }) {
         ? 'On hold'
         : stageFilter === 'outstanding'
           ? 'Outstanding payment'
-          : stageFilter === 'stage1Invoice'
-            ? 'Stage 1.1 — Invoice'
-            : stageFilter != null
-              ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
-              : '';
+          : stageFilter != null
+            ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
+            : '';
 
   return (
     <>
       <div className={styles.kpiRow}>
         {/* Fixed order per explicit request, 2026-09-04: Lease Expiry, Hold,
             Active, then the live workflow in sequence (Intimation ->
-            Approval -> Transportation -> Gate In -> Inspection -> Final
-            Billing -> Outstanding Payment ["Payment Pending" in the user's
-            own sequence, right after Billing]), Completed last. Stage 6
-            (FMS Closure) is intentionally not in this row — everything else
-            here is either a cross-module count or one explicit stage, not
-            the generic STAGES.flatMap sweep this row used before. */}
+            Approval -> Transportation -> LR & Return Transportation -> Gate
+            In -> Inspection -> Final Billing -> Outstanding Payment
+            ["Payment Pending" in the user's own sequence, right after
+            Billing]), Completed last. Stage 7 (KAM) is intentionally not in
+            this row — everything else here is either a cross-module count
+            or one explicit stage, not the generic STAGES.flatMap sweep this
+            row used before. RENUMBERED 2026-09-18 (explicit request):
+            Approval "Stage 1.2" -> "Stage 1A"; a real internal stage 10
+            ("LR & Return Transportation") added between Transportation and
+            Gate In, displaying as "Stage 3" (replacing an earlier same-day
+            synthetic "Stage 3 (Invoice)" attempt — that feature is removed
+            entirely); Billing renamed "Billing Reconciliation" -> "Final
+            Billing"; every stage from Gate In onward shifted its display
+            number up by one to make room for Stage 10. */}
         {/* Reverted to individual cards, 2026-09-04 — the combined split
             card read worse than two plain ones. Lease Expiry leads the row,
             navigating to that page (same destination the sidebar's own nav
@@ -141,12 +146,7 @@ export function PipelineDashboard({ onOpenTab }) {
           onClick={() => toggleFilter(1)}
         />
         <StatCard
-          icon="edit" label="Stage 1.1 · Invoice" value={kpis.stage1Invoice ?? '—'} loading={loading} tint="warn"
-          footnote={kpis.stage1Invoice > 0 ? 'Invoice pending' : undefined}
-          onClick={() => toggleFilter('stage1Invoice')}
-        />
-        <StatCard
-          icon="clock" label="Stage 1.2 · Approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="warn"
+          icon="clock" label="Stage 1A · Approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="warn"
           footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
           onClick={() => toggleFilter('approval')}
         />
@@ -156,17 +156,22 @@ export function PipelineDashboard({ onOpenTab }) {
           onClick={() => toggleFilter(6)}
         />
         <StatCard
-          icon={STAGE_ICONS[7]} label="Stage 3 · Gate In" value={kpis.byStage?.[7] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[10]} label="Stage 3 · LR & Return Transportation" value={kpis.byStage?.[10] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 10)?.owner}
+          onClick={() => toggleFilter(10)}
+        />
+        <StatCard
+          icon={STAGE_ICONS[7]} label="Stage 4 · Gate In" value={kpis.byStage?.[7] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 7)?.owner}
           onClick={() => toggleFilter(7)}
         />
         <StatCard
-          icon={STAGE_ICONS[3]} label="Stage 4 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[3]} label="Stage 5 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 3)?.owner}
           onClick={() => toggleFilter(3)}
         />
         <StatCard
-          icon={STAGE_ICONS[5]} label="Stage 5 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[5]} label="Stage 6 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 5)?.owner}
           onClick={() => toggleFilter(5)}
         />

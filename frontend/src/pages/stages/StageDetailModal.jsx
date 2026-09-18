@@ -6,7 +6,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchNextLeaseId, submitStage, submitStage1Invoice, submitMoveToStage, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
@@ -50,14 +50,9 @@ function parseCostFigure(v) {
  * only the visible field keys back to POST /offlease/:containerNo/stage/:stage.
  */
 // The heading comes from stageCaption(stageNumber), so no label prop is needed.
-export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, fieldContext, onClose, onSaved }) {
+export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, onClose, onSaved }) {
   const { canAct } = usePermission();
-  /* fieldContext ('invoice', from the Stage 1.1 tab) narrows the field list
-     to just that context's own fields (context: 'invoice' in
-     stageFields.js) — everything else in the stage stays out of that form.
-     The default (no fieldContext) shows every field EXCEPT ones scoped to
-     another context, i.e. today's normal per-stage form, unchanged. */
-  const fields = (STAGE_FIELDS[stageNumber] || []).filter((f) => (fieldContext ? f.context === fieldContext : !f.context));
+  const fields = STAGE_FIELDS[stageNumber] || [];
   const { data, loading, error, reload } = useAsync(() => fetchStageDetail(containerNo, stageNumber, rowNum), [containerNo, stageNumber, rowNum]);
   const { data: leaseIdPreview } = useAsync(
     () => (stageNumber === 1 ? fetchNextLeaseId() : Promise.resolve(null)),
@@ -70,33 +65,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [uploading, setUploading] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
-
-  /* Stage 1.1's "+ Add Invoice" — every invoice beyond the first one, held
-     as plain component state rather than going through values/col_N like
-     the rest of the form. col_325 stores them as a single JSON array (see
-     OL_STAGE1_EXTRA_COLS's doc comment in offlease.service.js for why one
-     JSON column instead of a fixed block of columns per slot); this state
-     is that array parsed out into editable rows, each with its own pending
-     file until Save Stage uploads it. */
-  const [extraInvoices, setExtraInvoices] = useState([]);
-  useEffect(() => {
-    if (fieldContext !== 'invoice') return;
-    let parsed = [];
-    try {
-      const raw = JSON.parse(data?.col_325 || '[]');
-      if (Array.isArray(raw)) parsed = raw;
-    } catch { /* blank/corrupt cell — start empty rather than blocking the form */ }
-    setExtraInvoices(parsed.map((inv) => ({
-      no: inv?.no || '', amount: inv?.amount || '', uploadUrl: inv?.uploadUrl || '',
-      date: inv?.date || '', remarks: inv?.remarks || '', pendingFile: null
-    })));
-  }, [data, fieldContext]);
-  const updateExtraInvoice = (idx, patch) =>
-    setExtraInvoices((prev) => prev.map((inv, i) => (i === idx ? { ...inv, ...patch } : inv)));
-  const addExtraInvoice = () =>
-    setExtraInvoices((prev) => [...prev, { no: '', amount: '', uploadUrl: '', date: '', remarks: '', pendingFile: null }]);
-  const removeExtraInvoice = (idx) =>
-    setExtraInvoices((prev) => prev.filter((_, i) => i !== idx));
 
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
@@ -325,36 +293,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
       if (v !== '' && v != null) payload[f.key] = v;
     }
 
-    if (fieldContext === 'invoice') {
-      const pending = extraInvoices.map((inv, i) => ({ inv, i })).filter(({ inv }) => inv.pendingFile);
-      let finalExtra = extraInvoices;
-      if (pending.length) {
-        setUploading(true);
-        try {
-          const uploaded = {};
-          for (const { inv, i } of pending) uploaded[i] = await uploadStageFile(inv.pendingFile);
-          finalExtra = extraInvoices.map((inv, i) => (uploaded[i] ? { ...inv, uploadUrl: uploaded[i], pendingFile: null } : inv));
-          setExtraInvoices(finalExtra);
-        } catch (err) {
-          setSaveError(`File upload failed — save aborted. ${apiErrorMessage(err)}`);
-          setUploading(false);
-          return;
-        }
-        setUploading(false);
-      }
-      // Fully-blank rows (added via "+ Add Invoice" then left empty) don't
-      // belong in the saved list.
-      const cleaned = finalExtra
-        .filter((inv) => inv.no || inv.amount || inv.uploadUrl || inv.date || inv.remarks)
-        .map(({ no, amount, uploadUrl, date, remarks }) => ({ no, amount, uploadUrl, date, remarks }));
-      payload.col_325 = JSON.stringify(cleaned);
-    }
-
     setSaving(true);
     try {
-      const message = fieldContext === 'invoice'
-        ? await submitStage1Invoice(containerNo, payload, rowNum)
-        : await submitStage(containerNo, stageNumber, payload, rowNum);
+      const message = await submitStage(containerNo, stageNumber, payload, rowNum);
       if (message === 'ALREADY_PROCESSED') {
         setSaveError('This record was already processed by someone else — refreshing…');
         await reload();
@@ -370,19 +311,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     }
   }
 
-  /* BUG FOUND AND FIXED 2026-09-16: the title always called stageCaption(1)
-     ("Stage 1 — Off-Lease Intimation") even when fieldContext === 'invoice'
-     — i.e. this same modal opened from the separate "Stage 1.1 (Invoice)"
-     tab, showing an entirely different field set (Invoice No/Amount/Upload/
-     Date/Remarks, not Off-Lease Intimation's own fields at all — see
-     stageFields.js's context:'invoice' comment). Confusing on its own, and
-     actively misleading here: reported live on a real container
-     (BMOU9721062) where the Invoice-tab modal's title claimed to be the
-     Intimation form while showing none of the Return Transportation PO
-     data entered on the actual Stage 1 form — someone reviewing it had no
-     way to tell, from the title alone, which form they were even looking
-     at. */
-  const modalTitle = fieldContext === 'invoice' ? 'Stage 1.1 — Invoice' : stageCaption(stageNumber);
+  const modalTitle = stageCaption(stageNumber);
 
   return (
     <div className={styles.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -488,18 +417,12 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 </>
               )}
 
-              {/* Read-only reference, added 2026-09-16: this view only shows
-                  the Invoice fields (col_320-324) — "Return Transportation
-                  PO Required"/PO/PO Amount (col_319/317/318) are Stage 1's
-                  OWN fields, filtered out here by design (see
-                  stageFields.js's context:'invoice' comment). Without this,
-                  someone filling in invoice details had no way to see
-                  whether a PO was even required, or check its amount/file,
-                  without leaving this modal to reopen the plain Stage 1
-                  form. `data` already carries the full row regardless of
-                  fieldContext — getOffLeaseStageDetail doesn't filter by it,
-                  only this modal's EDITABLE field list does. */}
-              {fieldContext === 'invoice' && <ReturnPoReferenceNote data={data} />}
+              {/* Read-only LR reference for Stage 10 ("LR & Return
+                  Transportation", displays as Stage 3) — details fetched
+                  live from the external FMS STAGE-9 sheet, never stored in
+                  this app's own sheet. See getOffLeaseStageDetail's
+                  data._lrData for the fetch. */}
+              {stageNumber === LR_TRANSPORT_STAGE && <LrReferenceNote data={data} />}
               {stageNumber === FMS_CLOSURE_STAGE && <Stage5ReferenceNote data={data} />}
 
               {/* Gate In's own form was removed 2026-08-24: gate/depot staff
@@ -557,19 +480,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               </div>
               )}
 
-              {/* "+ Add Invoice" — a container can come back with more than
-                  one invoice against the same Transportation PO; see
-                  extraInvoices' own doc comment above for why these live
-                  outside the generic fields/values mechanism. */}
-              {fieldContext === 'invoice' && !identityOnly && !data?._skipped && (
-                <ExtraInvoicesSection
-                  invoices={extraInvoices}
-                  disabled={readOnly || busy}
-                  onChange={updateExtraInvoice}
-                  onAdd={addExtraInvoice}
-                  onRemove={removeExtraInvoice}
-                />
-              )}
 
               {!identityOnly && !data?._skipped && checklists.map((c) => (
                 <ChecklistTable
@@ -669,18 +579,22 @@ const DAMAGE_ROLES = [
 ];
 
 /**
- * Stages that offer the inspection report: Stage 3 captures it, and Billing
- * (internally stage 5, shown as Stage 4) needs to read it before invoicing.
- * These are INTERNAL stage numbers.
+ * Stages that offer the inspection report: Stage 3 captures it, and Final
+ * Billing (internally stage 5, shown as Stage 6) needs to read it before
+ * invoicing. These are INTERNAL stage numbers.
  */
 const REPORT_STAGES = [3, 5];
 
-/** Billing Reconciliation (internally stage 5, shown as Stage 4) — the person
+/** Final Billing (internally stage 5, shown as Stage 6) — the person
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
 
-/** FMS Closure (internally stage 8, shown as Stage 6) — see Stage5ReferenceNote. */
+/** KAM (internally stage 8, shown as Stage 7) — see Stage5ReferenceNote. */
 const FMS_CLOSURE_STAGE = 8;
+
+/** LR & Return Transportation (internally stage 10, shown as Stage 3) — see
+ *  LrReferenceNote. Added 2026-09-18. */
+const LR_TRANSPORT_STAGE = 10;
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for
  *  Not Required, nothing while unset. */
@@ -971,111 +885,90 @@ function Stage1DataNote({ data }) {
 }
 
 /**
- * Read-only reference for the Stage 1.1 (Invoice) view — the "Return
- * Transportation PO Required"/PO/PO Amount answers Stage 1's OWN form
- * captures (col_319/317/318), invisible here otherwise since they carry no
- * `context` and are filtered out of this view's editable field list. See
- * this component's call site for the full reasoning.
+ * Read-only LR reference for Stage 10 ("LR & Return Transportation",
+ * displays as Stage 3) — details fetched live from the external FMS
+ * STAGE-9 sheet (getMatchedFmsForContainer in offlease.service.js), never
+ * stored in this app's own sheet. The Return Transportation PO fields
+ * (col_319/317/318) are this stage's own EDITABLE fields (stageFields.js's
+ * STAGE_FIELDS[10]) — no read-only card needed for those, they already show
+ * as inputs in the form below.
  */
-function ReturnPoReferenceNote({ data }) {
-  if (!data) return null;
-  const required = String(data.col_319 || '').trim();
-  if (!required) return null; // Stage 1 hasn't answered this yet — nothing to show
+function LrReferenceNote({ data }) {
+  const lr = data?._lrData;
+  if (!lr) return null;
   return (
     <>
-      <h3 className={styles.sectionTitle}>Return Transportation PO (Stage 1)</h3>
-      <p className={styles.sectionHint}>Answered on Stage 1's own form — reference only, not editable here.</p>
+      <h3 className={styles.sectionTitle}>LR Details (from FMS)</h3>
+      <p className={styles.sectionHint}>Fetched live from the external transport tracking sheet — reference only, not editable here.</p>
       <div className={styles.outstandingRow}>
         <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>PO Required</span>
-          <span className={styles.outstandingValue}>{required}</span>
+          <span className={styles.outstandingLabel}>LR No</span>
+          <span className={styles.outstandingValue}>{renderCellValue(lr.lrNo)}</span>
         </div>
         <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Return Transportation PO</span>
-          <span className={styles.outstandingValue}>{renderCellValue(data.col_317)}</span>
+          <span className={styles.outstandingLabel}>Vehicle No</span>
+          <span className={styles.outstandingValue}>{renderCellValue(lr.vehicleNo)}</span>
         </div>
         <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>PO Amount</span>
-          <span className={styles.outstandingValue}>{renderCellValue(data.col_318)}</span>
+          <span className={styles.outstandingLabel}>DO Number</span>
+          <span className={styles.outstandingValue}>{renderCellValue(lr.doNumber)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Loading Date</span>
+          <span className={styles.outstandingValue}>{renderCellValue(lr.loadingDate)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Destination City</span>
+          <span className={styles.outstandingValue}>{renderCellValue(lr.destinationCity)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Transporter</span>
+          <span className={styles.outstandingValue}>{renderCellValue(lr.transporter)}</span>
         </div>
       </div>
     </>
   );
 }
 
+/** Stage 5's own field labels (stageFields.js), paired with the _stage5Data
+ *  key each one reads from — kept as one list so Stage5ReferenceNote and
+ *  its data source can't quietly drift apart. */
+const STAGE5_REFERENCE_FIELDS = [
+  ['rentalsBilledTillDate', 'Rentals Billed Up To Last Date'],
+  ['outstandingAmount', 'Outstanding Amount'],
+  ['dateBilledTill', 'Date - Billed Till'],
+  ['repairChargesBilled', 'Estimated Repair Charges Billed'],
+  ['transportCostBilled', 'Transport Cost Billed'],
+  ['adjustSecurityDeposit', 'Adjust Security Deposit'],
+  ['securityDepositAmount', 'Security Deposit Amount'],
+  ['reconcileEntireCycle', 'Reconcile Entire Billing Cycle'],
+  ['remark', 'Remark']
+];
+
 /**
- * Read-only reference for Stage 6 (FMS Closure) — the 3 figures Stage 5
- * (Billing Reconciliation) already reconciled: whether Transport cost was
- * billed, the Outstanding (Lease) Amount, and the Estimated repair charges
- * billed (the Inspection/Quotation estimate). Editing these stays on Stage
- * 5's own form; this is reference only, same pattern as ReturnPoReferenceNote.
+ * Read-only reference for Stage 7 (KAM) — every field on Stage 6's (Final
+ * Billing) own form, shown alongside Stage 7's own Payment Confirmation
+ * questions (stageFields.js, col_326-329) so KAM can see what Final Billing
+ * reconciled while confirming what was actually paid. Editing these stays
+ * on Stage 6's own form; this is reference only, same pattern as
+ * LrReferenceNote.
  */
 function Stage5ReferenceNote({ data }) {
   const s5 = data?._stage5Data;
-  if (!s5 || !String(s5.status || '').trim()) return null; // Stage 5 hasn't run yet — nothing to show
+  if (!s5 || !String(s5.status || '').trim()) return null; // Stage 6/Final Billing hasn't run yet — nothing to show
   return (
     <>
-      <h3 className={styles.sectionTitle}>Billing Reconciliation (Stage 5)</h3>
-      <p className={styles.sectionHint}>Answered on Stage 5's own form — reference only, not editable here.</p>
+      <h3 className={styles.sectionTitle}>Final Billing (Stage 6)</h3>
+      <p className={styles.sectionHint}>Answered on Stage 6's own form — reference only, not editable here.</p>
       <div className={styles.outstandingRow}>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Transportation Payment</span>
-          <span className={styles.outstandingValue}>{s5.transportCostBilled || '—'}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Lease Outstanding</span>
-          <span className={styles.outstandingValue}>{renderCellValue(s5.outstandingAmount)}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Inspection / Quotation Amount</span>
-          <span className={styles.outstandingValue}>{renderCellValue(s5.repairChargesBilled)}</span>
-        </div>
+        {STAGE5_REFERENCE_FIELDS.map(([key, label]) => (
+          <div className={styles.outstandingCard} key={key}>
+            <span className={styles.outstandingLabel}>{label}</span>
+            <span className={styles.outstandingValue}>{renderCellValue(s5[key])}</span>
+          </div>
+        ))}
       </div>
     </>
-  );
-}
-
-/**
- * "+ Add Invoice" on the Stage 1.1 tab — every invoice beyond the first one
- * (which stays on its own fixed fields above, in the "Stage 1.1 — Return
- * Transportation PO & Invoice" group). Each row reuses the same Field/
- * FileFieldInput components the rest of the form uses, just addressed by
- * array index instead of a col_N key — see extraInvoices' own doc comment
- * in StageDetailModal for why (col_325 stores them all as one JSON array).
- */
-function ExtraInvoicesSection({ invoices, disabled, onChange, onAdd, onRemove }) {
-  return (
-    <section className={styles.formSection}>
-      <h4 className={styles.formSectionTitle}>Additional Invoices</h4>
-      {!invoices.length && <p className={styles.sectionHint}>No additional invoices yet.</p>}
-      {invoices.map((inv, i) => (
-        <div key={i} className={styles.extraInvoiceRow}>
-          <div className={styles.fieldGrid}>
-            <Field field={{ key: 'no', label: 'Invoice No', type: 'text' }} value={inv.no} onChange={(v) => onChange(i, { no: v })} disabled={disabled} />
-            <Field field={{ key: 'amount', label: 'Invoice Amount', type: 'number' }} value={inv.amount} onChange={(v) => onChange(i, { amount: v })} disabled={disabled} />
-            <Field
-              field={{ key: 'upload', label: 'Invoice Upload', type: 'file' }}
-              value={inv.uploadUrl}
-              pendingFileName={inv.pendingFile?.fileName}
-              onFile={(payload) => onChange(i, { pendingFile: payload, uploadUrl: '' })}
-              disabled={disabled}
-            />
-            <Field field={{ key: 'date', label: 'Invoice Date', type: 'date' }} value={inv.date} onChange={(v) => onChange(i, { date: v })} disabled={disabled} />
-            <Field field={{ key: 'remarks', label: 'Remarks', type: 'text' }} value={inv.remarks} onChange={(v) => onChange(i, { remarks: v })} disabled={disabled} />
-          </div>
-          {!disabled && (
-            <button type="button" className={styles.removeInvoiceBtn} onClick={() => onRemove(i)}>
-              <Icon name="trash" className={styles.stageRemarksAddIcon} /> Remove this invoice
-            </button>
-          )}
-        </div>
-      ))}
-      {!disabled && (
-        <button type="button" className={styles.stageRemarksAdd} onClick={onAdd}>
-          <Icon name="plus" className={styles.stageRemarksAddIcon} /> Add Invoice
-        </button>
-      )}
-    </section>
   );
 }
 
@@ -1314,12 +1207,14 @@ function FmsSteps({ steps }) {
 const MOVE_REASON_OPTIONS = ['Client to Client', 'Client Scope', 'Other'];
 
 /** Display stage number (submitted to the backend) -> friendly label. Only
- *  Gate In / Inspection / Billing are valid direct-jump destinations from
- *  Stage 2 — see OL_JUMP_TARGET_INTERNALS on the backend. */
+ *  Gate In / Inspection / Final Billing are valid direct-jump destinations
+ *  from Stage 2 — see OL_JUMP_TARGET_INTERNALS on the backend. Values
+ *  updated 2026-09-18 (explicit request) to match the renumbering — must
+ *  stay in step with OL_STAGE_DISPLAY there. */
 const MOVE_JUMP_TARGET_OPTIONS = [
-  { value: '3', label: 'Stage 3 – Gate In' },
-  { value: '4', label: 'Stage 4 – Inspection Checklist' },
-  { value: '5', label: 'Stage 5 – Billing Reconciliation' }
+  { value: '4', label: 'Stage 4 – Gate In' },
+  { value: '5', label: 'Stage 5 – Inspection Checklist' },
+  { value: '6', label: 'Stage 6 – Final Billing' }
 ];
 
 /**

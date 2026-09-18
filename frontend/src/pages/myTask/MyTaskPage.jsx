@@ -32,27 +32,35 @@ const CARD_DEFS = [
   { key: 'expired', label: 'Already Expired', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'error', icon: 'alert' },
   { key: 'renewPending', label: 'Renew Pending', path: ROUTES.RENEW_DOCUMENT, group: GROUPS.EXPIRY, tint: 'info', icon: 'edit' },
   /* Labels updated 2026-08-18 to match constants/stages.js's live WORKFLOW
-   * order (1 Intimation, 2 Transportation, 3 Gate In, 4 Inspection,
-   * 5 Billing, 6 FMS Closure). Card ORDER fixed 2026-08-25 to match, and the
-   * two retired stages (olStage2 "Lifting/Arrival", olStage4 "Quotation/
-   * Order" — no active queue, no owner, permanently "All clear") dropped
-   * entirely rather than shown as dead cards. Keys (olStage1..8) are
-   * untouched on the ones that remain — they still index getMyTasks()'s
-   * response 1:1 by internal stage number. */
+   * order. RENUMBERED 2026-09-18 (explicit request): Approval renamed
+   * "Stage 1.2" -> "Stage 1A" (position unchanged, still right after Stage
+   * 1); a real internal stage 10 ("LR & Return Transportation", owner
+   * Shivani) added between Transportation and Gate In, displaying as
+   * "Stage 3" (replacing an earlier same-day synthetic "Stage 3 (Invoice)"
+   * attempt — that feature is removed entirely); Billing renamed "Billing
+   * Reconciliation" -> "Final Billing"; FMS Closure renamed "FMS Closure"
+   * -> "KAM". Order is now 1 Intimation, 1A Approval, 2 Transportation,
+   * 3 LR & Return Transportation, 4 Gate In, 5 Inspection, 6 Final Billing,
+   * 7 KAM. Card ORDER fixed 2026-08-25 to match, and the two retired stages
+   * (olStage2 "Lifting/Arrival", olStage4 "Quotation/Order" — no active
+   * queue, no owner, permanently "All clear") dropped entirely rather than
+   * shown as dead cards. Keys (olStage1..8, olStage10) are untouched on the
+   * ones that remain — they still index getMyTasks()'s response 1:1 by
+   * internal stage number. */
   { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage1Invoice', label: 'Off-Lease Stage 1.1: Invoice', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   /* The approval gate sits BETWEEN Stage 1 and Stage 2 — same reasoning as
    * the Off-Lease tab strip ("Stage 1A (Approval)") and the Dashboard KPI
-   * row ("Stage 1A · Pending approval"). Used to live in the Pending
-   * Actions group under a plain "Off-Lease Pending Approval" label, the
-   * only Off-Lease card not grouped or numbered with the rest of the
-   * pipeline — moved and renamed 2026-08-25 to match. */
-  { key: 'offleaseApproval', label: 'Off-Lease Stage 1.2: Pending Approval', owner: 'Pushpa', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
+   * row ("Stage 1A · Approval"). Used to live in the Pending Actions group
+   * under a plain "Off-Lease Pending Approval" label, the only Off-Lease
+   * card not grouped or numbered with the rest of the pipeline — moved and
+   * renamed 2026-08-25 to match. */
+  { key: 'offleaseApproval', label: 'Off-Lease Stage 1A: Pending Approval', owner: 'Pushpa', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
   { key: 'olStage6', label: 'Off-Lease Stage 2: Transportation', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage5', label: 'Off-Lease Stage 5: Billing Reconciliation', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage8', label: 'Off-Lease Stage 6: FMS Closure', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
+  { key: 'olStage10', label: 'Off-Lease Stage 3: LR & Return Transportation', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage7', label: 'Off-Lease Stage 4: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage3', label: 'Off-Lease Stage 5: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage5', label: 'Off-Lease Stage 6: Final Billing', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage8', label: 'Off-Lease Stage 7: KAM', owner: 'Sales', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
 ];
 
 const CATEGORY_OPTIONS = Object.values(GROUPS).map((g) => ({ value: g, label: g }));
