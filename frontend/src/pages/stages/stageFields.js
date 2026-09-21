@@ -256,6 +256,15 @@ export const STAGE_FIELDS = {
     { key: 'col_11', label: 'Off-Lease Date', type: 'date', required: true },
     { key: 'col_12', label: 'Email Notification', type: 'file' },
     { key: 'col_13', label: 'Final Billing Date', type: 'date', required: true },
+    /* Return Transportation PO Required/PO/Amount — moved back here
+       2026-09-18 (explicit request), matching the original spec: the
+       decision belongs at intimation time, on Stage 1's own form. Stage 3
+       ("LR & Return Transportation") shows these same values read-only
+       (ReturnPoReferenceNote) and owns the INVOICE for this PO instead —
+       see poRequiredShown's own doc comment and STAGE_FIELDS[10] below. */
+    { key: 'col_319', label: 'Return Transportation PO Required', type: 'radio', options: YES_NO, group: 'Return Transportation PO' },
+    { key: 'col_317', label: 'Return Transportation PO', type: 'file', showIf: poRequiredShown, group: 'Return Transportation PO' },
+    { key: 'col_318', label: 'Return Transportation PO Amount', type: 'number', showIf: poRequiredShown, group: 'Return Transportation PO' },
     { key: 'col_14', label: 'Remark', type: 'text' }
   ],
 
@@ -407,16 +416,22 @@ export const STAGE_FIELDS = {
      LR details (LR No, vehicle, DO number, loading date, destination,
      transporter) are fetched live from the external FMS STAGE-9 sheet and
      shown read-only via StageDetailModal's LrReferenceNote (data._lrData) —
-     never stored in this app's own sheet, so no field for them here. The
-     Return Transportation PO fields (col_319/317/318) are this stage's own
-     editable data — see OL_STAGE10_EXTRA_COLS in offlease.service.js;
-     originally on Stage 1's own form (2026-09-04), briefly on the Approval
-     decision, landing here the same day. */
+     never stored in this app's own sheet, so no field for them here.
+     The Return Transportation PO fields (col_319/317/318) moved BACK to
+     Stage 1's own form the same day (explicit request, matching the
+     original spec: that decision belongs at intimation time) — shown here
+     read-only instead, via ReturnPoReferenceNote. This stage's own editable
+     data is just the invoice FOR that PO (col_320-324, +col_325's
+     "additional invoices" JSON) — see OL_STAGE10_EXTRA_COLS in
+     offlease.service.js, still gated on col_319 (poRequiredShown) even
+     though that field isn't edited here. */
   10: [
-    { key: 'col_319', label: 'Return Transportation PO Required', type: 'radio', options: YES_NO },
-    { key: 'col_317', label: 'Return Transportation PO', type: 'file', showIf: poRequiredShown },
-    { key: 'col_318', label: 'Return Transportation PO Amount', type: 'number', showIf: poRequiredShown },
-    { key: 'col_332', label: 'Remark', type: 'text' }
+    { key: 'col_324', label: 'Invoice No', type: 'text', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
+    { key: 'col_320', label: 'Invoice Amount', type: 'number', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
+    { key: 'col_321', label: 'Invoice Upload', type: 'file', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
+    { key: 'col_322', label: 'Invoice Date', type: 'date', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
+    { key: 'col_323', label: 'Invoice Remarks', type: 'text', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
+    { key: 'col_332', label: 'Remark', type: 'text', trailing: true }
   ]
 };
 

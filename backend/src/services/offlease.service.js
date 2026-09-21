@@ -344,21 +344,26 @@ const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
  * Transportation PO fields — NOT part of OL_STAGE_INFO[10]'s startCol..endCol
  * range (332-335, its own Remark/Timestamp/User/Status quad), same
  * "appended beyond the stage's own contiguous range" shape as every other
- * *_EXTRA_COLS array here. [poUpload, poAmount, poRequired]. The PO upload/
- * amount (317/318) only matter when Return Transportation PO Required (319)
- * is "Yes" — see stageFields.js's poRequiredShown predicate.
+ * *_EXTRA_COLS array here. [poUpload, poAmount, poRequired, invoiceAmount,
+ * invoiceUpload, invoiceDate, invoiceRemarks, invoiceNo, invoiceExtra]. The
+ * PO upload/amount (317/318) and every invoice field (320-325) only matter
+ * when Return Transportation PO Required (319) is "Yes" — see
+ * stageFields.js's poRequiredShown predicate.
  *
- * HISTORY: these 3 columns were added 2026-09-04 as conditional fields on
- * Stage 1's own form ("Stage 1.1" in the UI at the time), alongside 5
- * Invoice fields (320-324) and later a 6th "additional invoices" JSON column
- * (325, "+ Add Invoice" button, 2026-09-17). The whole Invoice feature was
- * REMOVED 2026-09-18 (explicit request) — cols 320-325 are no longer read or
- * written anywhere in this app (existing data, if any, is simply orphaned,
- * same as any other retired column) — and these 3 PO columns moved first to
- * the Approval decision, then same day to this genuinely new Stage 10, which
- * is what "LR & Return Transportation" actually turned out to mean.
+ * HISTORY: these columns were added 2026-09-04 as conditional fields on
+ * Stage 1's own form ("Stage 1.1" in the UI at the time) — the Invoice
+ * (320-324) is specifically the invoice for the Return Transportation PO,
+ * not a general invoice, which is why it's gated on the same PO Required
+ * answer. col_325 (2026-09-17, "+ Add Invoice") holds every invoice BEYOND
+ * the first one as a single JSON array — see ExtraInvoicesSection in
+ * StageDetailModal.jsx. RENUMBERED 2026-09-18 (explicit request): all of
+ * this moved off Stage 1's own form, briefly through the Approval decision,
+ * landing here on the genuinely new Stage 10 ("LR & Return Transportation")
+ * the same day — the whole point of that stage turned out to be exactly
+ * this: arranging the return transportation (PO) and its invoice together,
+ * alongside the LR details fetched live from FMS.
  */
-const OL_STAGE10_EXTRA_COLS = [317, 318, 319];
+const OL_STAGE10_EXTRA_COLS = [317, 318, 319, 320, 321, 322, 323, 324, 325];
 
 /**
  * Billing Reconciliation's (internal Stage 5) own data fields. NOT part of
@@ -2461,11 +2466,24 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 
-    /* Stage 10 ("LR & Return Transportation", displays as Stage 3) — the
-       Return Transportation PO Required/PO/Amount fields (col_319/317/318),
-       moved here 2026-09-18 (explicit request) from Stage 1's own form via
-       a brief same-day detour through the Approval decision. Also fetches
-       LR details live from the external FMS STAGE-9 sheet (never stored in
+    /* Return Transportation PO Required/PO/Amount (col_319/317/318) — moved
+       back to Stage 1's own form 2026-09-18 (explicit request, matching the
+       original spec: the decision belongs at intimation time), after a
+       same-day detour through the Approval decision and then Stage 10.
+       Outside Stage 1's own startCol..endCol range (10-17), so needs this
+       explicit read, same reasoning as every other *_EXTRA_COLS stage here. */
+    if (Number(stage) === 1) {
+      const [poUpload, poAmount, poRequired] = OL_STAGE10_EXTRA_COLS;
+      result[`col_${poUpload}`] = safeStr(row[poUpload]);
+      result[`col_${poAmount}`] = fmtNumCell(row[poAmount]);
+      result[`col_${poRequired}`] = safeStr(row[poRequired]);
+    }
+
+    /* Stage 10 ("LR & Return Transportation", displays as Stage 3) — reads
+       the SAME Return Transportation PO fields above (read-only reference,
+       ReturnPoReferenceNote — Stage 1 owns editing them now) plus this
+       stage's own invoice-for-that-PO fields (col_320-325). Also fetches LR
+       details live from the external FMS STAGE-9 sheet (never stored in
        this app's own sheet) — see stage8.service.js's getMatchedFmsForContainer. */
     if (Number(stage) === 10) {
       for (const eci of OL_STAGE10_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
@@ -2513,6 +2531,27 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result[`col_${remark}`] = safeStr(row[remark]);
 
       result._inspectionEstimateTotal = _olInspectionEstimateTotal(row);
+
+      /* Full Stage 4 Inspection Checklist + Machine Check, read-only, for
+         Billing Reconciliation — explicit request 2026-09-18: the estimate
+         total above wasn't enough, the reconciler wants to see every point.
+         Same readPoints shape getOffLeaseContainerDetail's report view uses
+         (safeStr for text so a remark/status is never reinterpreted as a
+         date; fmtNumCell for the numeric estimate). Row-only — no bypassDone
+         check here, since a container that skipped inspection just has every
+         point blank and readPoints' own filter already drops those. */
+      const readInspectionPoints = (defs) => defs.map((p) => ({
+        n: p.n,
+        item: p.item,
+        status: safeStr(row[p.status]).trim(),
+        estimate: fmtNumCell(row[p.estimate]),
+        photo: safeStr(row[p.photo]).trim(),
+        remark: safeStr(row[p.remark]).trim()
+      })).filter((p) => p.status || p.estimate || p.photo || p.remark);
+      const inspPoints = readInspectionPoints(OL_INSPECTION_POINTS);
+      result._inspectionPoints = inspPoints.length ? inspPoints : null;
+      const machPoints = readInspectionPoints(OL_MACHINE_POINTS);
+      result._machinePoints = machPoints.length ? machPoints : null;
 
       /* Stage 1's own intimation record (col_10-13), for reference while
          reconciling — Final Billing Date in particular is the figure Billing
