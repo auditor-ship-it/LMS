@@ -66,6 +66,37 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
 
+  /* Stage 3's ("LR & Return Transportation", internal 10) "+ Add Invoice" —
+     every invoice beyond the first one (the first stays a plain field,
+     col_320-324), held as component state rather than going through
+     values/col_N like the rest of the form. col_325 stores them as a single
+     JSON array (see OL_STAGE10_EXTRA_COLS's doc comment in
+     offlease.service.js for why one JSON column instead of a fixed block of
+     columns per slot); this state is that array parsed out into editable
+     rows, each with its own pending file until Save Stage uploads it. */
+  const [extraInvoices, setExtraInvoices] = useState([]);
+  useEffect(() => {
+    if (stageNumber !== LR_TRANSPORT_STAGE) return;
+    let parsed = [];
+    try {
+      const raw = JSON.parse(data?.col_325 || '[]');
+      if (Array.isArray(raw)) parsed = raw;
+    } catch { /* blank/corrupt cell — start empty rather than blocking the form */ }
+    const rows = parsed.map((inv) => ({
+      no: inv?.no || '', amount: inv?.amount || '', uploadUrl: inv?.uploadUrl || '',
+      date: inv?.date || '', remarks: inv?.remarks || '', pendingFile: null
+    }));
+    // Always show one row to fill in, even with nothing saved yet — "+ Add
+    // Invoice" is for the second one onward, not the first.
+    setExtraInvoices(rows.length ? rows : [{ no: '', amount: '', uploadUrl: '', date: '', remarks: '', pendingFile: null }]);
+  }, [data, stageNumber]);
+  const updateExtraInvoice = (idx, patch) =>
+    setExtraInvoices((prev) => prev.map((inv, i) => (i === idx ? { ...inv, ...patch } : inv)));
+  const addExtraInvoice = () =>
+    setExtraInvoices((prev) => [...prev, { no: '', amount: '', uploadUrl: '', date: '', remarks: '', pendingFile: null }]);
+  const removeExtraInvoice = (idx) =>
+    setExtraInvoices((prev) => prev.filter((_, i) => i !== idx));
+
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
      doc comment). Same capture-a-remark-first shape as the Approval desk's
@@ -189,13 +220,18 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      its status radio plus (once Damage is picked, via the field's own showIf)
      the estimate and photo. Everything stays an ordinary field, so required-
      checks, file upload and payload building below are untouched. */
-  const { plainFields, cabinFields, checklists } = useMemo(() => {
+  const { plainFields, cabinFields, trailingFields, checklists } = useMemo(() => {
     const plain = [];
     const cabin = [];
+    const trailing = [];
     const groups = new Map();  // group -> Map(n -> row)
     const footers = new Map(); // group -> [field] rendered under that table
     for (const f of visibleFields) {
       if (f.cabin) { cabin.push(f); continue; }
+      // `trailing` fields (Stage 3's own Remark) render after the "+ Add
+      // Invoice" section instead of with the rest of the form — the user
+      // wants the stage remark to come last, not ahead of the invoices.
+      if (f.trailing) { trailing.push(f); continue; }
       if (f.footerOf) {
         if (!footers.has(f.footerOf)) footers.set(f.footerOf, []);
         footers.get(f.footerOf).push(f);
@@ -211,6 +247,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     return {
       plainFields: plain,
       cabinFields: cabin,
+      trailingFields: trailing,
       checklists: CHECKLISTS
         .filter((c) => groups.has(c.group))
         .map((c) => ({
@@ -291,6 +328,31 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
       if (f.type === 'computed') continue;
       const v = finalValues[f.key];
       if (v !== '' && v != null) payload[f.key] = v;
+    }
+
+    if (stageNumber === LR_TRANSPORT_STAGE) {
+      const pending = extraInvoices.map((inv, i) => ({ inv, i })).filter(({ inv }) => inv.pendingFile);
+      let finalExtra = extraInvoices;
+      if (pending.length) {
+        setUploading(true);
+        try {
+          const uploaded = {};
+          for (const { inv, i } of pending) uploaded[i] = await uploadStageFile(inv.pendingFile);
+          finalExtra = extraInvoices.map((inv, i) => (uploaded[i] ? { ...inv, uploadUrl: uploaded[i], pendingFile: null } : inv));
+          setExtraInvoices(finalExtra);
+        } catch (err) {
+          setSaveError(`File upload failed — save aborted. ${apiErrorMessage(err)}`);
+          setUploading(false);
+          return;
+        }
+        setUploading(false);
+      }
+      // Fully-blank rows (added via "+ Add Invoice" then left empty) don't
+      // belong in the saved list.
+      const cleaned = finalExtra
+        .filter((inv) => inv.no || inv.amount || inv.uploadUrl || inv.date || inv.remarks)
+        .map(({ no, amount, uploadUrl, date, remarks }) => ({ no, amount, uploadUrl, date, remarks }));
+      payload.col_325 = JSON.stringify(cleaned);
     }
 
     setSaving(true);
@@ -412,7 +474,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
 
               {stageNumber === BILLING_STAGE && (
                 <>
-                  <CostReferencePanel transportCost={data?._transportCost} inspectionCost={data?._inspectionCost} />
+                  <CostReferencePanel inspectionCost={data?._inspectionCost} />
+                  <InspectionReferenceTable title="Container Inspection Checklist" points={data?._inspectionPoints} />
+                  <InspectionReferenceTable title="Machine Check" points={data?._machinePoints} />
                   <Stage1DataNote data={data?._stage1Data} />
                 </>
               )}
@@ -480,6 +544,35 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               </div>
               )}
 
+              {/* "+ Add Invoice" — Stage 3's return-transportation PO can
+                  come back with more than one invoice against it; see
+                  extraInvoices' own doc comment above for why these live
+                  outside the generic fields/values mechanism. */}
+              {stageNumber === LR_TRANSPORT_STAGE && !identityOnly && !data?._skipped && (
+                <ExtraInvoicesSection
+                  invoices={extraInvoices}
+                  disabled={readOnly || busy}
+                  onChange={updateExtraInvoice}
+                  onAdd={addExtraInvoice}
+                  onRemove={removeExtraInvoice}
+                />
+              )}
+
+              {!identityOnly && !data?._skipped && trailingFields.length > 0 && (
+                <div className={styles.fieldGrid}>
+                  {trailingFields.map((f) => (
+                    <Field
+                      key={f.key}
+                      field={f}
+                      value={values[f.key]}
+                      pendingFileName={pendingFiles[f.key]?.fileName}
+                      onChange={(v) => setField(f.key, v)}
+                      onFile={(payload) => { setPendingFiles((p) => ({ ...p, [f.key]: payload })); setField(f.key, payload.fileName); }}
+                      disabled={readOnly || busy}
+                    />
+                  ))}
+                </div>
+              )}
 
               {!identityOnly && !data?._skipped && checklists.map((c) => (
                 <ChecklistTable
@@ -807,37 +900,28 @@ function OutstandingPanel({ data, loading }) {
 }
 
 /**
- * Reference-only figures for whoever is reconciling billing: STAGE-9's
- * Freight Cost and the Gate-In form's own repair-budget estimate, fetched
- * server-side (getStageDetail, offlease.controller.js) so the person filling
- * this form doesn't have to go find them on two other screens. Never written
- * anywhere — this is a lookup aid, not a form field, same relationship
- * OutstandingPanel has to Stage 1's intimation decision. `null` means the
- * figure was read but held nothing usable (a blank cell, or "NA"); it is
- * only ever missing (undefined) when the underlying sheet read itself
- * failed, in which case that card still just says "—" rather than
- * pretending it's zero.
+ * Reference-only figure for whoever is reconciling billing: the Inspection
+ * Checklist's own Estimate Value total (falling back to the Gate-In form's
+ * repair estimate if the checklist has none), fetched server-side
+ * (getStageDetail, offlease.controller.js) so the person filling this form
+ * doesn't have to go find it on another screen. Never written anywhere —
+ * this is a lookup aid, not a form field, same relationship OutstandingPanel
+ * has to Stage 1's intimation decision. Transport Cost (Stage 9 Freight)
+ * removed from here 2026-09-18 (explicit request).
  */
-function CostReferencePanel({ transportCost, inspectionCost }) {
-  const t = parseCostFigure(transportCost);
+function CostReferencePanel({ inspectionCost }) {
   const i = parseCostFigure(inspectionCost);
-  const hasAny = t !== null || i !== null;
   const inr = (n) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
   return (
     <>
-      <h3 className={styles.sectionTitle}>Cost Reference (Transport + Inspection)</h3>
+      <h3 className={styles.sectionTitle}>Cost Reference (Inspection)</h3>
       <p className={styles.sectionHint}>
-        Fetched from Stage 9 (Transport) and the Inspection Checklist's own Estimate
-        Value total (falling back to the Gate-In form's repair estimate if the
-        checklist has none) — for reference while reconciling, not saved anywhere on
-        this form.
+        Fetched from the Inspection Checklist's own Estimate Value total (falling
+        back to the Gate-In form's repair estimate if the checklist has none) — for
+        reference while reconciling, not saved anywhere on this form.
       </p>
       <div className={styles.outstandingRow}>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Transport Cost (Stage 9 Freight)</span>
-          <span className={styles.outstandingValue}>{t !== null ? inr(t) : '—'}</span>
-        </div>
         <div className={styles.outstandingCard}>
           <span className={styles.outstandingLabel}>Inspection / Repair Estimate</span>
           {/* No usable figure (blank cell, "NA", or no checklist/Gate-In data
@@ -845,12 +929,51 @@ function CostReferencePanel({ transportCost, inspectionCost }) {
               not "—". Explicit request 2026-09-08. */}
           <span className={styles.outstandingValue}>{inr(i ?? 0)}</span>
         </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Total</span>
-          <span className={styles.outstandingValue}>{hasAny ? inr((t ?? 0) + (i ?? 0)) : '—'}</span>
-        </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Full Stage 4 Inspection Checklist + Machine Check, read-only, for whoever
+ * is reconciling Final Billing — explicit request 2026-09-18: the Cost
+ * Reference total above wasn't enough, they want every point visible here
+ * too instead of having to reopen Stage 4. Same point shape (and the same
+ * "collapse Estimate/Photo/Remarks unless something's actually damaged"
+ * rule) as LookupResult.jsx's own read-only ChecklistTable — see
+ * getOffLeaseStageDetail's _inspectionPoints/_machinePoints for the fetch.
+ */
+function InspectionReferenceTable({ title, points }) {
+  if (!points?.length) return null;
+  const anyDamage = points.some((p) => isFaultStatus(p.status));
+  return (
+    <div className={styles.inspWrap}>
+      <p className={styles.sectionHint}>{title}</p>
+      <table className={styles.inspTable}>
+        <thead>
+          <tr>
+            <th>Point</th>
+            <th>Good / Damage</th>
+            {anyDamage && <><th>Estimate</th><th>Photo</th><th>Remarks</th></>}
+          </tr>
+        </thead>
+        <tbody>
+          {points.map((p) => (
+            <tr key={p.n}>
+              <td><span className={styles.inspNum}>{p.n}.</span>{p.item}</td>
+              <td><span className={statusTone(p.status, styles)}>{p.status || '—'}</span></td>
+              {anyDamage && (
+                <>
+                  <td>{p.estimate || '—'}</td>
+                  <td>{p.photo ? renderCellValue(p.photo) : '—'}</td>
+                  <td>{p.remark || '—'}</td>
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -927,6 +1050,51 @@ function LrReferenceNote({ data }) {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * "+ Add Invoice" on Stage 3 ("LR & Return Transportation") — every invoice
+ * beyond the first one (which stays on its own fixed fields above, in the
+ * "Return Transportation PO & Invoice" group). Each row reuses the same
+ * Field/FileFieldInput components the rest of the form uses, just addressed
+ * by array index instead of a col_N key — see extraInvoices' own doc
+ * comment in StageDetailModal for why (col_325 stores them all as one JSON
+ * array).
+ */
+function ExtraInvoicesSection({ invoices, disabled, onChange, onAdd, onRemove }) {
+  return (
+    <section className={styles.formSection}>
+      <h4 className={styles.formSectionTitle}>Additional Invoices</h4>
+      {!invoices.length && <p className={styles.sectionHint}>No additional invoices yet.</p>}
+      {invoices.map((inv, i) => (
+        <div key={i} className={styles.extraInvoiceRow}>
+          <div className={styles.fieldGrid}>
+            <Field field={{ key: 'no', label: 'Invoice No', type: 'text' }} value={inv.no} onChange={(v) => onChange(i, { no: v })} disabled={disabled} />
+            <Field field={{ key: 'amount', label: 'Invoice Amount', type: 'number' }} value={inv.amount} onChange={(v) => onChange(i, { amount: v })} disabled={disabled} />
+            <Field
+              field={{ key: 'upload', label: 'Invoice Upload', type: 'file' }}
+              value={inv.uploadUrl}
+              pendingFileName={inv.pendingFile?.fileName}
+              onFile={(payload) => onChange(i, { pendingFile: payload, uploadUrl: '' })}
+              disabled={disabled}
+            />
+            <Field field={{ key: 'date', label: 'Invoice Date', type: 'date' }} value={inv.date} onChange={(v) => onChange(i, { date: v })} disabled={disabled} />
+            <Field field={{ key: 'remarks', label: 'Remarks', type: 'text' }} value={inv.remarks} onChange={(v) => onChange(i, { remarks: v })} disabled={disabled} />
+          </div>
+          {!disabled && (
+            <button type="button" className={styles.removeInvoiceBtn} onClick={() => onRemove(i)}>
+              <Icon name="trash" className={styles.stageRemarksAddIcon} /> Remove this invoice
+            </button>
+          )}
+        </div>
+      ))}
+      {!disabled && (
+        <button type="button" className={styles.stageRemarksAdd} onClick={onAdd}>
+          <Icon name="plus" className={styles.stageRemarksAddIcon} /> Add Invoice
+        </button>
+      )}
+    </section>
   );
 }
 
