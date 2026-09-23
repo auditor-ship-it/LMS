@@ -24,7 +24,7 @@ function pad2(n) {
   return String(n).padStart(2, '0');
 }
 
-function toDate(value) {
+export function toDate(value) {
   if (value == null || value === '') return null;
   if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
   if (typeof value === 'number') {

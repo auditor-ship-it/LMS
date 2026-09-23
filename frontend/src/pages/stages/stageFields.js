@@ -64,9 +64,8 @@ const isReefer = (v) => String(v.col_3 || '').trim().toLowerCase().includes('ree
 const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
 
 /** Return Transportation PO Required = Yes opens the PO upload/amount fields
- *  on Stage 10's own form. Originally added 2026-09-04 as conditional fields
- *  on Stage 1's own form; moved to Stage 10 2026-09-18 (explicit request) —
- *  see STAGE_FIELDS[10] below. */
+ *  on Stage 1's own form (STAGE_FIELDS[1] above). Added 2026-09-04; briefly
+ *  moved to a since-removed Stage 10 2026-09-18, back here 2026-09-22. */
 const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
 
 /** Each Payment Confirmation Yes/No on Stage 6 opens its own proof-upload
@@ -256,15 +255,21 @@ export const STAGE_FIELDS = {
     { key: 'col_11', label: 'Off-Lease Date', type: 'date', required: true },
     { key: 'col_12', label: 'Email Notification', type: 'file' },
     { key: 'col_13', label: 'Final Billing Date', type: 'date', required: true },
-    /* Return Transportation PO Required/PO/Amount — moved back here
-       2026-09-18 (explicit request), matching the original spec: the
-       decision belongs at intimation time, on Stage 1's own form. Stage 3
-       ("LR & Return Transportation") shows these same values read-only
-       (ReturnPoReferenceNote) and owns the INVOICE for this PO instead —
-       see poRequiredShown's own doc comment and STAGE_FIELDS[10] below. */
+    /* Return Transportation PO Required/PO/Amount — Stage 1's own form, per
+       the original spec ("Return PO will be created/processed at [Stage
+       1]"). Briefly lived on a since-removed internal Stage 10 ("LR &
+       Return Transportation", displayed "Stage 3") 2026-09-18 to 2026-09-22,
+       alongside an Invoice for this PO — both the stage and the Invoice are
+       gone entirely now, not moved; only these three fields survive, back
+       here where they started. */
     { key: 'col_319', label: 'Return Transportation PO Required', type: 'radio', options: YES_NO, group: 'Return Transportation PO' },
     { key: 'col_317', label: 'Return Transportation PO', type: 'file', showIf: poRequiredShown, group: 'Return Transportation PO' },
     { key: 'col_318', label: 'Return Transportation PO Amount', type: 'number', showIf: poRequiredShown, group: 'Return Transportation PO' },
+    /* Explicit request 2026-09-23: pick several container photos at once,
+       combined client-side into ONE PDF (ImagesToPdfFieldInput in
+       StageDetailModal.jsx) so Stage 1A only has one file to open — see
+       OL_HEADERS[336] / result.col_336 in offlease.service.js. */
+    { key: 'col_336', label: 'Container Photos', type: 'imagesToPdf' },
     { key: 'col_14', label: 'Remark', type: 'text' }
   ],
 
@@ -409,30 +414,15 @@ export const STAGE_FIELDS = {
     { key: 'col_331', label: 'Total Outstanding Payment Proof', type: 'file', showIf: outstandingPaidShown, group: 'Payment Confirmation' },
     { key: 'col_328', label: 'Inspection / Quotation Amount Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
     { key: 'col_329', label: 'Inspection / Quotation Payment Proof', type: 'file', showIf: inspectionPaidShown, group: 'Payment Confirmation' }
-  ],
-
-  /* Internal stage 10, "LR & Return Transportation" — displays as Stage 3.
-     Added 2026-09-18 (explicit request), between Transportation and Gate In.
-     LR details (LR No, vehicle, DO number, loading date, destination,
-     transporter) are fetched live from the external FMS STAGE-9 sheet and
-     shown read-only via StageDetailModal's LrReferenceNote (data._lrData) —
-     never stored in this app's own sheet, so no field for them here.
-     The Return Transportation PO fields (col_319/317/318) moved BACK to
-     Stage 1's own form the same day (explicit request, matching the
-     original spec: that decision belongs at intimation time) — shown here
-     read-only instead, via ReturnPoReferenceNote. This stage's own editable
-     data is just the invoice FOR that PO (col_320-324, +col_325's
-     "additional invoices" JSON) — see OL_STAGE10_EXTRA_COLS in
-     offlease.service.js, still gated on col_319 (poRequiredShown) even
-     though that field isn't edited here. */
-  10: [
-    { key: 'col_324', label: 'Invoice No', type: 'text', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
-    { key: 'col_320', label: 'Invoice Amount', type: 'number', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
-    { key: 'col_321', label: 'Invoice Upload', type: 'file', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
-    { key: 'col_322', label: 'Invoice Date', type: 'date', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
-    { key: 'col_323', label: 'Invoice Remarks', type: 'text', showIf: poRequiredShown, group: 'Invoice (for Return Transportation PO)' },
-    { key: 'col_332', label: 'Remark', type: 'text', trailing: true }
   ]
+  /* Internal stage 10, "LR & Return Transportation" (displayed as "Stage 3"
+     between Transportation and Gate In) lived here 2026-09-18 to 2026-09-22
+     (explicit request each time) — LR details read-only from FMS plus an
+     Invoice (for the Return Transportation PO) with multi-invoice support.
+     Removed entirely, not moved: the Invoice fields/multi-invoice section
+     are gone for good, and the Return Transportation PO fields they were
+     gated on (col_317/318/319) are Stage 1's own editable fields again (see
+     STAGE_FIELDS[1] above) — same place they started. */
 };
 
 /** Base identity columns shown read-only at the top of every stage form (never submitted). */

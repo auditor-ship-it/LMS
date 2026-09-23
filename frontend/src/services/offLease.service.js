@@ -2,7 +2,7 @@ import {
   getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, sendBackFromApproval, getOffLeaseContainerDetail,
   addToOffLeaseTracking, getOffLeaseDashboardData,
   getMovementSourceContainers, getMovementSourceContainer, getStage9Movements, saveStage9Movement,
-  getRemarkThread, addRemark, updateRemark, deleteRemark
+  getRemarkThread, addRemark, updateRemark, deleteRemark, exportToGoogleSheet
 } from '../api/offlease.api.js';
 import { invalidate } from '../shared/dataBus.js';
 
@@ -16,8 +16,8 @@ export async function fetchApprovalQueue() {
    Stage 9's movement log are deliberately excluded — comments don't change
    any stage/TAT stat, and Stage 9 is its own append-only log outside the
    1..8 pipeline (see fetchMovements' doc comment). */
-export async function decideApproval(containerNo, status, remarks, rowNum, poData) {
-  const res = await saveOffLeaseApprovalAction(containerNo, status, remarks, rowNum, poData);
+export async function decideApproval(containerNo, status, remarks, rowNum) {
+  const res = await saveOffLeaseApprovalAction(containerNo, status, remarks, rowNum);
   invalidate('off-lease');
   return res;
 }
@@ -69,4 +69,10 @@ export async function fetchMovements() {
 }
 export async function submitMovement(payload) {
   return saveStage9Movement(payload);
+}
+
+/* Dashboard's month-wise "Export to Google Sheet" — same generic export
+   Lease Expiry uses. */
+export async function exportOffLeaseToGoogleSheet(title, headers, rows) {
+  return exportToGoogleSheet(title, headers, rows);
 }

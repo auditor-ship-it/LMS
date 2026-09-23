@@ -84,10 +84,10 @@ export function LookupResult({ result }) {
             {stages.flatMap((s, i) => {
               const card = <StageCard key={s.stage} stage={s} isCurrent={s.stage === currentStageNum} />;
               // The approval gate sits between Stage 1 and Stage 2 — not a
-              // real stage of its own. "LR & Return Transportation"
-              // (internal 10, added 2026-09-18) IS a real stage now, so it
-              // needs no special-casing here — it comes through `stages`
-              // like Gate In/Inspection/etc.
+              // real stage of its own, so it needs this one special case
+              // here. ("LR & Return Transportation", internal 10, was a real
+              // stage 2026-09-18 to 2026-09-22 and needed none — removed
+              // from the workflow again, so `stages` no longer includes it.)
               if (i !== 0) return [card];
               return [card, <GateCard key="gate" status={approvalLower} date={approvalDate} user={approvalUser} />];
             })}

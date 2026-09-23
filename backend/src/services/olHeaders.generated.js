@@ -67,6 +67,14 @@
  * exception — added 2026-09-18 as the new internal Stage 10's own Remark/
  * Timestamp/User/Status quad (see OL_STAGE_INFO[10] in offlease.service.js).
  * Internal stage 10 displays as "Stage 3" — see OL_ACTIVE_STAGE_NUMS.
+ *
+ * Index 336 ("Container Photos (PDF)") is the same kind of deliberate,
+ * hand-added exception — added 2026-09-23 for Stage 1's "Container Photos"
+ * field: several photos picked at once, combined client-side into one PDF
+ * before upload (ImagesToPdfFieldInput in StageDetailModal.jsx) so Stage 1A
+ * only ever has one file to open (see getOffLeaseApprovalData's
+ * displayIndices/displayHeaders in offlease.service.js, which surface it
+ * there).
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -157,4 +165,5 @@ export const OL_HEADERS = [
   "Transportation Amount Paid", "Total Outstanding Paid", "Inspection/Quotation Amount Paid", "Inspection/Quotation Payment Proof",
   "Transportation Payment Proof", "Total Outstanding Payment Proof",
   "LR Return Transportation Remark", "LR Return Transportation Timestamp", "LR Return Transportation User", "LR Return Transportation Status",
+  "Container Photos (PDF)",
 ];

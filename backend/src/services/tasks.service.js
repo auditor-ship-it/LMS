@@ -50,7 +50,6 @@ const MY_TASK_KEY_META = {
    * offlease.service.js's OL_STAGE_INFO internal stage numbers and are
    * unchanged; only the human-readable text changes. */
   olStage1: ['Off-Lease Stage 1: Intimation', 'olStage1'],
-  olStage10: ['Off-Lease Stage 3: LR & Return Transportation', 'olStage10'],
   olStage2: ['Off-Lease (Retired) Lifting / Arrival', 'olStage2'],
   olStage3: ['Off-Lease Stage 5: Inspection Checklist', 'olStage3'],
   olStage4: ['Off-Lease (Retired) Quotation / Order', 'olStage4'],
@@ -93,7 +92,7 @@ export async function getMyTasks(user, force) {
     const out = {
       pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
       expiring7: 0, expired: 0, renewPending: 0,
-      olStage1: 0, olStage10: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
+      olStage1: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
       /* Which cards the caller should see, or null for "show everything" (the
        * pre-existing, still-default behaviour for anyone not in this map).
        *
@@ -131,12 +130,13 @@ export async function getMyTasks(user, force) {
     /* olStageN keys map 1:1 to INTERNAL stage numbers — see the mapping comment
        on MY_TASK_KEY_META above. Stages 2 and 4 are retired (no active queue,
        never in OL_ACTIVE_STAGE_NUMS) and simply stay at the 0 default above.
-       10 ("LR & Return Transportation", displays as Stage 3) added 2026-09-18
-       — a real numbered stage now, no longer a separate stage1Invoice count. */
+       10 ("LR & Return Transportation") added 2026-09-18 as "Stage 3",
+       REMOVED 2026-09-22 (explicit request — Stage 3 itself, and its Invoice
+       fields, taken back out of the pipeline entirely). */
     try {
       const { counts: olc, approval } = await getOffLeaseStageCounts();
       out.offleaseApproval = approval ?? 0;
-      for (const n of [1, 3, 5, 6, 7, 8, 10]) out[`olStage${n}`] = olc[n] ?? 0;
+      for (const n of [1, 3, 5, 6, 7, 8]) out[`olStage${n}`] = olc[n] ?? 0;
     } catch (e) { /* noop */ }
 
     return out;

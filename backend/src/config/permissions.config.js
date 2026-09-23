@@ -79,11 +79,14 @@ export const PERMISSION_KEYS = [
    * by editing the live sheet directly, same as any other permission
    * mistake, not by a code-level escape hatch). */
   { key: 'rolesAdmin', label: 'Roles & Access Admin' },
-  { key: 'apiAdmin', label: 'API Access Admin' },
-  // Appended (not inserted) — same positional rule as offlease9 above. New
-  // internal Stage 10 ("LR & Return Transportation"), added 2026-09-18,
-  // displays as "Stage 3".
-  { key: 'offlease10', label: 'Off-Lease Stage 3: LR & Return Transportation (Shivani)' }
+  { key: 'apiAdmin', label: 'API Access Admin' }
+  /* offlease10 (Off-Lease Stage 3: LR & Return Transportation) — added
+     2026-09-18, REMOVED 2026-09-22 (explicit request: Stage 3 itself was
+     removed from the pipeline entirely, LR & Return Transportation + its
+     Invoice fields gone). It was the very last entry, so deleting it
+     outright is safe — nothing after it to shift. The live Team Accounts
+     sheet keeps its now-orphaned column, same as any other retired field;
+     harmless, never read again. */
 ];
 
 export const SIDEBAR_KEYS = [

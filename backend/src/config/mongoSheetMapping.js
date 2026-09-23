@@ -81,7 +81,18 @@ export const MONGO_SHEET_MAPPING = {
    * natural key to upsert by. */
   [SHEETS.FMS_STAGE8]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true, ssId: EXTERNAL_SPREADSHEETS.CONSOLIDATE.ssId },
   [SHEETS.FMS_STAGE9]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true, ssId: EXTERNAL_SPREADSHEETS.CONSOLIDATE.ssId },
-  [SHEETS.FMS_STAGE10]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true, ssId: EXTERNAL_SPREADSHEETS.CONSOLIDATE.ssId }
+  [SHEETS.FMS_STAGE10]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true, ssId: EXTERNAL_SPREADSHEETS.CONSOLIDATE.ssId },
+
+  /* Added 2026-09-23 (explicit request) — Accounts' transportation-invoice
+   * vetting/confirmation log, main spreadsheet. DO Number (col A) verified
+   * unique (71/71) on 2026-09-23, but fullRefresh anyway, matching this
+   * file's own established caution: NEW_LEASE's Container No was ALSO
+   * verified unique once (2026-08-07) and later silently stopped being so,
+   * and an upsert-by-key mapping has no way to notice that happening — see
+   * this file's own header comment. No write-through path exists for this
+   * sheet (read-only mirror), so fullRefresh costs nothing and cannot lose
+   * data the way a wrong key-based upsert could. */
+  [SHEETS.INVOICE_PO]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true }
 };
 
 /** Normalizes a raw natural-key cell value the same way reconciliation and
