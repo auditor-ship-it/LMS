@@ -1,0 +1,16 @@
+/* Mirrors AppShell.module.css's `.content` wrapper (padding/max-width) so
+   the real LeaseExpiryPage looks the same as it does inside the main app,
+   just without the sidebar/topbar it normally sits next to. */
+.wrap {
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 16px 20px;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+@media (max-width: 640px) {
+  .wrap { padding: 14px; }
+}

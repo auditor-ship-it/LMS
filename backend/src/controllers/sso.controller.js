@@ -8,6 +8,14 @@ export async function startSession(req, res) {
   res.json(await salesOsRenewal.startSalesOsSession(params));
 }
 
+/** POST /api/sso/lease-expiry/session — employeeCode-only SSO for the plain
+ *  Lease Expiry embed (Sales OS's "Lease" section), no lead/company context
+ *  required. See salesOsRenewal.service.js#startEmployeeSession. */
+export async function startEmployeeSession(req, res) {
+  const params = { ...req.query, ...req.body };
+  res.json(await salesOsRenewal.startEmployeeSession(params));
+}
+
 /** POST /api/sso/sales-os/confirm-company — the ambiguous-match picker's submit. */
 export async function confirmCompany(req, res) {
   const { existingLeadId, companyName } = req.body;

@@ -190,6 +190,34 @@ async function getCompanyLink(existingLeadId) {
   return getCollection(COMPANY_LINKS_COLLECTION).findOne({ _id: String(existingLeadId) });
 }
 
+/** Shared by every Sales OS SSO entry point: verify the link, then log the
+ *  salesperson in by employeeCode alone. Returns `{ params, login }` — throws
+ *  the same AppError either step would. */
+async function ssoLogin(query) {
+  const params = verifyInboundParams(query);
+  const login = await empSsoLogin(params.employeeCode);
+  if (!login.ok) throw new AppError(login.error || 'employee code not mapped', 401);
+  return { params, login };
+}
+
+/**
+ * Entry point for POST /api/sso/lease-expiry/session — the plain "give this
+ * salesperson their own Lease Expiry" embed (Sales OS's "Lease" section),
+ * NOT tied to any one KAM lead/company. No company matching, no container
+ * checklist — just a session, so the frontend can mount the real
+ * LeaseExpiryPage component directly (see pages/sso/SsoLeaseExpiryPage.jsx).
+ * That page's own data is scoped by the existing salePersonAccess.service.js
+ * mechanism — see this file's own header note on why that only restricts
+ * emails explicitly added to SALE_PERSON_BY_EMAIL there; a login not in that
+ * map sees the SAME unscoped (everyone's) list an internal unscoped user
+ * does. Anyone deploying this embed needs each Sales OS salesperson's login
+ * added to that map first, or they will see more than their own book.
+ */
+export async function startEmployeeSession(query) {
+  const { login } = await ssoLogin(query);
+  return { token: login.token, user: { empId: login.empId, name: login.name, email: login.email } };
+}
+
 /**
  * Entry point for POST /api/sso/sales-os/session — the whole first hop:
  * verify the link, log the salesperson in by employeeCode alone, resolve (or
@@ -199,10 +227,7 @@ async function getCompanyLink(existingLeadId) {
  * common (unambiguous) case.
  */
 export async function startSalesOsSession(query) {
-  const params = verifyInboundParams(query);
-
-  const login = await empSsoLogin(params.employeeCode);
-  if (!login.ok) throw new AppError(login.error || 'employee code not mapped', 401);
+  const { params, login } = await ssoLogin(query);
 
   const existingLeadId = safeStr(params.existingLeadId).trim();
   const companyNameRaw = safeStr(params.companyName || params.clientName).trim();
