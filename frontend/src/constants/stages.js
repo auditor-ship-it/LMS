@@ -21,14 +21,15 @@ export const ALL_STAGES = [
   { number: 7, label: 'Gate In', owner: 'Pritam' },
   // RENAMED 2026-09-18 (explicit request): 'FMS Closure' -> 'KAM', owner added ('Sales').
   { number: 8, label: 'KAM', owner: 'Sales' },
-  /* ADDED 2026-09-18 (explicit request) — a genuinely new stage, not a
-     synthetic sub-tab like Approval (1A). Sits between Transportation and
-     Gate In, displaying as "Stage 3". Shows LR details fetched live from
-     the external FMS STAGE-9 sheet (read-only, never stored here) plus the
-     Return Transportation PO Required/Upload/Amount fields (moved here the
-     same day, via a brief detour through Stage 1's own form and then the
-     Approval decision, before landing here for good). */
-  { number: 10, label: 'LR & Return Transportation', owner: 'Shivani' }
+  /* ADDED 2026-09-18 (explicit request) as a genuinely new stage between
+     Transportation and Gate In, displaying as "Stage 3" — LR details fetched
+     live from FMS plus the Return Transportation PO fields. RETIRED
+     2026-09-22 (explicit request), 4 days later: taken back out of the
+     workflow entirely, LR reference + Invoice fields gone, not moved
+     anywhere (the PO fields moved back to Stage 1, where they started).
+     Kept here, like 2 and 4, only so a container that already completed it
+     before removal still labels correctly on the container report. */
+  { number: 10, label: 'LR & Return Transportation', owner: 'Shivani', retired: true }
 ];
 
 /**
@@ -49,25 +50,25 @@ export const ALL_STAGES = [
  * "Stage 1A (Approval)" is NOT in this array — it's a synthetic tab hand-
  * built in OffLeasePage.jsx/OrderBookView.jsx (a filtered view of Stage 1's
  * own row, not a stage of its own), inserted right after Stage 1 without
- * consuming a numbered slot. Stage 10 ("LR & Return Transportation"), by
- * contrast, IS a real stage now (added 2026-09-18) — it has its own column
- * range/status quad, so it belongs in WORKFLOW like any other real stage.
+ * consuming a numbered slot.
  */
 /**
- * The live workflow IN ORDER — 1 Intimation, 2 Transportation, 3 LR & Return
- * Transportation, 4 Gate In, 5 Inspection, 6 Final Billing, 7 KAM, with the
- * Approval gate (1A) between Stage 1 and Stage 2. Listed by internal number
- * because that is each stage's identity; the array order sets the sequence
- * and the displayed number.
+ * The live workflow IN ORDER — 1 Intimation, 2 Transportation, 3 Gate In,
+ * 4 Inspection, 5 Final Billing, 6 KAM, with the Approval gate (1A) between
+ * Stage 1 and Stage 2. Listed by internal number because that is each
+ * stage's identity; the array order sets the sequence and the displayed
+ * number.
  *
  * Gate In (internal 7) and Inspection (internal 3) swapped on 2026-08-12: a
  * container is inspected AFTER it is received, not before. Must stay in step
  * with OL_ACTIVE_STAGE_NUMS in backend/src/services/offlease.service.js.
  *
- * Retired and therefore absent: 2 (Lifting / Arrival) and 4 (Quotation /
- * Order). Their data is preserved and still shown on the container report.
+ * Retired and therefore absent: 2 (Lifting / Arrival), 4 (Quotation /
+ * Order), and 10 (LR & Return Transportation — real stage 2026-09-18 to
+ * 2026-09-22, retired again). Their data is preserved and still shown on the
+ * container report.
  */
-const WORKFLOW = [1, 6, 10, 7, 3, 5, 8];
+const WORKFLOW = [1, 6, 7, 3, 5, 8];
 
 /**
  * Stages that are READ ONLY — the grid is shown (searchable, sortable,

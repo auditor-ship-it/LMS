@@ -60,7 +60,15 @@ export const SHEETS = {
 
   // Employee auth logs
   AUTH_LOG: '__login_log',
-  AUTH_SESSION_LOG: 'Login Time Log'
+  AUTH_SESSION_LOG: 'Login Time Log',
+
+  /* Accounts' transportation-invoice vetting/confirmation log — added
+     2026-09-23 (explicit request) so it can be mirrored into Mongo like
+     every other hot-read tab, instead of read live and hitting the shared
+     Sheets quota. Leading space in the tab name is real, not a typo — the
+     live spreadsheet's tab is literally titled " Invoice PO" (gid
+     2070071765), confirmed via spreadsheets.get. */
+  INVOICE_PO: ' Invoice PO'
 };
 
 // External spreadsheets referenced by hardcoded ID (not the main GOOGLE_SHEET_ID).

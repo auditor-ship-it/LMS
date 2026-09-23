@@ -103,6 +103,21 @@ const OFFLEASE = 'offlease';
 /** Container numbers are compared on alphanumerics, case-insensitively. */
 const normContainer = (v) => safeStr(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+/**
+ * BUG FOUND AND FIXED 2026-09-22: a single STAGE-8/9 row can carry MORE THAN
+ * ONE container in its Container No cell when several boxes move together on
+ * the same booking — e.g. "CICU1938924,CRIU1025020" (confirmed live, OF0067
+ * + OF0068, SWAMI NARAYAN CHARITABLE TRUST). normContainer() strips the comma
+ * along with everything else non-alphanumeric, so it used to glue the whole
+ * cell into ONE token ("CICU1938924CRIU1025020") that could never equal
+ * EITHER container's own key — matchRow/matchByContainer/getDeliveredKeys
+ * all silently failed to match, leaving both containers stuck with grey
+ * "no record" dots and a Transportation TAT that never stopped even though
+ * the movement genuinely was booked. Same separator set as
+ * offlease.service.js's own _splitContainersLoose (comma/semicolon/slash/
+ * newline, never space — "Site Cabin 73" is one name, not a list). */
+const normContainerKeys = (v) => (v == null ? '' : v).toString().split(/[,;/\n]+/).map(normContainer).filter(Boolean);
+
 /** Client names differ between the two systems — STAGE-8 says "DRAEGER" where
  *  Off-Lease Tracking says "Draeger India Pvt Ltd". Suffixes and punctuation
  *  are stripped so the two forms reduce to the same token, the same way
@@ -211,6 +226,7 @@ async function readOffleaseRows() {
     .filter((r) => safeStr(r[S8.MOVEMENT_TYPE]).trim().toLowerCase() === OFFLEASE)
     .map((r) => ({
       containerNo: safeStr(r[S8.CONTAINER]).trim(),
+      containerKeys: normContainerKeys(r[S8.CONTAINER]),
       clientName: safeStr(r[S8.CLIENT]).trim(),
       movementType: safeStr(r[S8.MOVEMENT_TYPE]).trim(),
       deliveryCity: safeStr(r[S8.CITY]).trim(),
@@ -334,6 +350,7 @@ async function readStage9OffleaseRows() {
     .filter((r) => safeStr(r[S9.MOVEMENT_TYPE]).trim().toLowerCase() === OFFLEASE)
     .map((r) => ({
       containerNo: safeStr(r[S9.CONTAINER]).trim(),
+      containerKeys: normContainerKeys(r[S9.CONTAINER]),
       clientName: safeStr(r[S9.CLIENT]).trim(),
       /* STAGE-9 carries its own DO number, and it is the transport leg that
          STAGE-10's site delivery actually follows on from — so it is a
@@ -384,7 +401,7 @@ async function readStage9OffleaseRows() {
 function matchByContainer(rows, containerNo, sinceMs, dateField = 'timestamp', clientName) {
   const key = normContainer(containerNo);
   if (!key) return null;
-  const matches = rows.filter((r) => normContainer(r.containerNo) === key);
+  const matches = rows.filter((r) => r.containerKeys.includes(key));
   if (!matches.length) return null;
   if (sinceMs == null) return matches[matches.length - 1];
 
@@ -427,7 +444,7 @@ function matchRow(rows, containerNo, clientName) {
   if (!key) return null;
   let found = null;
   for (const r of rows) {
-    if (normContainer(r.containerNo) !== key) continue;
+    if (!r.containerKeys.includes(key)) continue;
     if (!clientMatches(r.clientName, clientName)) continue;
     found = r;   // later rows are more recent
   }
@@ -487,6 +504,62 @@ export async function getFmsForContainer(containerNo, clientName, cycleStartMs) 
   return { movement, transport, delivery };
 }
 
+/* Accounts' " Invoice PO" tab (main spreadsheet, mirrored into Mongo
+   2026-09-23 — see mongoSheetMapping.js) — the transportation invoice
+   Accounts vetted/confirmed for a shipment, joined by the SAME DO Number a
+   STAGE-8 booking or STAGE-9 transport row carries (col A, a single clean
+   cell here, unlike STAGE-10's whole-row scan — so matchByDoField's exact-
+   column match applies, not matchByDo). Column positions confirmed against
+   the live sheet 2026-09-23. */
+const INVOICE_PO_TAB = SHEETS.INVOICE_PO;
+const INVOICE_PO = {
+  DO_NUMBER: 0, ORDER_RECEIVED_NO: 1, MOVEMENT_TYPE: 2, DIRECTION: 3, CLIENT: 4, CONTAINER: 5,
+  VETTED_AMOUNT: 6, STATUS: 7, CONFIRMED_BY: 8, CONFIRMED_AT: 9, INVOICE_URL: 10,
+  AMOUNT_RECEIVED: 11, RECEIVED_AT: 12, REMARKS: 13, BILL_NO: 17
+};
+
+async function readInvoicePoRows() {
+  const { rows } = await getSheetDataFromMongo(INVOICE_PO_TAB);
+  return rows.map((r) => ({
+    doNumber: safeStr(r[INVOICE_PO.DO_NUMBER]).trim(),
+    orderReceivedNo: safeStr(r[INVOICE_PO.ORDER_RECEIVED_NO]).trim(),
+    movementType: safeStr(r[INVOICE_PO.MOVEMENT_TYPE]).trim(),
+    clientName: safeStr(r[INVOICE_PO.CLIENT]).trim(),
+    containerNo: safeStr(r[INVOICE_PO.CONTAINER]).trim(),
+    vettedAmount: safeStr(r[INVOICE_PO.VETTED_AMOUNT]).trim(),
+    status: safeStr(r[INVOICE_PO.STATUS]).trim(),
+    confirmedBy: safeStr(r[INVOICE_PO.CONFIRMED_BY]).trim(),
+    confirmedAt: safeStr(r[INVOICE_PO.CONFIRMED_AT]).trim(),
+    invoiceUrl: safeStr(r[INVOICE_PO.INVOICE_URL]).trim(),
+    amountReceived: safeStr(r[INVOICE_PO.AMOUNT_RECEIVED]).trim(),
+    receivedAt: safeStr(r[INVOICE_PO.RECEIVED_AT]).trim(),
+    remarks: safeStr(r[INVOICE_PO.REMARKS]).trim(),
+    billNo: safeStr(r[INVOICE_PO.BILL_NO]).trim()
+  }));
+}
+
+/**
+ * The Transportation Invoice ("Invoice PO") Accounts vetted for this
+ * container's shipment — matched by DO Number, the same candidate keys
+ * (STAGE-8's Delivery/Booking Order No, STAGE-9's own DO Number) used to
+ * join STAGE-10's site delivery in getFmsForContainer above. Explicit
+ * request 2026-09-23: reference-only, shown on Stage 5 (Final Billing) so
+ * the reconciler can see the actual invoice file without leaving the app.
+ * null when no STAGE-8/9 match exists yet (nothing to key off) or no
+ * Invoice PO row carries a matching DO.
+ */
+export async function getInvoicePoForContainer(containerNo, clientName, cycleStartMs) {
+  const [rows8, rows9, invoiceRows] = await Promise.all([
+    readOffleaseRows(), readStage9OffleaseRows(), readInvoicePoRows()
+  ]);
+  const movement = matchByContainer(rows8, containerNo, cycleStartMs, 'timestamp', clientName);
+  const moveDoKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo].filter(Boolean);
+  const chained = moveDoKeys.length ? matchByDoField(rows9, moveDoKeys, 'doNumber') : null;
+  const transport = chained || matchByContainer(rows9, containerNo, cycleStartMs, 'lastUpdated', clientName);
+  const doKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo, transport?.doNumber].filter(Boolean);
+  return matchByDoField(invoiceRows, doKeys, 'doNumber');
+}
+
 /**
  * Container -> every delivery-qualifying event's timestamp (epoch ms) it has
  * ever had. A Map of arrays, not a flat Set — see isDeliveredSince below for
@@ -516,8 +589,8 @@ export async function getDeliveredKeys() {
      booked, transported and delivered. Previously any one of 8 or 9 plus a
      STAGE-10 hit was enough, which released containers whose transport leg had
      not been recorded and let Stage 3 open too early. */
-  const in8 = new Set(rows8.map((r) => normContainer(r.containerNo)).filter(Boolean));
-  const in9 = new Set(rows9.map((r) => normContainer(r.containerNo)).filter(Boolean));
+  const in8 = new Set(rows8.flatMap((r) => r.containerKeys));
+  const in9 = new Set(rows9.flatMap((r) => r.containerKeys));
 
   /* STAGE-8/STAGE-9's own timestamp is used as this delivery event's date
      here (not STAGE-10's own Timestamp column, which readStage10Rows also
@@ -530,16 +603,18 @@ export async function getDeliveredKeys() {
      which needs delivery's own date, not the booking date reused. */
   for (const [src, dateField] of [[rows8, 'timestamp'], [rows9, 'lastUpdated']]) {
     for (const r of src) {
-      const k = normContainer(r.containerNo);
-      if (!k) continue;
-      if (!in8.has(k) || !in9.has(k)) continue;          // must be in BOTH 8 and 9
-      const dos = [r.deliveryOrderNo, r.bookingOrderNo, r.doNumber].filter(Boolean);
-      if (!dos.length) continue;
-      if (!matchByDo(rows10, dos)) continue;              // ...and delivered in 10
-      const ts = parseStamp(r[dateField]);
-      if (!ts) continue;
-      if (!map.has(k)) map.set(k, []);
-      map.get(k).push(ts.getTime());
+      // A row can carry more than one container (see normContainerKeys) —
+      // every one of them shares this same booking/transport/delivery event.
+      for (const k of r.containerKeys) {
+        if (!in8.has(k) || !in9.has(k)) continue;          // must be in BOTH 8 and 9
+        const dos = [r.deliveryOrderNo, r.bookingOrderNo, r.doNumber].filter(Boolean);
+        if (!dos.length) continue;
+        if (!matchByDo(rows10, dos)) continue;              // ...and delivered in 10
+        const ts = parseStamp(r[dateField]);
+        if (!ts) continue;
+        if (!map.has(k)) map.set(k, []);
+        map.get(k).push(ts.getTime());
+      }
     }
   }
   return map;

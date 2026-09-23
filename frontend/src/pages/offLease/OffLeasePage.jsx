@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  PageHeader, Card, Button, SearchBar, Pagination, DataGrid, LoadingState, ErrorState, EmptyState, renderCellValue, FileUpload
+  PageHeader, Card, Button, SearchBar, Pagination, DataGrid, LoadingState, ErrorState, EmptyState, renderCellValue
 } from '../../components/ui/index.js';
-import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
@@ -124,10 +123,17 @@ export function OffLeasePage() {
 
 /* Moved out of the Pending Approval table and into the row-click inline
    detail view instead — see visibleColIdx's own comment. Matched
-   case-insensitively against getOffLeaseApprovalData's own displayHeaders. */
+   case-insensitively against getOffLeaseApprovalData's own displayHeaders.
+   "Stage 1 Remark" put BACK into the visible table 2026-09-23 (explicit
+   request): the approver wants to see (and click straight into) whatever
+   remark Stage 1 left, without opening the row first just to find out
+   there's nothing worth reading. Clicking that cell already opens the row
+   detail like every other cell here (DataGrid's onRowClick fires on the
+   row, not intercepted per-cell), so this doubles as "click the remark to
+   open the approval". */
 const APPROVAL_DETAIL_ONLY_HEADERS = new Set([
   'ol intimation date', 'ol date', 'email notification', 'final billing date',
-  'stage 1 remark', 'stage 1 completed on'
+  'stage 1 completed on'
 ]);
 
 function ApprovalQueue() {
@@ -139,14 +145,12 @@ function ApprovalQueue() {
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 250);
-  const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
 
   /* Bulk selection, keyed by _rowNum. Cleared on every reload — same
      reasoning as Lease Expiry's bulk selection: a stale selection surviving
      a reload risks pointing at rows that have moved or already cleared. */
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
-  const [bulkBusy, setBulkBusy] = useState('');
   useEffect(() => { setSelectedKeys(new Set()); }, [data]);
 
   const headers = data?.headers || [];
@@ -203,48 +207,44 @@ function ApprovalQueue() {
     return next;
   });
 
-  const decide = async (item, status, poData) => {
-    const key = `${item._rowNum}-${status}`;
-    setBusyKey(key);
-    setActionError('');
-    try {
-      const message = await decideApproval(item.row[0], status, undefined, item._rowNum, poData);
-      if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
-      // Write, then read — one sequential reload, nothing racing it.
-      await reload();
-    } catch (e) {
-      setActionError(apiErrorMessage(e));
-    } finally {
-      setBusyKey('');
-    }
-  };
+  /* Approve (single + bulk) — RejectModal.jsx, same shape as Reject/Send
+     Back below. CHANGED 2026-09-23 (explicit request): Approve used to write
+     immediately on click; now it opens the same remarks-first modal Reject/
+     Send Back already use, so a remark can be left at approval time too, not
+     only on rejection. approveItem/approveItems null = closed. */
+  const [approveItem, setApproveItem] = useState(null);
+  const [approveItems, setApproveItems] = useState(null);
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [approveError, setApproveError] = useState('');
+  const closeApprove = () => { setApproveItem(null); setApproveItems(null); setApproveError(''); };
 
-  /* Bulk Approve — same shape as Lease Expiry's bulk actions: one write per
-     container, run in parallel, no shared form data so no modal. Reject
-     (single and bulk) goes through RejectModal instead — see rejectItem/
-     rejectItems below — since it now captures an optional remark first. */
-  const decideBulk = async (status) => {
-    if (!selectedItems.length) return;
-    const containers = selectedItems.map((it) => it.row[0]);
-    setBulkBusy(status);
-    setActionError('');
+  const handleApproveSubmit = async (remarks) => {
+    setApproveBusy(true);
+    setApproveError('');
     try {
-      const results = await Promise.allSettled(selectedItems.map((it) => decideApproval(it.row[0], status, undefined, it._rowNum)));
-      const alreadyProcessed = results
-        .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
-        .filter(Boolean);
-      const failed = results
-        .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
-        .filter(Boolean);
-      const notes = [];
-      if (alreadyProcessed.length) notes.push(`Already actioned by someone else: ${alreadyProcessed.join(', ')}.`);
-      if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
-      if (notes.length) setActionError(notes.join(' '));
+      if (approveItems) {
+        const containers = approveItems.map((it) => it.row[0]);
+        const results = await Promise.allSettled(approveItems.map((it) => decideApproval(it.row[0], 'Approved', remarks, it._rowNum)));
+        const alreadyProcessed = results
+          .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
+          .filter(Boolean);
+        const failed = results
+          .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
+          .filter(Boolean);
+        const notes = [];
+        if (alreadyProcessed.length) notes.push(`Already actioned by someone else: ${alreadyProcessed.join(', ')}.`);
+        if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
+        if (notes.length) setActionError(notes.join(' '));
+      } else if (approveItem) {
+        const message = await decideApproval(approveItem.row[0], 'Approved', remarks, approveItem._rowNum);
+        if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
+      }
+      closeApprove();
       await reload();
     } catch (e) {
-      setActionError(apiErrorMessage(e));
+      setApproveError(apiErrorMessage(e));
     } finally {
-      setBulkBusy('');
+      setApproveBusy(false);
     }
   };
 
@@ -325,10 +325,10 @@ function ApprovalQueue() {
             <div className={styles.bulkBar}>
               <span className={styles.bulkCount}>{selectedItems.length} selected</span>
               <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
-              <Button size="sm" variant="primary" loading={bulkBusy === 'Approved'} disabled={!!bulkBusy} onClick={() => decideBulk('Approved')}>
+              <Button size="sm" variant="primary" onClick={() => setApproveItems(selectedItems)}>
                 Approve ({selectedItems.length})
               </Button>
-              <Button size="sm" variant="danger" disabled={!!bulkBusy} onClick={() => setRejectItems(selectedItems)}>
+              <Button size="sm" variant="danger" onClick={() => setRejectItems(selectedItems)}>
                 Reject ({selectedItems.length})
               </Button>
             </div>
@@ -367,8 +367,7 @@ function ApprovalQueue() {
                 <Button
                   size="sm"
                   variant="primary"
-                  loading={busyKey === `${item._rowNum}-Approved`}
-                  onClick={() => decide(item, 'Approved')}
+                  onClick={() => setApproveItem(item)}
                 >
                   Approve
                 </Button>
@@ -400,13 +399,26 @@ function ApprovalQueue() {
           detailColIdx={detailColIdx}
           total={filtered.length}
           canAct={canActApproval}
-          busy={busyKey === `${selected._rowNum}-Approved`}
           onBack={() => setSelectedIdx(null)}
-          onApprove={async (poData) => { await decide(selected, 'Approved', poData); setSelectedIdx(null); }}
+          onApprove={() => { setSelectedIdx(null); setApproveItem(selected); }}
           onSendBack={() => { setSelectedIdx(null); setSendBackItem(selected); }}
           onReject={() => { setSelectedIdx(null); setRejectItem(selected); }}
         />
       )}
+
+      <RejectModal
+        open={!!(approveItem || approveItems)}
+        item={approveItem}
+        items={approveItems}
+        submitting={approveBusy}
+        error={approveError}
+        onClose={closeApprove}
+        onSubmit={handleApproveSubmit}
+        titleWord="Approve"
+        placeholder="Any remarks for this approval? (optional)"
+        submitLabel="Approve"
+        variant="primary"
+      />
 
       <RejectModal
         open={!!(rejectItem || rejectItems)}
@@ -441,40 +453,14 @@ function ApprovalQueue() {
  * Approve/Send Back/Reject right here so a record can be decided on without
  * going back to the table first. Explicit request 2026-09-11.
  *
- * "Return Transportation PO Required?" (+ PO Upload/Amount when Yes) — moved
- * 2026-09-18 (explicit request) off Stage 1's own form onto this Approval
- * decision: the approver answers it here, and it's required before Approve
- * is enabled. Deliberately only THIS single-row detail view collects it —
- * the quick list-row Approve and bulk Approve (OffLeasePage's own table)
- * stay one-click actions and simply leave these columns unanswered, same as
- * today, rather than blocking the fast bulk workflow. The parent renders
- * this with `key={item._rowNum}` so switching rows resets this local state.
+ * "Return Transportation PO Required?" briefly lived on this screen
+ * (2026-09-18) before moving to Stage 1's own form the same day, where the
+ * decision is made at intimation time, before it ever reaches Approval — see
+ * stageFields.js's STAGE_FIELDS[1]. The parent renders this with
+ * `key={item._rowNum}` so switching rows resets this local state.
  */
-function ApprovalDetail({ item, headers, detailColIdx, total, canAct, busy, onBack, onApprove, onSendBack, onReject }) {
+function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, onApprove, onSendBack, onReject }) {
   const containerNo = item.row?.[0];
-  const [poRequired, setPoRequired] = useState('');
-  const [poAmount, setPoAmount] = useState('');
-  const [poFile, setPoFile] = useState(null);
-  const [poUploading, setPoUploading] = useState(false);
-  const [poError, setPoError] = useState('');
-
-  const handleApprove = async () => {
-    if (!poRequired) { setPoError('Please answer "Return Transportation PO Required?" first.'); return; }
-    setPoError('');
-    let poFileUrl = '';
-    if (poRequired === 'Yes' && poFile) {
-      setPoUploading(true);
-      try {
-        poFileUrl = await uploadStageFile(poFile);
-      } catch (e) {
-        setPoError(`File upload failed — approval not saved. ${apiErrorMessage(e)}`);
-        setPoUploading(false);
-        return;
-      }
-      setPoUploading(false);
-    }
-    await onApprove({ poRequired, poFileUrl, poAmount });
-  };
 
   return (
     <div>
@@ -495,40 +481,11 @@ function ApprovalDetail({ item, headers, detailColIdx, total, canAct, busy, onBa
         </div>
 
         {canAct && (
-          <>
-            <div className={styles.detailField} style={{ marginTop: 16 }}>
-              <span className={styles.detailLabel}>Return Transportation PO Required? *</span>
-              <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}>
-                  <input type="radio" name={`poRequired-${item._rowNum}`} checked={poRequired === 'Yes'} onChange={() => setPoRequired('Yes')} />
-                  Yes
-                </label>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 500 }}>
-                  <input type="radio" name={`poRequired-${item._rowNum}`} checked={poRequired === 'No'} onChange={() => setPoRequired('No')} />
-                  No
-                </label>
-              </div>
-            </div>
-            {poRequired === 'Yes' && (
-              <div className={styles.detailGrid} style={{ marginTop: 8 }}>
-                <div className={styles.detailField}>
-                  <span className={styles.detailLabel}>Return Transportation PO</span>
-                  <FileUpload label="Upload PO" onSelected={setPoFile} />
-                  {poFile && <span className={styles.detailValue}>{poFile.fileName}</span>}
-                </div>
-                <div className={styles.detailField}>
-                  <span className={styles.detailLabel}>Return Transportation PO Amount</span>
-                  <input type="number" value={poAmount} onChange={(e) => setPoAmount(e.target.value)} />
-                </div>
-              </div>
-            )}
-            {poError && <p className={styles.actionError}>{poError}</p>}
-            <div className={styles.detailFooter}>
-              <Button size="sm" variant="primary" loading={busy || poUploading} onClick={handleApprove}>Approve</Button>
-              <Button size="sm" variant="secondary" onClick={onSendBack}>Send Back</Button>
-              <Button size="sm" variant="danger" onClick={onReject}>Reject</Button>
-            </div>
-          </>
+          <div className={styles.detailFooter} style={{ marginTop: 16 }}>
+            <Button size="sm" variant="primary" onClick={onApprove}>Approve</Button>
+            <Button size="sm" variant="secondary" onClick={onSendBack}>Send Back</Button>
+            <Button size="sm" variant="danger" onClick={onReject}>Reject</Button>
+          </div>
         )}
       </div>
     </div>

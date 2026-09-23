@@ -133,3 +133,10 @@
 }
 
 .lineDone { background: var(--success); }
+
+.actionError {
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}

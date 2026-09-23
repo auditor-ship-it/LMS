@@ -1,20 +1,22 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { StatCard, Card, Button, SearchBar, ErrorState, EmptyState } from '../../components/ui/index.js';
+import { StatCard, Card, Button, SearchBar, FilterBar, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
-import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
+import { fetchOffLeaseDashboard, exportOffLeaseToGoogleSheet } from '../../services/offLease.service.js';
 import { fetchMyTasks } from '../../services/myTask.service.js';
 import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
+import { apiErrorMessage } from '../../shared/auth/index.js';
+import { toDate } from '../../utils/formatDateTime.js';
 import { OrderBookView } from './OrderBookView.jsx';
 import { ContainerDetailModal } from './ContainerDetailModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
-const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 10: 'container' };
+const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock' };
 
 /**
  * Off-Lease pipeline overview — KPI counts + every active container's
@@ -33,6 +35,10 @@ const VIEWS = [
   { key: 'table', label: 'View 2' }
 ];
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** "YYYY-MM" — sorts correctly as a plain string, which a "Month Year" label doesn't. */
+const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
 export function PipelineDashboard({ onOpenTab }) {
   const navigate = useNavigate();
   const { data, loading, error, reload } = useAsync(fetchOffLeaseDashboard, []);
@@ -50,10 +56,42 @@ export function PipelineDashboard({ onOpenTab }) {
   const [openRecord, setOpenRecord] = useState(null);
   /* null = no filter; an internal stage number, 'approval' or 'done'. */
   const [stageFilter, setStageFilter] = useState(null);
+  /* '' = every month; otherwise a "YYYY-MM" key (monthKey) — explicit request
+     2026-09-23, grouped on `intimationDate` (Off-Lease Intimation Date — when
+     the request was actually raised). BUG FOUND AND FIXED the same day: this
+     first shipped grouped on "OL Date" instead, which is a forward-looking
+     TARGET completion date entered on Stage 1's own form (same value as that
+     record's own Final Billing Date) — a record raised in September could
+     show up under "October" simply because that's the date someone typed as
+     its target finish, which is what a live record confirmed. Intimation
+     Date only ever moves forward in step with "when did this actually
+     happen", never a planned future date. */
+  const [monthFilter, setMonthFilter] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
 
   const kpis = data?.kpis || {};
   const items = data?.items || [];
+
+  /* Every month that actually has a record, newest first — built from the
+     live data rather than hand-listed, so a new month appears on its own the
+     moment the first record lands in it, and a record with a genuinely blank
+     intimationDate is simply not offered as a filter (it can still be found
+     via search/other filters, just not grouped into "no date" as if that
+     were a real month). */
+  const monthOptions = useMemo(() => {
+    const seen = new Map(); // "YYYY-MM" -> label
+    for (const it of items) {
+      const d = toDate(it.intimationDate);
+      if (!d) continue;
+      const key = monthKey(d);
+      if (!seen.has(key)) seen.set(key, `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`);
+    }
+    return [...seen.entries()]
+      .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+      .map(([value, label]) => ({ value, label }));
+  }, [items]);
 
   /* Clicking a KPI card filters this dashboard rather than jumping to that
      stage's tab. The cards describe THIS list, so sending the reader somewhere
@@ -76,12 +114,40 @@ export function PipelineDashboard({ onOpenTab }) {
        stage. */
     else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
 
+    if (monthFilter) {
+      out = out.filter((it) => {
+        const d = toDate(it.intimationDate);
+        return d && monthKey(d) === monthFilter;
+      });
+    }
+
     if (!term) return out;
     return out.filter((it) =>
       it.container.toLowerCase().includes(term) ||
       it.clientName.toLowerCase().includes(term) ||
       it.leaseId.toLowerCase().includes(term));
-  }, [items, debouncedSearch, stageFilter]);
+  }, [items, debouncedSearch, stageFilter, monthFilter]);
+
+  const handleExportToGoogleSheet = async () => {
+    setExporting(true);
+    setExportError('');
+    try {
+      const headers = ['Container No', 'Lease ID', 'Client Name', 'Size', 'Type', 'Location', 'Off-Lease Intimation Date', 'Deployed Date', 'Valid Upto', 'Current Stage'];
+      const rows = filtered.map((it) => [
+        it.container, it.leaseId, it.clientName, it.size, it.type, it.location,
+        it.intimationDate || '', it.deployedDate || '', it.validUpto || '',
+        it.stageClass === 'approval' ? 'Pending Approval' : it.stageClass === 'done' ? 'Released' : it.stageClass === 'rejected' ? 'Rejected' : (STAGES.find((s) => s.number === it.currentStageNum)?.label || '')
+      ]);
+      const monthLabel = monthFilter ? monthOptions.find((m) => m.value === monthFilter)?.label : 'All Months';
+      const title = `Off-Lease Export - ${monthLabel} - ${new Date().toLocaleDateString()}`;
+      const res = await exportOffLeaseToGoogleSheet(title, headers, rows);
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      setExportError(apiErrorMessage(e));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   /* Clicking the active card again clears it — the same control that applied
      the filter removes it, so there is no hunting for a reset. */
@@ -103,20 +169,18 @@ export function PipelineDashboard({ onOpenTab }) {
       <div className={styles.kpiRow}>
         {/* Fixed order per explicit request, 2026-09-04: Lease Expiry, Hold,
             Active, then the live workflow in sequence (Intimation ->
-            Approval -> Transportation -> LR & Return Transportation -> Gate
-            In -> Inspection -> Final Billing -> Outstanding Payment
-            ["Payment Pending" in the user's own sequence, right after
-            Billing]), Completed last. Stage 7 (KAM) is intentionally not in
-            this row — everything else here is either a cross-module count
-            or one explicit stage, not the generic STAGES.flatMap sweep this
-            row used before. RENUMBERED 2026-09-18 (explicit request):
-            Approval "Stage 1.2" -> "Stage 1A"; a real internal stage 10
-            ("LR & Return Transportation") added between Transportation and
-            Gate In, displaying as "Stage 3" (replacing an earlier same-day
-            synthetic "Stage 3 (Invoice)" attempt — that feature is removed
-            entirely); Billing renamed "Billing Reconciliation" -> "Final
-            Billing"; every stage from Gate In onward shifted its display
-            number up by one to make room for Stage 10. */}
+            Approval -> Transportation -> Gate In -> Inspection -> Final
+            Billing -> Outstanding Payment ["Payment Pending" in the user's
+            own sequence, right after Billing]), Completed last. Stage 6
+            (KAM) is intentionally not in this row — everything else here is
+            either a cross-module count or one explicit stage, not the
+            generic STAGES.flatMap sweep this row used before. A real
+            internal stage 10 ("LR & Return Transportation") lived here as
+            "Stage 3" between Transportation and Gate In from 2026-09-18 to
+            2026-09-22 (explicit request each time) — removed from the
+            workflow entirely now, its KPI card gone with it, and every
+            stage from Gate In onward shifted its display number back down
+            by one. */}
         {/* Reverted to individual cards, 2026-09-04 — the combined split
             card read worse than two plain ones. Lease Expiry leads the row,
             navigating to that page (same destination the sidebar's own nav
@@ -156,22 +220,17 @@ export function PipelineDashboard({ onOpenTab }) {
           onClick={() => toggleFilter(6)}
         />
         <StatCard
-          icon={STAGE_ICONS[10]} label="Stage 3 · LR & Return Transportation" value={kpis.byStage?.[10] ?? '—'} loading={loading} tint="info"
-          footnote={STAGES.find((s) => s.number === 10)?.owner}
-          onClick={() => toggleFilter(10)}
-        />
-        <StatCard
-          icon={STAGE_ICONS[7]} label="Stage 4 · Gate In" value={kpis.byStage?.[7] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[7]} label="Stage 3 · Gate In" value={kpis.byStage?.[7] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 7)?.owner}
           onClick={() => toggleFilter(7)}
         />
         <StatCard
-          icon={STAGE_ICONS[3]} label="Stage 5 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[3]} label="Stage 4 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 3)?.owner}
           onClick={() => toggleFilter(3)}
         />
         <StatCard
-          icon={STAGE_ICONS[5]} label="Stage 6 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[5]} label="Stage 5 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 5)?.owner}
           onClick={() => toggleFilter(5)}
         />
@@ -201,11 +260,24 @@ export function PipelineDashboard({ onOpenTab }) {
                 </button>
               ))}
             </div>
+            <Button variant="secondary" size="sm" loading={exporting} onClick={handleExportToGoogleSheet}>
+              Export to Google Sheet
+            </Button>
             <Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>
           </>
         }
       >
+        {exportError && <p className={styles.actionError}>{exportError}</p>}
         <div className={styles.toolbar}>
+          <FilterBar
+            filters={[{
+              key: 'month',
+              label: 'Month',
+              value: monthFilter,
+              onChange: setMonthFilter,
+              options: monthOptions
+            }]}
+          />
           <SearchBar value={search} onChange={setSearch} placeholder="Search container, client, lease ID…" />
           {/* An active filter has to be visible and removable here — otherwise
               a shrunken list looks like missing data. */}

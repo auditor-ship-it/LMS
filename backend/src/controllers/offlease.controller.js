@@ -9,6 +9,7 @@ import { getOffLeaseEfficiencyReport } from '../services/offleaseEfficiency.serv
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
+import { exportRowsToGoogleSheet } from '../services/sheetExport.service.js';
 
 /* ---- Core 8-stage pipeline ---- */
 
@@ -132,6 +133,14 @@ export async function getStageDetail(req, res) {
         detail._inspectionCost = gf?.repairBudget ?? null;
       } catch (e) { detail._inspectionCost = undefined; }
     }
+
+    /* Transportation Invoice ("Invoice PO") — Accounts' own vetted invoice
+       for this shipment's DO Number, explicit request 2026-09-23, so the
+       reconciler can see/open the actual invoice file right here instead of
+       going to that sheet directly. Reference only, not editable. */
+    try {
+      detail._transportInvoice = await stage8Service.getInvoicePoForContainer(req.params.containerNo, detail.col_5);
+    } catch (e) { detail._transportInvoice = undefined; }
   }
 
   res.json(detail);
@@ -207,11 +216,14 @@ export async function getApprovalData(req, res) {
 export async function saveApprovalAction(req, res) {
   const { status, remarks, rowNum } = req.body;
   // Permission ('offleaseapproval') is checked inside the service. `remarks`
-  // (RejectModal, frontend) is only ever meaningful when status === 'Rejected'.
-  // Rejected now CANCELS the off-lease request outright (removed from
-  // Off-Lease Tracking, Deployed reverted, Shivani emailed) — a different,
-  // fully-live path from Approved's Mongo-first Fast one. Explicit request
-  // 2026-09-11; see saveOffLeaseRejectAndCancel's own doc comment.
+  // (RejectModal, frontend) is meaningful for BOTH outcomes now — CHANGED
+  // 2026-09-23, explicit request: Approve goes through the same remarks-
+  // first modal Reject/Send Back already used, so an approver can leave a
+  // note too, not only a rejector. Rejected still CANCELS the off-lease
+  // request outright (removed from Off-Lease Tracking, Deployed reverted,
+  // Shivani emailed) — a different, fully-live path from Approved's
+  // Mongo-first Fast one. Explicit request 2026-09-11; see
+  // saveOffLeaseRejectAndCancel's own doc comment.
   const message = String(status || '').trim().toLowerCase() === 'rejected'
     ? await offLeaseService.saveOffLeaseRejectAndCancel(req.params.containerNo, req.user.email, remarks, rowNum)
     : await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks, rowNum);
@@ -577,4 +589,15 @@ export async function feedsNewLeaseReff(req, res) {
 export async function feedsAllSheets(req, res) {
   await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.whatFeedsAllSheets() });
+}
+
+/** POST /api/offlease/export-sheet — turns whatever headers/rows the caller
+ *  already has on screen (the Dashboard's month-filtered pipeline list, most
+ *  likely) into a brand-new Google Sheet — same generic export used by Lease
+ *  Expiry (expiry.controller.js), see sheetExport.service.js. Never reads
+ *  app data itself; the frontend sends exactly what it's already rendering
+ *  (already scoped/filtered), same trust level as a client-side Excel export. */
+export async function exportToGoogleSheet(req, res) {
+  const { title, headers, rows } = req.body;
+  res.json(await exportRowsToGoogleSheet(title, headers, rows));
 }

@@ -21,13 +21,13 @@ import styles from './OrderBookView.module.css';
  */
 
 /** The chips, left to right: Stage 1, Stage 1A (the approval gate), then the
- *  rest of the workflow (Transportation, LR & Return Transportation, Gate
- *  In, Inspection, Final Billing, KAM) straight off STAGES, in WORKFLOW
- *  order. 1A is drawn from a hand-built object rather than STAGES because
- *  it isn't a stage of its own — the decision gate between Stage 1 and
- *  Stage 2. "LR & Return Transportation" (internal 10, added 2026-09-18) IS
- *  a real stage now — no hand-built chip needed for it any more, it comes
- *  through the generic `chip()` path like Gate In/Inspection/etc.
+ *  rest of the workflow (Transportation, Gate In, Inspection, Final Billing,
+ *  KAM) straight off STAGES, in WORKFLOW order. 1A is drawn from a hand-built
+ *  object rather than STAGES because it isn't a stage of its own — the
+ *  decision gate between Stage 1 and Stage 2. ("LR & Return Transportation",
+ *  internal 10, was a real stage 2026-09-18 to 2026-09-22, also needing no
+ *  hand-built chip — removed from the workflow again, so STAGES no longer
+ *  includes it.)
  *
  *  Each chip opens that stage's own tab (onOpenTab) when clicked, same as
  *  the status pill beside them -- a completed or future chip is just as

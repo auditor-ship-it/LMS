@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import { jsPDF } from 'jspdf';
 import { Button } from '../../components/ui/Button.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
@@ -66,37 +67,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
 
-  /* Stage 3's ("LR & Return Transportation", internal 10) "+ Add Invoice" —
-     every invoice beyond the first one (the first stays a plain field,
-     col_320-324), held as component state rather than going through
-     values/col_N like the rest of the form. col_325 stores them as a single
-     JSON array (see OL_STAGE10_EXTRA_COLS's doc comment in
-     offlease.service.js for why one JSON column instead of a fixed block of
-     columns per slot); this state is that array parsed out into editable
-     rows, each with its own pending file until Save Stage uploads it. */
-  const [extraInvoices, setExtraInvoices] = useState([]);
-  useEffect(() => {
-    if (stageNumber !== LR_TRANSPORT_STAGE) return;
-    let parsed = [];
-    try {
-      const raw = JSON.parse(data?.col_325 || '[]');
-      if (Array.isArray(raw)) parsed = raw;
-    } catch { /* blank/corrupt cell — start empty rather than blocking the form */ }
-    const rows = parsed.map((inv) => ({
-      no: inv?.no || '', amount: inv?.amount || '', uploadUrl: inv?.uploadUrl || '',
-      date: inv?.date || '', remarks: inv?.remarks || '', pendingFile: null
-    }));
-    // Always show one row to fill in, even with nothing saved yet — "+ Add
-    // Invoice" is for the second one onward, not the first.
-    setExtraInvoices(rows.length ? rows : [{ no: '', amount: '', uploadUrl: '', date: '', remarks: '', pendingFile: null }]);
-  }, [data, stageNumber]);
-  const updateExtraInvoice = (idx, patch) =>
-    setExtraInvoices((prev) => prev.map((inv, i) => (i === idx ? { ...inv, ...patch } : inv)));
-  const addExtraInvoice = () =>
-    setExtraInvoices((prev) => [...prev, { no: '', amount: '', uploadUrl: '', date: '', remarks: '', pendingFile: null }]);
-  const removeExtraInvoice = (idx) =>
-    setExtraInvoices((prev) => prev.filter((_, i) => i !== idx));
-
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
      doc comment). Same capture-a-remark-first shape as the Approval desk's
@@ -131,12 +101,13 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const billing = billingDetail?.billing?.records?.length ? billingDetail.billing : null;
 
   /* Tally outstanding for this container + client, from the Accounts &
-     Collection app via our own proxy. Stage 1 — the figure the intimation
-     decision is made against — and Billing (BILLING_STAGE), where the
-     reconciler needs the same invoice-wise figures the decision was
-     originally based on. */
+     Collection app via our own proxy. Stage 1 only — the figure the
+     intimation decision is made against. Removed from Billing (BILLING_STAGE)
+     2026-09-23 (explicit request): that app's own login kept failing
+     ("Accounts API login failed"), and the resulting error text on the
+     Billing form was unwanted noise, not a useful reconciliation aid. */
   const { data: outstanding, loading: outstandingLoading } = useAsync(
-    () => ((stageNumber === 1 || stageNumber === BILLING_STAGE) && containerNo
+    () => (stageNumber === 1 && containerNo
       ? getOutstanding(containerNo, data?.col_5 || '')
       : Promise.resolve(null)),
     [stageNumber, containerNo, data?.col_5]
@@ -220,18 +191,13 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      its status radio plus (once Damage is picked, via the field's own showIf)
      the estimate and photo. Everything stays an ordinary field, so required-
      checks, file upload and payload building below are untouched. */
-  const { plainFields, cabinFields, trailingFields, checklists } = useMemo(() => {
+  const { plainFields, cabinFields, checklists } = useMemo(() => {
     const plain = [];
     const cabin = [];
-    const trailing = [];
     const groups = new Map();  // group -> Map(n -> row)
     const footers = new Map(); // group -> [field] rendered under that table
     for (const f of visibleFields) {
       if (f.cabin) { cabin.push(f); continue; }
-      // `trailing` fields (Stage 3's own Remark) render after the "+ Add
-      // Invoice" section instead of with the rest of the form — the user
-      // wants the stage remark to come last, not ahead of the invoices.
-      if (f.trailing) { trailing.push(f); continue; }
       if (f.footerOf) {
         if (!footers.has(f.footerOf)) footers.set(f.footerOf, []);
         footers.get(f.footerOf).push(f);
@@ -247,7 +213,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     return {
       plainFields: plain,
       cabinFields: cabin,
-      trailingFields: trailing,
       checklists: CHECKLISTS
         .filter((c) => groups.has(c.group))
         .map((c) => ({
@@ -328,31 +293,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
       if (f.type === 'computed') continue;
       const v = finalValues[f.key];
       if (v !== '' && v != null) payload[f.key] = v;
-    }
-
-    if (stageNumber === LR_TRANSPORT_STAGE) {
-      const pending = extraInvoices.map((inv, i) => ({ inv, i })).filter(({ inv }) => inv.pendingFile);
-      let finalExtra = extraInvoices;
-      if (pending.length) {
-        setUploading(true);
-        try {
-          const uploaded = {};
-          for (const { inv, i } of pending) uploaded[i] = await uploadStageFile(inv.pendingFile);
-          finalExtra = extraInvoices.map((inv, i) => (uploaded[i] ? { ...inv, uploadUrl: uploaded[i], pendingFile: null } : inv));
-          setExtraInvoices(finalExtra);
-        } catch (err) {
-          setSaveError(`File upload failed — save aborted. ${apiErrorMessage(err)}`);
-          setUploading(false);
-          return;
-        }
-        setUploading(false);
-      }
-      // Fully-blank rows (added via "+ Add Invoice" then left empty) don't
-      // belong in the saved list.
-      const cleaned = finalExtra
-        .filter((inv) => inv.no || inv.amount || inv.uploadUrl || inv.date || inv.remarks)
-        .map(({ no, amount, uploadUrl, date, remarks }) => ({ no, amount, uploadUrl, date, remarks }));
-      payload.col_325 = JSON.stringify(cleaned);
     }
 
     setSaving(true);
@@ -468,25 +408,20 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 />
               )}
 
-              {(stageNumber === 1 || stageNumber === BILLING_STAGE) && (
+              {stageNumber === 1 && (
                 <OutstandingPanel data={outstanding} loading={outstandingLoading} />
               )}
 
               {stageNumber === BILLING_STAGE && (
                 <>
                   <CostReferencePanel inspectionCost={data?._inspectionCost} />
+                  <TransportInvoiceNote invoice={data?._transportInvoice} />
                   <InspectionReferenceTable title="Container Inspection Checklist" points={data?._inspectionPoints} />
                   <InspectionReferenceTable title="Machine Check" points={data?._machinePoints} />
                   <Stage1DataNote data={data?._stage1Data} />
                 </>
               )}
 
-              {/* Read-only LR reference for Stage 10 ("LR & Return
-                  Transportation", displays as Stage 3) — details fetched
-                  live from the external FMS STAGE-9 sheet, never stored in
-                  this app's own sheet. See getOffLeaseStageDetail's
-                  data._lrData for the fetch. */}
-              {stageNumber === LR_TRANSPORT_STAGE && <LrReferenceNote data={data} />}
               {stageNumber === FMS_CLOSURE_STAGE && <Stage5ReferenceNote data={data} />}
 
               {/* Gate In's own form was removed 2026-08-24: gate/depot staff
@@ -542,36 +477,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   />
                 ))}
               </div>
-              )}
-
-              {/* "+ Add Invoice" — Stage 3's return-transportation PO can
-                  come back with more than one invoice against it; see
-                  extraInvoices' own doc comment above for why these live
-                  outside the generic fields/values mechanism. */}
-              {stageNumber === LR_TRANSPORT_STAGE && !identityOnly && !data?._skipped && (
-                <ExtraInvoicesSection
-                  invoices={extraInvoices}
-                  disabled={readOnly || busy}
-                  onChange={updateExtraInvoice}
-                  onAdd={addExtraInvoice}
-                  onRemove={removeExtraInvoice}
-                />
-              )}
-
-              {!identityOnly && !data?._skipped && trailingFields.length > 0 && (
-                <div className={styles.fieldGrid}>
-                  {trailingFields.map((f) => (
-                    <Field
-                      key={f.key}
-                      field={f}
-                      value={values[f.key]}
-                      pendingFileName={pendingFiles[f.key]?.fileName}
-                      onChange={(v) => setField(f.key, v)}
-                      onFile={(payload) => { setPendingFiles((p) => ({ ...p, [f.key]: payload })); setField(f.key, payload.fileName); }}
-                      disabled={readOnly || busy}
-                    />
-                  ))}
-                </div>
               )}
 
               {!identityOnly && !data?._skipped && checklists.map((c) => (
@@ -678,16 +583,12 @@ const DAMAGE_ROLES = [
  */
 const REPORT_STAGES = [3, 5];
 
-/** Final Billing (internally stage 5, shown as Stage 6) — the person
+/** Final Billing (internally stage 5, shown as Stage 5) — the person
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
 
-/** KAM (internally stage 8, shown as Stage 7) — see Stage5ReferenceNote. */
+/** KAM (internally stage 8, shown as Stage 6) — see Stage5ReferenceNote. */
 const FMS_CLOSURE_STAGE = 8;
-
-/** LR & Return Transportation (internally stage 10, shown as Stage 3) — see
- *  LrReferenceNote. Added 2026-09-18. */
-const LR_TRANSPORT_STAGE = 10;
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for
  *  Not Required, nothing while unset. */
@@ -935,6 +836,55 @@ function CostReferencePanel({ inspectionCost }) {
 }
 
 /**
+ * Accounts' vetted Transportation Invoice ("Invoice PO" sheet, mirrored into
+ * Mongo), matched by DO Number to this container's STAGE-8/9 shipment — see
+ * stage8.service.js's getInvoicePoForContainer. Explicit request 2026-09-23:
+ * the reconciler wants to open the actual invoice file from here instead of
+ * going to that sheet directly.
+ *
+ * Gated on invoice.invoiceUrl specifically (not just a DO match existing) —
+ * CHANGED 2026-09-23 (explicit request, "all show NA"): most DO matches at
+ * this point are still "Pending" with every other field genuinely blank
+ * (Accounts hasn't vetted them yet), so showing the card for those was a
+ * near-empty wall of dashes on almost every container, not a useful
+ * reference. Only worth showing once there's an actual file to open.
+ */
+function TransportInvoiceNote({ invoice }) {
+  if (!invoice?.invoiceUrl) return null;
+  return (
+    <>
+      <h3 className={styles.sectionTitle}>Transportation Invoice (Invoice PO)</h3>
+      <p className={styles.sectionHint}>
+        Matched by DO Number against Accounts' Invoice PO log — for reference while
+        reconciling, not saved anywhere on this form.
+      </p>
+      <div className={styles.outstandingRow}>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Status</span>
+          <span className={styles.outstandingValue}>{invoice.status || '—'}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Vetted Amount</span>
+          <span className={styles.outstandingValue}>{renderCellValue(invoice.vettedAmount)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Invoice File</span>
+          <span className={styles.outstandingValue}>{renderCellValue(invoice.invoiceUrl)}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Confirmed By</span>
+          <span className={styles.outstandingValue}>{invoice.confirmedBy || '—'}</span>
+        </div>
+        <div className={styles.outstandingCard}>
+          <span className={styles.outstandingLabel}>Bill No</span>
+          <span className={styles.outstandingValue}>{invoice.billNo || '—'}</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
  * Full Stage 4 Inspection Checklist + Machine Check, read-only, for whoever
  * is reconciling Final Billing — explicit request 2026-09-18: the Cost
  * Reference total above wasn't enough, they want every point visible here
@@ -1007,97 +957,6 @@ function Stage1DataNote({ data }) {
   );
 }
 
-/**
- * Read-only LR reference for Stage 10 ("LR & Return Transportation",
- * displays as Stage 3) — details fetched live from the external FMS
- * STAGE-9 sheet (getMatchedFmsForContainer in offlease.service.js), never
- * stored in this app's own sheet. The Return Transportation PO fields
- * (col_319/317/318) are this stage's own EDITABLE fields (stageFields.js's
- * STAGE_FIELDS[10]) — no read-only card needed for those, they already show
- * as inputs in the form below.
- */
-function LrReferenceNote({ data }) {
-  const lr = data?._lrData;
-  if (!lr) return null;
-  return (
-    <>
-      <h3 className={styles.sectionTitle}>LR Details (from FMS)</h3>
-      <p className={styles.sectionHint}>Fetched live from the external transport tracking sheet — reference only, not editable here.</p>
-      <div className={styles.outstandingRow}>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>LR No</span>
-          <span className={styles.outstandingValue}>{renderCellValue(lr.lrNo)}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Vehicle No</span>
-          <span className={styles.outstandingValue}>{renderCellValue(lr.vehicleNo)}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>DO Number</span>
-          <span className={styles.outstandingValue}>{renderCellValue(lr.doNumber)}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Loading Date</span>
-          <span className={styles.outstandingValue}>{renderCellValue(lr.loadingDate)}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Destination City</span>
-          <span className={styles.outstandingValue}>{renderCellValue(lr.destinationCity)}</span>
-        </div>
-        <div className={styles.outstandingCard}>
-          <span className={styles.outstandingLabel}>Transporter</span>
-          <span className={styles.outstandingValue}>{renderCellValue(lr.transporter)}</span>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/**
- * "+ Add Invoice" on Stage 3 ("LR & Return Transportation") — every invoice
- * beyond the first one (which stays on its own fixed fields above, in the
- * "Return Transportation PO & Invoice" group). Each row reuses the same
- * Field/FileFieldInput components the rest of the form uses, just addressed
- * by array index instead of a col_N key — see extraInvoices' own doc
- * comment in StageDetailModal for why (col_325 stores them all as one JSON
- * array).
- */
-function ExtraInvoicesSection({ invoices, disabled, onChange, onAdd, onRemove }) {
-  return (
-    <section className={styles.formSection}>
-      <h4 className={styles.formSectionTitle}>Additional Invoices</h4>
-      {!invoices.length && <p className={styles.sectionHint}>No additional invoices yet.</p>}
-      {invoices.map((inv, i) => (
-        <div key={i} className={styles.extraInvoiceRow}>
-          <div className={styles.fieldGrid}>
-            <Field field={{ key: 'no', label: 'Invoice No', type: 'text' }} value={inv.no} onChange={(v) => onChange(i, { no: v })} disabled={disabled} />
-            <Field field={{ key: 'amount', label: 'Invoice Amount', type: 'number' }} value={inv.amount} onChange={(v) => onChange(i, { amount: v })} disabled={disabled} />
-            <Field
-              field={{ key: 'upload', label: 'Invoice Upload', type: 'file' }}
-              value={inv.uploadUrl}
-              pendingFileName={inv.pendingFile?.fileName}
-              onFile={(payload) => onChange(i, { pendingFile: payload, uploadUrl: '' })}
-              disabled={disabled}
-            />
-            <Field field={{ key: 'date', label: 'Invoice Date', type: 'date' }} value={inv.date} onChange={(v) => onChange(i, { date: v })} disabled={disabled} />
-            <Field field={{ key: 'remarks', label: 'Remarks', type: 'text' }} value={inv.remarks} onChange={(v) => onChange(i, { remarks: v })} disabled={disabled} />
-          </div>
-          {!disabled && (
-            <button type="button" className={styles.removeInvoiceBtn} onClick={() => onRemove(i)}>
-              <Icon name="trash" className={styles.stageRemarksAddIcon} /> Remove this invoice
-            </button>
-          )}
-        </div>
-      ))}
-      {!disabled && (
-        <button type="button" className={styles.stageRemarksAdd} onClick={onAdd}>
-          <Icon name="plus" className={styles.stageRemarksAddIcon} /> Add Invoice
-        </button>
-      )}
-    </section>
-  );
-}
-
 /** Stage 5's own field labels (stageFields.js), paired with the _stage5Data
  *  key each one reads from — kept as one list so Stage5ReferenceNote and
  *  its data source can't quietly drift apart. */
@@ -1114,16 +973,15 @@ const STAGE5_REFERENCE_FIELDS = [
 ];
 
 /**
- * Read-only reference for Stage 7 (KAM) — every field on Stage 6's (Final
- * Billing) own form, shown alongside Stage 7's own Payment Confirmation
+ * Read-only reference for Stage 6 (KAM) — every field on Stage 5's (Final
+ * Billing) own form, shown alongside Stage 6's own Payment Confirmation
  * questions (stageFields.js, col_326-329) so KAM can see what Final Billing
  * reconciled while confirming what was actually paid. Editing these stays
- * on Stage 6's own form; this is reference only, same pattern as
- * LrReferenceNote.
+ * on Stage 5's own form; this is reference only.
  */
 function Stage5ReferenceNote({ data }) {
   const s5 = data?._stage5Data;
-  if (!s5 || !String(s5.status || '').trim()) return null; // Stage 6/Final Billing hasn't run yet — nothing to show
+  if (!s5 || !String(s5.status || '').trim()) return null; // Stage 5/Final Billing hasn't run yet — nothing to show
   return (
     <>
       <h3 className={styles.sectionTitle}>Final Billing (Stage 6)</h3>
@@ -2076,6 +1934,13 @@ function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
       </Labeled>
     );
   }
+  if (type === 'imagesToPdf') {
+    return (
+      <Labeled label={label} required={required}>
+        <ImagesToPdfFieldInput value={value} pendingFileName={pendingFileName} onFile={onFile} disabled={disabled} />
+      </Labeled>
+    );
+  }
   return null;
 }
 
@@ -2161,6 +2026,127 @@ function FileFieldInput({ value, pendingFileName, onFile, disabled }) {
       {!disabled && <input type="file" onChange={handleChange} disabled={busy} hidden />}
     </label>
   );
+}
+
+/**
+ * Stage 1's "Container Photos" field — explicit request 2026-09-23: pick
+ * several photos at once, combined into ONE PDF client-side (jsPDF, same
+ * library the Off-Lease container-report/lookup exports already use — see
+ * pdfLayout.js), so Stage 1A only ever has one file to open instead of
+ * juggling N separate uploads. The merged PDF is then just a normal 'file'
+ * value from here on: it goes through the exact same deferred-upload path
+ * as FileFieldInput (onFile here hands off a base64 payload; the actual
+ * Drive upload happens at Save Stage, in the modal's own submit handler).
+ * Each photo is scaled to fit one A4 page, preserving its own aspect ratio.
+ */
+function ImagesToPdfFieldInput({ value, pendingFileName, onFile, disabled }) {
+  const [busy, setBusy] = useState(false);
+
+  const handleChange = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setBusy(true);
+    try {
+      const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const margin = 10;
+      const maxW = pageW - margin * 2;
+      const maxH = pageH - margin * 2;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const dataUrl = await readFileAsDataUrl(file);
+        const { width, height } = await loadImageDimensions(dataUrl);
+        const scale = Math.min(maxW / width, maxH / height, 1);
+        const w = width * scale;
+        const h = height * scale;
+        const x = margin + (maxW - w) / 2;
+        const y = margin + (maxH - h) / 2;
+        if (i > 0) doc.addPage();
+        // jsPDF only reads pixel data for PNG/JPEG — everything else (HEIC,
+        // WEBP, ...) is passed through as JPEG, which is wrong for a format
+        // it can't decode but is at least consistent with what browsers
+        // already re-encode most phone camera uploads as by this point.
+        const format = /png/i.test(file.type) ? 'PNG' : 'JPEG';
+        doc.addImage(dataUrl, format, x, y, w, h);
+      }
+
+      const base64Data = doc.output('datauristring').split(',')[1] || '';
+      const fileName = `Container Photos - ${files.length} photo${files.length === 1 ? '' : 's'}.pdf`;
+      onFile({ base64Data, mimeType: 'application/pdf', fileName });
+    } finally {
+      setBusy(false);
+      e.target.value = '';
+    }
+  };
+
+  const uploaded = value && /^https?:\/\//.test(value);
+  const state = busy ? 'busy' : pendingFileName ? 'pending' : uploaded ? 'done' : 'empty';
+
+  return (
+    <label className={`${styles.drop} ${styles[`drop_${state}`]}`}>
+      <Icon name={state === 'done' ? 'check' : 'upload'} className={styles.dropIcon} />
+
+      <span className={styles.dropText}>
+        {state === 'busy' && 'Combining photos into a PDF…'}
+        {state === 'pending' && (
+          <>
+            <span className={styles.dropName}>{pendingFileName}</span>
+            <span className={styles.dropHint}>Not saved yet</span>
+          </>
+        )}
+        {state === 'done' && (
+          <>
+            <span className={styles.dropName}>PDF attached</span>
+            <span className={styles.dropHint}>Click to replace</span>
+          </>
+        )}
+        {state === 'empty' && (
+          <>
+            <span className={styles.dropName}>Select photos</span>
+            <span className={styles.dropHint}>multiple allowed — combined into one PDF</span>
+          </>
+        )}
+      </span>
+
+      {uploaded && (
+        <a
+          href={value}
+          target="_blank"
+          rel="noreferrer"
+          className={styles.dropView}
+          onClick={(e) => e.stopPropagation()}
+        >
+          View
+        </a>
+      )}
+
+      {!disabled && <input type="file" accept="image/*" multiple onChange={handleChange} disabled={busy} hidden />}
+    </label>
+  );
+}
+
+/** Full data: URL (unlike readFileAsBase64 below, which strips the prefix
+ *  for the upload payload) — jsPDF's addImage needs the data: URI itself. */
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Natural pixel size of an image, from its data URL — needed to scale each
+ *  photo onto its PDF page without distorting it. */
+function loadImageDimensions(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
 }
 
 function readFileAsBase64(file) {
