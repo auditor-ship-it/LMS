@@ -68,7 +68,8 @@ export async function getCompanyContainers(company) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
 
   const out = [];
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     const containerNo = safeStr(row[0]).trim();
     if (!containerNo) continue;
     if (normCompany(row[custCol]) !== key) continue;
@@ -85,7 +86,16 @@ export async function getCompanyContainers(company) {
       daysLeft,
       product: productCol !== -1 ? safeStr(row[productCol]) : '',
       size: sizeCol !== -1 ? safeStr(row[sizeCol]) : '',
-      location: locationCol !== -1 ? safeStr(row[locationCol]) : ''
+      location: locationCol !== -1 ? safeStr(row[locationCol]) : '',
+      // +2: `rows` is values.slice(1) (header row stripped), so index 0 is
+      // sheet row 2 — same convention expiry.service.js uses everywhere
+      // (_resolveDeployedRow's `knownRow`). Sales OS's SSO renewal flow
+      // (salesOsRenewal.service.js) needs this to address the EXACT Deployed
+      // row when it calls saveExpiryAction/completeDocStage — container
+      // number alone is not a safe lookup key (a container can have more
+      // than one Deployed row across lease cycles).
+      rowNum: i + 2,
+      status: safeStr(row[statusCol]).trim()
     });
   }
 

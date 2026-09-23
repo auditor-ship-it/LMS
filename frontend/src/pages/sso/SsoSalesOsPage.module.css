@@ -85,37 +85,6 @@
 .containerNo { font-weight: 700; color: var(--text); font-family: var(--f-mono); }
 .meta { color: var(--text-3); font-size: 11.5px; }
 
-.sharedRow { display: flex; align-items: flex-end; gap: var(--s-4); flex-wrap: wrap; }
-
-.lineCard {
-  border: 1.5px solid var(--line);
-  border-radius: var(--r-md);
-  padding: var(--s-4);
-  margin: 0;
-}
-.lineTitle { font-family: var(--f-mono); font-size: 12.5px; font-weight: 700; color: var(--text); padding: 0 4px; }
-.lineGrid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--s-3);
-}
-.fieldWide { grid-column: 1 / -1; }
-
-.field { display: flex; flex-direction: column; gap: 4px; }
-.label { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
-.input {
-  border: 1.5px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: 8px 10px;
-  font-size: 12.5px;
-  background: var(--surface);
-  color: var(--text);
-}
-.input:focus { outline: none; border-color: var(--accent); }
-
-.addendumRow { display: flex; }
-
-.totalLine { margin: 0; font-size: 13px; font-weight: 700; color: var(--text); }
 .error { color: var(--error); font-size: 12px; font-weight: 600; margin: 0; }
 
 .footer { display: flex; justify-content: flex-end; gap: 10px; }
@@ -123,7 +92,3 @@
 .successWrap { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-5) 0; text-align: center; }
 .successIcon { color: var(--success); }
 .message { font-family: var(--f-display); font-size: 14px; font-weight: 700; color: var(--text); margin: 0; }
-
-@media (max-width: 560px) {
-  .lineGrid { grid-template-columns: 1fr 1fr; }
-}
