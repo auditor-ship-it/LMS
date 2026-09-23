@@ -9,6 +9,11 @@ import { apiClient } from '../shared/auth/index.js';
 export const startSsoSession = (params) =>
   apiClient.post('/sso/sales-os/session', params).then((r) => r.data);
 
+/** POST /api/sso/lease-expiry/session — plain employeeCode SSO for the
+ *  Lease Expiry embed, no lead/company context. Resolves to { token, user }. */
+export const startLeaseExpirySsoSession = (params) =>
+  apiClient.post('/sso/lease-expiry/session', params).then((r) => r.data);
+
 /** POST /api/sso/sales-os/confirm-company — submits the user's pick from an
  *  ambiguous company match. Resolves to { companyMatch, containers }. */
 export const confirmSsoCompany = (existingLeadId, companyName) =>

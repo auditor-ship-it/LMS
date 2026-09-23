@@ -4,6 +4,7 @@ import { AppShell } from '../components/layout/AppShell.jsx';
 import { ErrorBoundary } from '../components/layout/ErrorBoundary.jsx';
 import { LoginPage } from '../pages/auth/LoginPage.jsx';
 import { SsoSalesOsPage } from '../pages/sso/SsoSalesOsPage.jsx';
+import { SsoLeaseExpiryPage } from '../pages/sso/SsoLeaseExpiryPage.jsx';
 import { IconSprite } from '../components/ui/IconSprite.jsx';
 import { ROUTES } from '../constants/routes.js';
 
@@ -24,6 +25,11 @@ export default function App() {
             by employeeCode alone (no password screen). See
             pages/sso/SsoSalesOsPage.jsx. */}
         <Route path="/sso/sales-os" element={<SsoSalesOsPage />} />
+        {/* Sales OS's "Lease" section embed — the real Lease Expiry page
+            (data, Renew/Off-Lease/Remarks actions, same backend), SSO'd the
+            same way, no lead/company context needed. See
+            pages/sso/SsoLeaseExpiryPage.jsx. */}
+        <Route path="/sso/lease-expiry" element={<SsoLeaseExpiryPage />} />
         <Route
           path="/"
           element={(
