@@ -95,5 +95,8 @@ router.get('/offlease/efficiency', requirePublicApiKey('offleaseefficiency'), as
    (routes/sso.routes.js) — this is the read-back Sales OS's own server
    polls to display what was renewed. ?existingLeadId= or ?from=&to=&employeeCode=. */
 router.get('/sales-os/renewals', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.listRenewals)));
+// ?companyNames=Name+A,Name+B,... — lets Sales OS's own backend batch-check
+// which KAM companies have a Lease match, to drive a "Lease" nav filter.
+router.get('/sales-os/company-match', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.companyMatch)));
 
 export default router;

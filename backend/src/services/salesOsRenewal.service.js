@@ -14,16 +14,29 @@
  * helper (utils/jwtLite.js) and the same "never trust the client's container
  * list, re-validate against a fresh live read" discipline.
  *
+ * SAVING A RENEWAL DOES NOT INVENT A NEW WRITE PATH. `saveRenewal` below
+ * calls the SAME two backend functions the in-app "Renew & Document" flow
+ * calls when a human does this manually — expiry.service.js's
+ * `saveExpiryAction` (Lease Expiry's own "Renew" button: moves a container
+ * to "Documents Pending") followed by `completeDocStage` (the "Update
+ * Agreement" form's own submit handler: writes Renewed Date/Valid
+ * Till/Agreement/PO/Billing Cycle, updates Valid Upto, clears status, and
+ * appends to the Renewal Log sheet). Both already exist, are already
+ * correct, and are reused verbatim — see this file's own saveRenewal doc
+ * comment for why the NON-fast (synchronous, live-Sheets) versions are used
+ * here specifically, not the Mongo-first "Fast" variants the internal UI
+ * calls.
+ *
  * STORAGE: two new, non-sheet-mirrored Mongo collections (same convention as
  * auth.service.js's _auth_sessions / apiKeys.service.js's _api_keys — this is
  * operational integration state, not spreadsheet data):
  *   _sales_os_company_links — existingLeadId -> resolved Deployed company
  *     name, so a repeat SSO open for the same lead skips straight to the
  *     (freshly re-fetched) container list instead of re-matching.
- *   _sales_os_renewals — the saved renewals themselves, source of truth.
- * Each saved renewal ALSO gets mirrored into the existing "Renewal Log"
- * sheet tab, one row per container, via expiry.service.js's existing
- * _logRenewal appender — reused as-is, not reimplemented.
+ *   _sales_os_renewals — an AUDIT RECEIPT of what was written to the real
+ *     sheet via the calls above, written only after they succeed. This is
+ *     what GET /api/public/v1/sales-os/renewals reads back for Sales OS —
+ *     it is a record of the write, not the write itself.
  */
 import { ObjectId } from 'mongodb';
 import { getCollection } from './mongo.service.js';
@@ -32,11 +45,10 @@ import { verifyJwt } from '../utils/jwtLite.js';
 import { env } from '../config/env.js';
 import { AppError } from '../utils/AppError.js';
 import { logger } from '../utils/logger.js';
-import { safeStr, toNum } from '../utils/format.js';
+import { safeStr } from '../utils/format.js';
 import { normClientName } from '../utils/normalize.js';
-import { _deployedRawValues, findHeaderCol, _logRenewal } from './expiry.service.js';
+import { _deployedRawValues, findHeaderCol, saveExpiryAction, completeDocStage } from './expiry.service.js';
 import { getCompanyContainers } from './renewalHandoff.service.js';
-import { uploadToDrive } from './googleDrive.service.js';
 import { empSsoLogin } from './auth.service.js';
 
 const COMPANY_LINKS_COLLECTION = '_sales_os_company_links';
@@ -124,6 +136,27 @@ export async function resolveLeaseCompany(companyNameRaw) {
   if (fuzzyMatches.length === 1) return { status: 'matched', companyName: fuzzyMatches[0].name, matchedVia: 'fuzzy' };
   if (fuzzyMatches.length > 1) return { status: 'ambiguous', candidates: fuzzyMatches.map((c) => c.name) };
   return { status: 'none', candidates: [] };
+}
+
+/**
+ * GET /api/public/v1/sales-os/company-match — lets Sales OS's own backend
+ * pre-compute, for each Existing Lead in its KAM list, whether a "Lease"
+ * section should show for it, WITHOUT opening the SSO flow. Same matcher as
+ * the SSO session hop (resolveLeaseCompany), just exposed read-only over the
+ * public API. `companyNames` is a comma-separated list so a whole KAM page
+ * can be checked in one call instead of one round trip per lead.
+ */
+export async function matchCompanies(companyNamesRaw) {
+  const names = String(companyNamesRaw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const out = [];
+  for (const name of names) {
+    const m = await resolveLeaseCompany(name);
+    out.push({ companyName: name, status: m.status, resolvedCompanyName: m.companyName || null, candidates: m.candidates || [] });
+  }
+  return out;
 }
 
 /** Best-effort only: logs a warning if existingLeadId's own companyName (per
@@ -227,32 +260,97 @@ export async function confirmCompany(existingLeadId, companyName) {
   return { companyMatch: { status: 'matched', companyName: match.name, matchedVia: 'manual' }, containers };
 }
 
-function buildContainerLine(input, validContainer) {
-  const containerNo = safeStr(input.containerNo).trim();
-  const fromDate = safeStr(input.fromDate).trim();
-  const toDate = safeStr(input.toDate).trim();
-  if (!fromDate || !toDate) throw new AppError(`${containerNo}: From Date and To Date are required.`);
+/**
+ * Runs ONE container through the exact same sequence a human does manually:
+ * Lease Expiry's "Renew" button (saveExpiryAction(..., 'Documents Pending',
+ * ...)) IF it isn't already in that state, then Renew & Document's "Update
+ * Agreement" form (completeDocStage(...)) — always. Both are called
+ * SYNCHRONOUSLY against live Google Sheets (not the "Fast" Mongo-first
+ * variants the internal routes use) deliberately: completeDocStage does its
+ * own live Sheets read, and if saveExpiryAction had taken the Fast/outbox
+ * path, that read could still see the OLD status for several seconds
+ * (env.outboxPollMs) and fail with INVALID_STATE even though the transition
+ * "already happened." Calling the plain versions back-to-back means the
+ * second call is guaranteed to see the first call's write.
+ *
+ * Two real entry states reach this, and both are legitimate: a container
+ * fresh off Lease Expiry's pending list (needs BOTH steps — the common case,
+ * initiating a renewal straight from Sales OS with nothing done in Lease
+ * yet), or one an ops user already clicked "Renew" on and is sitting in
+ * Documents Pending waiting for exactly this paperwork (needs only the
+ * second step — skipping straight to saveExpiryAction here would wrongly
+ * return ALREADY_PROCESSED, since Update/column V is already stamped).
+ * Anything else (mid some OTHER workflow state) is refused rather than
+ * guessed at.
+ *
+ * `valid` is this container's entry from a FRESH getCompanyContainers() read
+ * (never the caller's own claim) — supplies `rowNum` so both calls address
+ * the exact Deployed row, same safety rule as every other write path in this
+ * codebase (a container number alone is not unique across lease cycles).
+ */
+async function renewOneContainer(user, valid, form) {
+  const containerNo = valid.containerNo;
+  if (!form.renewedDate) throw new AppError(`${containerNo}: Renewed Date is required.`);
+  if (!form.validTill) throw new AppError(`${containerNo}: Agreement Valid Till is required.`);
+
+  const currentStatus = safeStr(valid.status).trim().toLowerCase();
+  if (currentStatus === '') {
+    const nowIso = new Date().toISOString();
+    const moveResult = await saveExpiryAction(containerNo, nowIso, 'Documents Pending', user.email, valid.rowNum);
+    if (moveResult === 'ALREADY_PROCESSED') {
+      throw new AppError(`"${containerNo}" already has an action pending in Lease — refresh and try again.`);
+    }
+  } else if (currentStatus !== 'documents pending') {
+    throw new AppError(`"${containerNo}" is currently "${valid.status}" in Lease, not ready for a renewal — ask Lease ops to check it.`);
+  }
+  // else: already "Documents Pending" — the Renew step already happened
+  // (in-app or on an earlier attempt through this same flow), go straight
+  // to completeDocStage below.
+
+  const docResult = await completeDocStage(
+    containerNo,
+    form.renewedDate,
+    form.validTill,
+    form.signedCopyUrl || '',
+    form.remarks || '',
+    user.email,
+    form.poNo || '',
+    form.poFileUrl || '',
+    form.billingCycle || '',
+    user.email,
+    form.poValidity || '',
+    valid.rowNum
+  );
+  if (docResult === 'INVALID_STATE') {
+    throw new AppError(`"${containerNo}" could not be completed — its status changed unexpectedly. Refresh and try again.`);
+  }
+
   return {
     containerNo,
-    product: validContainer.product || '',
-    size: validContainer.size || '',
-    location: validContainer.location || '',
-    previousValidUpto: validContainer.validUpto || '',
-    fromDate,
-    toDate,
-    monthlyRent: toNum(input.monthlyRent),
-    totalValue: toNum(input.totalValue),
-    remark: safeStr(input.remark).trim()
+    renewedDate: form.renewedDate,
+    validTill: form.validTill,
+    signedCopyUrl: form.signedCopyUrl || '',
+    poNo: form.poNo || '',
+    poFileUrl: form.poFileUrl || '',
+    billingCycle: form.billingCycle || '',
+    poValidity: form.poValidity || '',
+    remarks: form.remarks || ''
   };
 }
 
 /**
- * POST /api/sso/sales-os/renewal — the final save. Re-validates every
- * requested container against a FRESH getCompanyContainers() read (same
- * defensive pattern as renewalHandoff.service.js#createRenewalLink — never
- * trust the client's container list), persists the renewal, and mirrors one
- * Renewal Log sheet row per container via expiry.service.js's existing,
- * already-correct _logRenewal appender.
+ * POST /api/sso/sales-os/renewal — the final save. `body.containers` is
+ * EITHER one form per container ({containerNo, renewedDate, validTill, ...})
+ * OR (bulk — the "one form applied to every selected container" mode the
+ * real Update Agreement modal already supports) an array of container
+ * numbers plus a single shared `form` object; both shapes are normalized to
+ * one call per container below. Every container is re-validated against a
+ * FRESH getCompanyContainers() read first — same defensive pattern as
+ * renewalHandoff.service.js#createRenewalLink, never trust the client's
+ * list. NOTE: this runs the SAME 'renew'/'expiry'-gated internal actions a
+ * logged-in ops user would — the SSO'd salesperson's own LMS identity
+ * (resolved by employeeCode) needs both permissions granted in Roles &
+ * Access, or this throws ACCESS_DENIED exactly as it would in-app.
  */
 export async function saveRenewal(user, body) {
   const existingLeadId = safeStr(body.existingLeadId).trim();
@@ -269,19 +367,14 @@ export async function saveRenewal(user, body) {
   const validContainers = await getCompanyContainers(link.resolvedCompanyName);
   const validByNo = new Map(validContainers.map((c) => [c.containerNo, c]));
 
-  const lines = requestedLines.map((raw) => {
+  const results = [];
+  for (const raw of requestedLines) {
     const containerNo = safeStr(raw.containerNo).trim();
     const valid = validByNo.get(containerNo);
     if (!valid) throw new AppError(`"${containerNo}" is not currently a live container for "${link.resolvedCompanyName}" — refresh and try again.`);
-    return buildContainerLine(raw, valid);
-  });
-
-  let signedAddendumUrl = '';
-  if (body.addendum?.base64Data) {
-    signedAddendumUrl = await uploadToDrive(body.addendum.base64Data, body.addendum.mimeType, body.addendum.fileName || `renewal-addendum-${Date.now()}`);
+    results.push(await renewOneContainer(user, valid, raw));
   }
 
-  const totalValue = lines.reduce((sum, l) => sum + (l.totalValue || 0), 0);
   const doc = {
     existingLeadId,
     leaseCompanyName: link.resolvedCompanyName,
@@ -293,26 +386,13 @@ export async function saveRenewal(user, body) {
     empId: user.empId,
     empEmail: user.email,
     empName: user.name,
-    containers: lines,
-    totalValue,
-    signedAddendumUrl: signedAddendumUrl || null,
+    containers: results,
     requestId: safeStr(body.requestId).trim() || null,
     createdAt: new Date(),
     createdBy: user.email
   };
 
   const { insertedId } = await getCollection(RENEWALS_COLLECTION).insertOne(doc);
-
-  for (const line of lines) {
-    await _logRenewal({
-      container: line.containerNo,
-      clientName: doc.clientName,
-      poNo: '', poFileUrl: '', agreementUrl: doc.signedAddendumUrl || '',
-      oldPoNo: '', oldPoFileUrl: '', oldAgreementUrl: '',
-      validTill: line.toDate, userEmail: user.email, source: 'Sales OS Renewal'
-    });
-  }
-
   return { id: String(insertedId), ...doc };
 }
 
@@ -343,9 +423,9 @@ export async function listRenewalsForSalesOs(query) {
     successType: d.successType,
     lm: d.lm,
     employeeCode: d.employeeCode,
+    // Each entry mirrors exactly what completeDocStage wrote to the Deployed
+    // sheet for that container — see renewOneContainer above.
     containers: d.containers,
-    totalValue: d.totalValue,
-    createdAt: d.createdAt,
-    signedAddendumUrl: d.signedAddendumUrl || null
+    createdAt: d.createdAt
   }));
 }

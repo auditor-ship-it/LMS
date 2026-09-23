@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth, setStoredToken, apiErrorMessage } from '../../shared/auth/index.js';
-import { Button, Icon, LoadingState, ErrorState, FileUpload, Select } from '../../components/ui/index.js';
+import { Button, Icon, LoadingState, ErrorState } from '../../components/ui/index.js';
 import { startSalesOsSso, confirmLeaseCompany, submitSalesOsRenewal } from '../../services/sso.service.js';
+import { uploadStageFile } from '../../services/upload.service.js';
+import { CompleteDocumentModal } from '../renewDocument/CompleteDocumentModal.jsx';
 import { ROUTES } from '../../constants/routes.js';
 import styles from './SsoSalesOsPage.module.css';
-
-const emptyLine = () => ({ fromDate: '', toDate: '', monthlyRent: '', totalValue: '', remark: '' });
-const SUCCESS_TYPES = ['Renewal', 'Up sell', 'Cross sell', 'AMC'].map((v) => ({ value: v, label: v }));
 
 /**
  * Landing page for the Sales OS ("Crystal Sales CRM" Existing Leads / KAM)
@@ -16,9 +15,16 @@ const SUCCESS_TYPES = ['Renewal', 'Up sell', 'Cross sell', 'AMC'].map((v) => ({ 
  * RequireAuth/AppShell (see app/App.jsx) — there is no session until this
  * page's own first call (POST /api/sso/sales-os/session) creates one by
  * employeeCode alone. See backend/src/services/salesOsRenewal.service.js
- * for what each step actually does server-side; this component is purely
- * the wizard shell around it: authenticating -> (company picker, only if
- * ambiguous) -> container checklist -> renewal form -> success.
+ * for what each step actually does server-side.
+ *
+ * Steps: authenticating -> (company picker, only if ambiguous) -> container
+ * checklist -> the SAME "Update Agreement" modal Renew & Document uses
+ * in-app (reused verbatim, bulk mode — one form applied to every selected
+ * container, exactly like RenewDocumentPage.jsx's own multi-select action)
+ * -> success. This is deliberately NOT a separate custom form: it must be
+ * the exact same fields, saved through the exact same backend actions, so a
+ * renewal entered via Sales OS looks identical in Lease to one entered by
+ * an ops user in-app — see salesOsRenewal.service.js#saveRenewal.
  */
 export function SsoSalesOsPage() {
   const [searchParams] = useSearchParams();
@@ -31,9 +37,9 @@ export function SsoSalesOsPage() {
   const [candidates, setCandidates] = useState([]);
   const [containers, setContainers] = useState([]);
   const [selected, setSelected] = useState(() => new Set());
-  const [lines, setLines] = useState({}); // containerNo -> line fields
-  const [shared, setShared] = useState({ successType: 'Renewal', lm: '' });
-  const [addendum, setAddendum] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [formBusy, setFormBusy] = useState(false);
+  const [formError, setFormError] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(null);
 
@@ -46,7 +52,6 @@ export function SsoSalesOsPage() {
         setStoredToken(res.token);
         await reload();
         setContext(res.context);
-        setShared({ successType: res.context.successType || 'Renewal', lm: res.context.lm || '' });
         if (res.companyMatch.status === 'matched') {
           setContainers(res.containers);
           setStep(res.containers.length ? 'containers' : 'no-containers');
@@ -90,67 +95,46 @@ export function SsoSalesOsPage() {
   const selectAll = () => setSelected(new Set(containers.map((c) => c.containerNo)));
   const clearAll = () => setSelected(new Set());
 
-  const proceedToForm = () => {
-    setLines((prev) => {
-      const next = { ...prev };
-      for (const containerNo of selected) if (!next[containerNo]) next[containerNo] = emptyLine();
-      return next;
-    });
-    setStep('form');
-  };
-
-  const updateLine = (containerNo, field, value) => {
-    setLines((prev) => ({ ...prev, [containerNo]: { ...prev[containerNo], [field]: value } }));
-  };
-
-  /** Copies From/To/Monthly Rent from the first selected line onto every
-   *  other selected line — the "shared fields + per-line overrides" the
-   *  wizard is meant to support without forcing identical retyping. */
-  const applyFirstToAll = () => {
-    const [first, ...rest] = [...selected];
-    if (!first || !rest.length) return;
-    const src = lines[first];
-    setLines((prev) => {
-      const next = { ...prev };
-      for (const containerNo of rest) {
-        next[containerNo] = { ...next[containerNo], fromDate: src.fromDate, toDate: src.toDate, monthlyRent: src.monthlyRent };
-      }
-      return next;
-    });
-  };
-
   const selectedContainers = useMemo(() => containers.filter((c) => selected.has(c.containerNo)), [containers, selected]);
-  const totalValue = useMemo(
-    () => selectedContainers.reduce((sum, c) => sum + (Number(lines[c.containerNo]?.totalValue) || 0), 0),
-    [selectedContainers, lines]
-  );
 
-  const submit = async () => {
-    setError('');
-    for (const c of selectedContainers) {
-      const line = lines[c.containerNo] || {};
-      if (!line.fromDate || !line.toDate) {
-        setError(`${c.containerNo}: From Date and To Date are required.`);
-        return;
-      }
-    }
-    setBusy(true);
+  /** Wired to CompleteDocumentModal's bulk `onSubmit` — same shape
+   *  RenewDocumentPage.jsx#handleBulkDocSubmit uses: upload whatever files
+   *  were chosen ONCE, then apply the same form values to every selected
+   *  container. */
+  const handleFormSubmit = async (form) => {
+    setFormBusy(true);
+    setFormError('');
     try {
+      const [signedCopyUrl, poFileUrl] = await Promise.all([
+        form.signedCopy ? uploadStageFile(form.signedCopy) : '',
+        form.poFile ? uploadStageFile(form.poFile) : ''
+      ]);
+
       const res = await submitSalesOsRenewal({
         existingLeadId: context.existingLeadId,
-        successType: shared.successType,
-        lm: shared.lm,
+        successType: context.successType,
+        lm: context.lm,
         clientName: context.clientName,
         requestId: context.requestId,
-        containers: selectedContainers.map((c) => ({ containerNo: c.containerNo, ...lines[c.containerNo] })),
-        addendum: addendum || undefined
+        containers: selectedContainers.map((c) => ({
+          containerNo: c.containerNo,
+          renewedDate: form.renewedDate,
+          validTill: form.validTill,
+          signedCopyUrl,
+          poNo: form.poNo,
+          poFileUrl,
+          billingCycle: form.billingCycle,
+          poValidity: form.poValidity,
+          remarks: form.remarks
+        }))
       });
       setSaved(res);
+      setFormOpen(false);
       setStep('success');
     } catch (e) {
-      setError(apiErrorMessage(e));
+      setFormError(apiErrorMessage(e));
     } finally {
-      setBusy(false);
+      setFormBusy(false);
     }
   };
 
@@ -220,82 +204,14 @@ export function SsoSalesOsPage() {
             ))}
           </ul>
           <div className={styles.footer}>
-            <Button type="button" variant="primary" disabled={!selected.size} onClick={proceedToForm}>
+            <Button
+              type="button"
+              variant="primary"
+              disabled={!selected.size}
+              onClick={() => { setFormError(''); setFormOpen(true); }}
+            >
               Continue{selected.size ? ` (${selected.size})` : ''}
             </Button>
-          </div>
-        </section>
-      )}
-
-      {step === 'form' && (
-        <section className={styles.card}>
-          <div className={styles.sharedRow}>
-            <label className={styles.field}>
-              <span className={styles.label}>Success Type</span>
-              <Select
-                value={shared.successType}
-                onChange={(v) => setShared((s) => ({ ...s, successType: v }))}
-                options={SUCCESS_TYPES}
-                ariaLabel="Success Type"
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.label}>LM</span>
-              <input className={styles.input} value={shared.lm} onChange={(e) => setShared((s) => ({ ...s, lm: e.target.value }))} />
-            </label>
-            {selectedContainers.length > 1 && (
-              <button type="button" className={styles.linkBtn} onClick={applyFirstToAll}>
-                Copy first line's dates &amp; rent to all
-              </button>
-            )}
-          </div>
-
-          {selectedContainers.map((c) => {
-            const line = lines[c.containerNo] || emptyLine();
-            return (
-              <fieldset key={c.containerNo} className={styles.lineCard}>
-                <legend className={styles.lineTitle}>
-                  {c.containerNo}
-                  {c.product ? ` · ${c.product}` : ''}
-                  {c.size ? ` · ${c.size}` : ''}
-                  {c.validUpto ? ` · prev. valid ${c.validUpto}` : ''}
-                </legend>
-                <div className={styles.lineGrid}>
-                  <label className={styles.field}>
-                    <span className={styles.label}>From Date</span>
-                    <input type="date" className={styles.input} value={line.fromDate} onChange={(e) => updateLine(c.containerNo, 'fromDate', e.target.value)} required />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.label}>To Date</span>
-                    <input type="date" className={styles.input} value={line.toDate} onChange={(e) => updateLine(c.containerNo, 'toDate', e.target.value)} required />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.label}>Monthly Rent</span>
-                    <input type="number" min="0" className={styles.input} value={line.monthlyRent} onChange={(e) => updateLine(c.containerNo, 'monthlyRent', e.target.value)} />
-                  </label>
-                  <label className={styles.field}>
-                    <span className={styles.label}>Total Value</span>
-                    <input type="number" min="0" className={styles.input} value={line.totalValue} onChange={(e) => updateLine(c.containerNo, 'totalValue', e.target.value)} />
-                  </label>
-                  <label className={`${styles.field} ${styles.fieldWide}`}>
-                    <span className={styles.label}>Remark</span>
-                    <input className={styles.input} value={line.remark} onChange={(e) => updateLine(c.containerNo, 'remark', e.target.value)} />
-                  </label>
-                </div>
-              </fieldset>
-            );
-          })}
-
-          <div className={styles.addendumRow}>
-            <FileUpload label={addendum ? 'Change signed addendum' : 'Upload signed addendum'} onSelected={setAddendum} accept=".pdf,.jpg,.jpeg,.png" />
-          </div>
-
-          {totalValue > 0 && <p className={styles.totalLine}>Total value: {totalValue.toLocaleString('en-IN')}</p>}
-          {error && <p className={styles.error}>{error}</p>}
-
-          <div className={styles.footer}>
-            <Button type="button" variant="secondary" disabled={busy} onClick={() => setStep('containers')}>Back</Button>
-            <Button type="button" variant="primary" loading={busy} onClick={submit}>Save Renewal</Button>
           </div>
         </section>
       )}
@@ -311,6 +227,19 @@ export function SsoSalesOsPage() {
           </div>
         </section>
       )}
+
+      {/* The EXACT "Update Agreement" modal used in-app (Renew & Document
+          page), reused as-is in its bulk mode — one form, applied to every
+          selected container. See handleFormSubmit above for how it's wired
+          into the SSO save. */}
+      <CompleteDocumentModal
+        open={formOpen}
+        items={selectedContainers.map((c) => ({ containerNo: c.containerNo }))}
+        submitting={formBusy}
+        error={formError}
+        onClose={() => setFormOpen(false)}
+        onSubmit={handleFormSubmit}
+      />
     </div>
   );
 }
