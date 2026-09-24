@@ -373,6 +373,11 @@ const OL_RETURN_PO_COLS = [317, 318, 319];
  *  above. Added 2026-09-23 (explicit request). */
 const OL_CONTAINER_PHOTOS_COL = 336;
 
+/** Stage 1A's "Client to Client" decision (alongside Approve/Send Back/
+ *  Reject) — the new client this container is going straight to. Added
+ *  2026-09-23 (explicit request). See saveOffLeaseApprovalClientToClient. */
+const OL_CLIENT_TO_CLIENT_NAME_COL = 337;
+
 /**
  * Billing Reconciliation's (internal Stage 5) own data fields. NOT part of
  * OL_STAGE_INFO[5]'s startCol..endCol range (29..44) — that range's LAST four
@@ -3095,12 +3100,51 @@ function _moveColumnValues(shaped, userEmail, stamp) {
 }
 
 /**
- * Manual alternate-disposition move for Transportation (internal stage 6): a
- * container that never goes through Crystal's own FMS-tracked transport
- * chain (STAGE-8/9/10) — a direct client-to-client transfer, or some other
- * movement type — has no STAGE-10 delivery to bypass it out of the Stage 2
- * queue the normal way.
+ * Server-side twin of the frontend's `fmsFound` gate (StageDetailModal.jsx's
+ * MoveToStageSection) — explicit, twice-confirmed request 2026-09-24: the UI
+ * disabling the form is a convenience, not the real check, so the write path
+ * itself must refuse a Move To Stage until a real STAGE-8 movement record
+ * has actually been found for this container. Same matcher
+ * (getMatchedFmsForContainer -> matchRow) the FMS status dots and the
+ * frontend gate both already use, so backend and UI can never disagree about
+ * "found" vs "not found".
  *
+ * Fails CLOSED, not open, on a read error — unlike a typical best-effort FMS
+ * read elsewhere in this file, the whole point here is a POSITIVE
+ * confirmation gate: "STAGE-8 not checked" and "STAGE-8 read failed" are
+ * both just "not confirmed found", so both must block the same as a genuine
+ * not-found, never silently let the write through.
+ */
+async function _assertStage8MovementFound(containerNo, clientName) {
+  let fms;
+  try {
+    fms = await getMatchedFmsForContainer(containerNo, clientName);
+  } catch (e) {
+    throw new AppError('Could not confirm a STAGE-8 movement record for this container — try again once the FMS check succeeds.');
+  }
+  if (!fms?.movement) {
+    throw new AppError('No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.');
+  }
+}
+
+/**
+ * Manual alternate-disposition move for Transportation (internal stage 6) —
+ * a direct client-to-client transfer, or some other movement type — that
+ * needs to skip whatever normally sits between Transportation and its real
+ * destination stage.
+ *
+ * GATED ON STAGE-8 BEING FOUND, not absent — explicit, twice-confirmed
+ * request 2026-09-24 (a deliberate reversal of this feature's original
+ * framing, which was "for containers with no STAGE-8 record at all"): this
+ * function now REJECTS the move unless a real STAGE-8 movement record has
+ * already been matched for this container+client (see
+ * _assertStage8MovementFound just above). A container with no STAGE-8
+ * record yet simply stays "Pending" in Transportation — shown with an
+ * explicit "Stage 8 Fetch Pending" label (FmsDots, StagePageBase.jsx) — and
+ * this whole action is unavailable until one is fetched, enforced here as
+ * well as by the frontend's own `fmsFound` gate (StageDetailModal.jsx).
+ *
+
  * All three reasons record moveToStage (a DISPLAY stage number: 3, 4 or 5) as
  * the container's real destination stage (Gate In / Inspection / Billing)
  * plus a Date, and the record appears there directly — see _jumpSkipsStage's
@@ -3136,6 +3180,7 @@ export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEma
 
     const row = rows[rn - 2] || [];
     if (_isMovedOut(row)) return 'ALREADY_PROCESSED';
+    await _assertStage8MovementFound(containerNo, safeStr(row[5]));
 
     const stamp = dmyTime(new Date());
     const values = _moveColumnValues(shaped, userEmail, stamp);
@@ -3189,6 +3234,7 @@ export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, use
   const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
   if (_isMovedOut(found.row)) return 'ALREADY_PROCESSED';
+  await _assertStage8MovementFound(containerNo, safeStr(found.row[5]));
 
   const stamp = dmyTime(new Date());
   const values = _moveColumnValues(shaped, userEmail, stamp);
@@ -4540,7 +4586,20 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
 /* =============================================
    PENDING APPROVAL QUEUE (between Stage 1 and Stage 2)
 ============================================= */
-export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
+/**
+ * `filter`: undefined/'' (default) = still-pending rows (blank Approval
+ * Status) — the normal "Pending Approval" list. 'clientToClient' = the
+ * OPPOSITE: rows already resolved via the "Client to Client" decision
+ * (see saveOffLeaseApprovalClientToClient) — explicit request 2026-09-23,
+ * "par stage samee stage pe hi dikhega" (it should still show, at the same
+ * stage): unlike a normal Approve, that decision deliberately does NOT write
+ * "approved" into the Approval Status column (so the container never
+ * releases into Stage 2's queue — see the intimation-approval gate check in
+ * getOffLeaseData), so without this second view those records would vanish
+ * from Stage 1A entirely the moment they're decided, with nowhere left to
+ * see them.
+ */
+export async function getOffLeaseApprovalData(user, preFetchedSheetData, filter) {
   await _ensureOffLeaseSheet();
   // Display-only list read — safe to serve from the Mongo mirror (Phase 1b).
   // preFetchedSheetData: see getOffLeaseData's opts.sheetData doc comment —
@@ -4561,14 +4620,17 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
      request 2026-09-23, see OL_CONTAINER_PHOTOS_COL. Not a date column, and
      its label carries no rate/amount keyword, so it needs no other special
      handling here: renderCellValue on the frontend already turns any
-     URL-shaped cell into a clickable "Open file" link on its own. */
-  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336];
+     URL-shaped cell into a clickable "Open file" link on its own. 337
+     ("Client to Client — New Client Name") is blank on every normal pending
+     row, only ever filled by the clientToClient decision itself — harmless
+     to always include. */
+  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337];
   const dateCols = new Set([7, 8, 10, 11, 13]);
   const displayHeaders = [
     'Container No', 'Lease ID', 'Size', 'Type', 'Client Code', 'Client Name',
     'Location', 'Deployed Date', 'Valid Upto', 'Rate',
     'OL Intimation Date', 'OL Date', 'Email Notification', 'Final Billing Date',
-    'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos'
+    'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name'
   ];
 
   // Stage 1's own completion timestamp — 2 columns before its status column,
@@ -4578,6 +4640,7 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
   // always the real moment the case entered Stage 1A, never a guess.
   const s1TsCol = stage1StatusCol - 2;
   const approvalBudget = SLA_MS.approval;
+  const wantClientToClient = filter === 'clientToClient';
 
   const finalData = [];
   for (let i = 0; i < rows.length; i++) {
@@ -4589,27 +4652,31 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData) {
     const s1Status = row[stage1StatusCol];
     if (!s1Status || String(s1Status).trim().toLowerCase() !== 'completed') continue;
 
-    const apprStatus = row[approvalStatusCol];
-    if (apprStatus && String(apprStatus).trim().toLowerCase() !== '') continue;
+    const apprStatus = String(row[approvalStatusCol] || '').trim().toLowerCase();
+    if (wantClientToClient) { if (apprStatus !== 'client to client') continue; }
+    else if (apprStatus !== '') continue;
 
     const displayRow = displayIndices.map((ci) => (dateCols.has(ci) ? fmtCell(row[ci]) : safeStr(row[ci])));
 
-    /* TAT — every row here is by definition still pending (the apprStatus
-       blank filter above), so this is always a live "Running" duration
-       against the 1h approval budget, never a frozen "Completed" one. */
-    const start = parseStamp(safeStr(row[s1TsCol]).trim());
+    /* TAT — meaningful only for the still-pending view (every row there is a
+       live "Running" duration against the 1h approval budget); the
+       Client to Client view shows already-resolved rows, so there's no
+       "waiting" duration left to report. */
     let tat = null;
-    if (start) {
-      const elapsed = Date.now() - start.getTime();
-      tat = {
-        startedAt: start.toISOString(),
-        budget: budgetLabel(approvalBudget),
-        elapsed: humanize(elapsed),
-        elapsedMs: elapsed,
-        delayed: elapsed > approvalBudget,
-        overdueBy: elapsed > approvalBudget ? humanize(elapsed - approvalBudget) : '',
-        completed: false
-      };
+    if (!wantClientToClient) {
+      const start = parseStamp(safeStr(row[s1TsCol]).trim());
+      if (start) {
+        const elapsed = Date.now() - start.getTime();
+        tat = {
+          startedAt: start.toISOString(),
+          budget: budgetLabel(approvalBudget),
+          elapsed: humanize(elapsed),
+          elapsedMs: elapsed,
+          delayed: elapsed > approvalBudget,
+          overdueBy: elapsed > approvalBudget ? humanize(elapsed - approvalBudget) : '',
+          completed: false
+        };
+      }
     }
     finalData.push({ row: displayRow, _rowNum: i + 2, tat });
   }
@@ -4736,6 +4803,90 @@ export async function saveOffLeaseApprovalActionFast(containerNo, status, userEm
   await enqueueSheetReplay('offlease.saveOffLeaseApprovalAction', [containerNo, status, userEmail, remarks, resolvedRow], { actor: userEmail });
 
   return 'OK';
+}
+
+/**
+ * Stage 1A's "Client to Client" decision — a 4th outcome alongside Approve/
+ * Send Back/Reject, explicit request 2026-09-23: the container is going
+ * straight to a different client instead of physically returning, so there
+ * is nothing left for Stage 2 onward to do. Deliberately writes "Client to
+ * Client" into the Approval Status column, NOT "Approved" — the
+ * intimation-approval gate every later stage checks in getOffLeaseData
+ * requires that column to read exactly "approved" (case-insensitive) before
+ * releasing a row into its queue, so this value keeps the record out of
+ * Stage 2+ entirely ("stage aage nahi badega"), while still updating the
+ * Master workbook to Off-Lease via _syncOffLeaseRowToMaster, same as a real
+ * Approve — the container HAS genuinely gone off-lease. The record stays
+ * visible on Stage 1A afterward via getOffLeaseApprovalData's
+ * filter='clientToClient' view ("par stage samee stage pe hi dikhega"),
+ * not lost by falling out of Pending Approval.
+ *
+ * Live-only (no separate Fast/Mongo-first path) — this is a much
+ * lower-frequency decision than Approve/Reject, so the small extra latency
+ * of a live Sheets read here isn't worth a second code path to keep in sync.
+ */
+export async function saveOffLeaseApprovalClientToClient(containerNo, clientName, remarks, userEmail, knownRow) {
+  await checkActionPermission('offleaseapproval', userEmail);
+  const name = safeStr(clientName).trim();
+  if (!name) throw new AppError('Client Name is required');
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { headers, rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const statusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+    const timestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+    const userCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+    const remarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+
+    if (statusCol < 0 || timestampCol < 0 || userCol < 0) {
+      console.error(`[OL-APPROVAL] ERROR: statusCol=${statusCol} timestampCol=${timestampCol} userCol=${userCol}`);
+      throw new AppError('Approval columns not found in sheet. Please check headers.');
+    }
+
+    const row = rows[rn - 2] || [];
+    const curStatus = row[statusCol];
+    if (curStatus && String(curStatus).trim() !== '') return 'ALREADY_PROCESSED';
+
+    const updates = [
+      { range: `'${OL_SHEET}'!${colLetter(statusCol)}${rn}`, values: [['Client to Client']] },
+      { range: `'${OL_SHEET}'!${colLetter(timestampCol)}${rn}`, values: [[dmyTime(new Date())]] },
+      { range: `'${OL_SHEET}'!${colLetter(userCol)}${rn}`, values: [[userEmail || '']] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_CLIENT_TO_CLIENT_NAME_COL)}${rn}`, values: [[name]] }
+    ];
+    const rmk = safeStr(remarks).trim();
+    if (rmk && remarkCol >= 0) updates.push({ range: `'${OL_SHEET}'!${colLetter(remarkCol)}${rn}`, values: [[rmk]] });
+    await batchUpdateValues(updates);
+    console.log(`[OL-APPROVAL] Client to Client: rn=${rn} newClient=${name} user=${userEmail}`);
+
+    /* Mirror into Mongo immediately — this is a live-only write (no Fast/
+       Mongo-first path), so without this the record would keep showing as
+       "Pending" for up to 5 minutes (the reconcile cadence) despite already
+       being decided on the real sheet. Best-effort: reconcile is still the
+       source of truth. */
+    try {
+      const patch = {
+        [`row.${statusCol}`]: 'Client to Client',
+        [`row.${OL_CLIENT_TO_CLIENT_NAME_COL}`]: name
+      };
+      if (rmk && remarkCol >= 0) patch[`row.${remarkCol}`] = rmk;
+      await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: { ...patch, updatedAt: new Date() } });
+    } catch (e) {
+      console.error('[OL-APPROVAL] Client to Client mirror patch failed (reconcile will correct):', e?.message || e);
+    }
+
+    try {
+      const syncRes = await _syncOffLeaseRowToMaster(rn, 'Client to Client');
+      console.log(`[OL-APPROVAL] Client to Client instant sync result: ${syncRes}`);
+    } catch (e) {
+      console.error('[OL-APPROVAL] Client to Client instant sync FAIL:', e?.message || e);
+    }
+
+    return 'OK';
+  });
 }
 
 /**
@@ -5039,12 +5190,15 @@ export async function saveOffLeaseSendBackFromBilling(containerNo, userEmail, re
 
 /** INSTANT single-row sync: one OL Tracking row -> Master Sheet (a SEPARATE
  *  spreadsheet, EXTERNAL_SPREADSHEETS.MASTER_WORKBOOK), immediately.
- *  APPROVED -> L/M = "Offlease" + AC = date + container_master_logs row.
- *  REJECTED -> L/M = "Lease" (stays on lease). AC/logs/Deployed untouched.
- *  In both cases ED = "Marked" so the hourly job (out of this port's scope)
- *  does not reprocess it. */
+ *  APPROVED (or CLIENT TO CLIENT — explicit request 2026-09-23: the
+ *  container genuinely has gone off-lease, just straight to a different
+ *  client instead of physically returning, so Master must show the same
+ *  Off-Lease status either way) -> L/M = "Offlease" + AC = date +
+ *  container_master_logs row. REJECTED -> L/M = "Lease" (stays on lease).
+ *  AC/logs/Deployed untouched. In both cases ED = "Marked" so the hourly job
+ *  (out of this port's scope) does not reprocess it. */
 export async function _syncOffLeaseRowToMaster(rn, status) {
-  const isApproved = String(status).trim().toLowerCase() === 'approved';
+  const isApproved = ['approved', 'client to client'].includes(String(status).trim().toLowerCase());
   const ssId = EXTERNAL_SPREADSHEETS.MASTER_WORKBOOK.ssId;
 
   const olRow = (await getRange(OL_SHEET, `A${rn}:L${rn}`))[0] || [];

@@ -1,13 +1,15 @@
 import {
-  getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, sendBackFromApproval, getOffLeaseContainerDetail,
+  getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, sendBackFromApproval, saveApprovalClientToClient, getOffLeaseContainerDetail,
   addToOffLeaseTracking, getOffLeaseDashboardData,
   getMovementSourceContainers, getMovementSourceContainer, getStage9Movements, saveStage9Movement,
   getRemarkThread, addRemark, updateRemark, deleteRemark, exportToGoogleSheet
 } from '../api/offlease.api.js';
 import { invalidate } from '../shared/dataBus.js';
 
-export async function fetchApprovalQueue() {
-  return getOffLeaseApprovalData();
+/** `filter='clientToClient'` — the already-decided sub-view; omitted, the
+ *  normal still-pending list. */
+export async function fetchApprovalQueue(filter) {
+  return getOffLeaseApprovalData(filter);
 }
 /* invalidate('off-lease') on every real data write here — same 'off-lease'
    choke point stage.service.js's own stage mutations use, so Off-Lease
@@ -28,6 +30,11 @@ export async function sendRejectedBackToStage1(containerNo, rowNum) {
 }
 export async function sendBackToStage1FromApproval(containerNo, remarks, rowNum) {
   const res = await sendBackFromApproval(containerNo, remarks, rowNum);
+  invalidate('off-lease');
+  return res;
+}
+export async function decideClientToClient(containerNo, clientName, remarks, rowNum) {
+  const res = await saveApprovalClientToClient(containerNo, clientName, remarks, rowNum);
   invalidate('off-lease');
   return res;
 }

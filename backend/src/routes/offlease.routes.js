@@ -61,6 +61,9 @@ router.post('/:containerNo/approval', asyncHandler(offLeaseController.saveApprov
    action above, which now cancels it outright). Explicit request
    2026-09-11; see saveOffLeaseSendBackFromApproval's doc comment. */
 router.post('/:containerNo/approval/send-back', asyncHandler(offLeaseController.sendBackFromApproval));
+/* Stage 1A's "Client to Client" decision — explicit request 2026-09-23; see
+   saveOffLeaseApprovalClientToClient's own doc comment. */
+router.post('/:containerNo/approval/client-to-client', asyncHandler(offLeaseController.saveApprovalClientToClient));
 
 /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
    stages (see saveOffLeaseSendBackFromBilling's doc comment). Declared

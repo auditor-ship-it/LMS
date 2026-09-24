@@ -75,6 +75,16 @@
  * only ever has one file to open (see getOffLeaseApprovalData's
  * displayIndices/displayHeaders in offlease.service.js, which surface it
  * there).
+ *
+ * Index 337 ("Client to Client - New Client Name") is the same kind of
+ * deliberate, hand-added exception — added 2026-09-23 for Stage 1A's own
+ * "Client to Client" decision (alongside Approve/Send Back/Reject): the
+ * container is going straight to a different client instead of physically
+ * returning, so it's recorded here and the Approval Status column gets
+ * "Client to Client" instead of "Approved" — which deliberately keeps it OUT
+ * of Stage 2 onward's queues (see the intimation-approval gate check in
+ * getOffLeaseData) while still updating the Master workbook to Off-Lease,
+ * same as a normal Approve (see saveOffLeaseApprovalClientToClient).
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -165,5 +175,5 @@ export const OL_HEADERS = [
   "Transportation Amount Paid", "Total Outstanding Paid", "Inspection/Quotation Amount Paid", "Inspection/Quotation Payment Proof",
   "Transportation Payment Proof", "Total Outstanding Payment Proof",
   "LR Return Transportation Remark", "LR Return Transportation Timestamp", "LR Return Transportation User", "LR Return Transportation Status",
-  "Container Photos (PDF)",
+  "Container Photos (PDF)", "Client to Client - New Client Name",
 ];

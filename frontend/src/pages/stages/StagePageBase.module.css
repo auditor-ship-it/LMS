@@ -91,6 +91,21 @@
   align-items: center;
   white-space: nowrap;   /* the chain must never wrap mid-pipeline */
 }
+/* Explicit text label under the dots when STAGE-8 has no record yet —
+   explicit request 2026-09-24: the dot alone (a small "8" circle with a
+   hover-only tooltip) wasn't a clear enough status on its own. */
+.stage8Pending {
+  display: block;
+  margin-top: 2px;
+  padding: 1px 7px;
+  border-radius: var(--r-full);
+  background: var(--warn-bg, #fff7e6);
+  color: var(--warn, #b7791f);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  width: fit-content;
+}
 .dotWrap { display: inline-flex; align-items: center; }
 .dotLine {
   width: 10px;

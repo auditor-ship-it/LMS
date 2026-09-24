@@ -14,6 +14,14 @@
   flex-wrap: wrap;
   margin-bottom: 12px;
 }
+/* Month + Search as one unit — they wrap together (or not at all) instead of
+   the Month filter isolating onto its own line above Search. */
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
 
 /* Active KPI filter — click to clear. */
