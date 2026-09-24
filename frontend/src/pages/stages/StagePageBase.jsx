@@ -84,22 +84,28 @@ function FmsDots({ item }) {
     [10, 'Site Delivery', item?.delivery]
   ];
   return (
-    <span className={styles.dots}>
-      {steps.map(([n, label, value], i) => {
-        const state = dotState(value);
-        return (
-          <span key={n} className={styles.dotWrap}>
-            {i > 0 && <span className={`${styles.dotLine} ${dotState(steps[i - 1][2]) === 'found' ? styles.dotLineDone : ''}`} />}
-            <span
-              className={`${styles.dot} ${styles[`dot_${state}`]}`}
-              title={`Stage ${n} — ${label}: ${DOT_TITLE[state]}`}
-            >
-              {n}
+    <>
+      <span className={styles.dots}>
+        {steps.map(([n, label, value], i) => {
+          const state = dotState(value);
+          return (
+            <span key={n} className={styles.dotWrap}>
+              {i > 0 && <span className={`${styles.dotLine} ${dotState(steps[i - 1][2]) === 'found' ? styles.dotLineDone : ''}`} />}
+              <span
+                className={`${styles.dot} ${styles[`dot_${state}`]}`}
+                title={`Stage ${n} — ${label}: ${DOT_TITLE[state]}`}
+              >
+                {n}
+              </span>
             </span>
-          </span>
-        );
-      })}
-    </span>
+          );
+        })}
+      </span>
+      {/* Explicit request 2026-09-24: a clear text status, not just the dot's
+          hover tooltip — this is also exactly the condition that locks
+          MoveToStageSection (StageDetailModal.jsx) until it clears. */}
+      {dotState(item?.movement) === 'missing' && <span className={styles.stage8Pending}>Stage 8 Fetch Pending</span>}
+    </>
   );
 }
 

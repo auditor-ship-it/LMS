@@ -1,7 +1,10 @@
 import { apiClient } from '../shared/auth/index.js';
 
-/** GET /api/offlease/approval — Pending Approval queue (between Stage 1 and Stage 2). */
-export const getOffLeaseApprovalData = () => apiClient.get('/offlease/approval').then((r) => r.data);
+/** GET /api/offlease/approval — Pending Approval queue (between Stage 1 and
+ *  Stage 2). `filter='clientToClient'` — the already-decided "Client to
+ *  Client" sub-view instead (see saveApprovalClientToClient's doc comment). */
+export const getOffLeaseApprovalData = (filter) =>
+  apiClient.get('/offlease/approval', filter ? { params: { filter } } : undefined).then((r) => r.data);
 
 /** POST /api/offlease/:containerNo/approval — status: 'Approved' | 'Rejected'.
  *  `remarks` (RejectModal) is only ever meaningful when status is 'Rejected'.
@@ -23,6 +26,15 @@ export const sendRejectedToStage1 = (containerNo, rowNum) =>
  *  cancels it outright). `remarks` carries onto Stage 1's own Remark field. */
 export const sendBackFromApproval = (containerNo, remarks, rowNum) =>
   apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval/send-back`, { remarks, rowNum }).then((r) => r.data.message);
+
+/** POST /api/offlease/:containerNo/approval/client-to-client — Stage 1A's 4th
+ *  decision alongside Approve/Send Back/Reject: the container is going
+ *  straight to a different client instead of physically returning. Writes
+ *  "Client to Client" (not "Approved") into the Approval Status column, so
+ *  it never releases into Stage 2's queue, while still marking the Master
+ *  workbook Off-Lease like a real Approve. `clientName` required. */
+export const saveApprovalClientToClient = (containerNo, clientName, remarks, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/approval/client-to-client`, { clientName, remarks, rowNum }).then((r) => r.data.message);
 
 /** GET /api/offlease/:containerNo/outstanding — Tally outstanding, proxied
  *  through our backend so the Accounts & Collection credentials stay server-side. */

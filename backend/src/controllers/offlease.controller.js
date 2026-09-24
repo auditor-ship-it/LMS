@@ -209,8 +209,11 @@ export async function saveSendBackToStage1(req, res) {
 
 /* ---- Pending Approval queue ---- */
 
+/** ?filter=clientToClient — the "Client to Client" sub-view (already-decided
+ *  rows, see getOffLeaseApprovalData's own doc comment); omitted, the normal
+ *  still-pending list. */
 export async function getApprovalData(req, res) {
-  res.json(await offLeaseService.getOffLeaseApprovalData(req.user));
+  res.json(await offLeaseService.getOffLeaseApprovalData(req.user, undefined, req.query.filter));
 }
 
 export async function saveApprovalAction(req, res) {
@@ -227,6 +230,14 @@ export async function saveApprovalAction(req, res) {
   const message = String(status || '').trim().toLowerCase() === 'rejected'
     ? await offLeaseService.saveOffLeaseRejectAndCancel(req.params.containerNo, req.user.email, remarks, rowNum)
     : await offLeaseService.saveOffLeaseApprovalActionFast(req.params.containerNo, status, req.user.email, remarks, rowNum);
+  res.json({ message });
+}
+
+/** Stage 1A's "Client to Client" decision — explicit request 2026-09-23, see
+ *  saveOffLeaseApprovalClientToClient's own doc comment. */
+export async function saveApprovalClientToClient(req, res) {
+  const { clientName, remarks, rowNum } = req.body;
+  const message = await offLeaseService.saveOffLeaseApprovalClientToClient(req.params.containerNo, clientName, remarks, req.user.email, rowNum);
   res.json({ message });
 }
 

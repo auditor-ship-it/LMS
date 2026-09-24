@@ -91,13 +91,51 @@ const EXPIRY_ORDMAP_TTL_SECS = 300;
 
 const _normClient = (v) => safeStr(v).trim().toLowerCase();
 
+/* External FMS workbook's STAGE-9 tab — checked FIRST, ahead of this app's
+   own Operation sheet/New Lease. Explicit request 2026-09-24, confirmed live
+   on CRIU4025277: Operation sheet said OR251, but STAGE-9 carries its OWN
+   "Lease" movement row for the exact same container + exact same client
+   ("Orbicular Pharmaceutical Technologies Pvt Ltd") reading OR419 instead —
+   two systems disagreeing on the same container's real order number.
+   STAGE-9 is treated as the more authoritative one: it's Movement-Type-
+   scoped ("Lease" only, so an Offlease/Sale/Internal Movement row for a
+   reused container number can never leak in — the exact class of bug
+   getDeliveredKeys/matchByContainer elsewhere in this app already guards
+   against), whereas Operation sheet's own "Order No." column has no such
+   scoping and can drift when the sheet is edited by hand. Column indices
+   match stage8.service.js's own S9 map (ORDER_RECEIVED=1, MOVEMENT_TYPE=29,
+   CONTAINER=31, CLIENT=36) — kept as literals here rather than importing
+   that file's private constant, since this reads STAGE-9 for a completely
+   unrelated purpose (Order No, not FMS movement/transport matching). */
+const STAGE9_LEASE_ORDER = { ORDER_RECEIVED: 1, MOVEMENT_TYPE: 29, CONTAINER: 31, CLIENT: 36 };
+
 export async function _expiryOrderNoMap() {
-  // cacheGetOrLoad: this reads TWO sheets and is called on every Lease
+  // cacheGetOrLoad: this reads several sheets and is called on every Lease
   // Expiry page load — several tabs/users opening it in the same moment
   // used to mean that many independent copies of both reads.
   return cacheGetOrLoad(EXPIRY_ORDMAP_CACHE_KEY, EXPIRY_ORDMAP_TTL_SECS, async () => {
     const map = {};      // container-only key -> Order No (legacy shape, kept for containers that only ever appear under one client)
     const byClient = {}; // "containerKey::clientName" -> Order No — disambiguates a reused container number
+
+    try {
+      const { rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
+      for (const row of rows) {
+        if (safeStr(row[STAGE9_LEASE_ORDER.MOVEMENT_TYPE]).trim().toLowerCase() !== 'lease') continue;
+        const o = safeStr(row[STAGE9_LEASE_ORDER.ORDER_RECEIVED]).trim();
+        if (!o) continue;
+        const client = _normClient(row[STAGE9_LEASE_ORDER.CLIENT]);
+        for (const part of _splitContainers(row[STAGE9_LEASE_ORDER.CONTAINER])) {
+          const k = _normKey(part);
+          if (!k) continue;
+          if (!map[k]) map[k] = o; // STAGE-9 (Lease) takes priority over every source below
+          if (client) {
+            const ck = `${k}::${client}`;
+            if (!byClient[ck]) byClient[ck] = o;
+          }
+        }
+      }
+    } catch (e) { /* never break the expiry screen — falls through to Operation sheet/New Lease below */ }
+
     for (const sheetName of EXPIRY_ORDER_SOURCES) {
       try {
         // Read-only map-building, no write ever derives a row number from

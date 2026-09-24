@@ -392,17 +392,32 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   />
                 ))}
 
-              {/* Alternate-disposition closeout for containers that never go
-                  through the FMS-tracked transport chain at all (a direct
-                  client-to-client transfer, or some other movement type) —
-                  see saveOffLeaseMoveToStage's doc comment on the backend.
-                  Reads nothing from STAGE-8/9/10; only ever writes to this
-                  container's own Off-Lease Tracking row. */}
+              {/* Alternate-disposition closeout — see saveOffLeaseMoveToStage's
+                  doc comment on the backend. Reads nothing from STAGE-8/9/10
+                  itself; only ever writes to this container's own Off-Lease
+                  Tracking row.
+                  `fmsChecked` (explicit request 2026-09-24): the form stays
+                  locked until the STAGE-8 check above has actually resolved
+                  (found or not) — it must never be usable before the system
+                  has even looked. `fmsFound` (explicit, twice-confirmed
+                  request 2026-09-24 — REVERSED from this feature's original
+                  "escape hatch for containers with none" design after the
+                  second confirmation): the form only UNLOCKS once STAGE-8 IS
+                  found for this container; it stays locked, not even
+                  submittable, while there is no STAGE-8 record yet. A
+                  container with no STAGE-8 record keeps showing as "Pending"
+                  in Transportation (with an explicit "Stage 8 Fetch Pending"
+                  label — see FmsDots in StagePageBase.jsx) until one lands.
+                  Enforced again server-side in saveOffLeaseMoveToStage/Fast,
+                  not just here — this UI gate is a convenience, not the real
+                  check. */}
               {identityOnly && (
                 <MoveToStageSection
                   containerNo={containerNo}
                   rowNum={rowNum}
                   canMove={canAct(`offlease${stageNumber}`)}
+                  fmsChecked={suppliedFms || !fmsLoading}
+                  fmsFound={!!fmsMovement}
                   alreadyMoved={data?._move}
                   onMoved={() => { onSaved?.(); onClose(); }}
                 />
@@ -1237,10 +1252,23 @@ const MOVE_REASON_OPTIONS = ['Client to Client', 'Client Scope', 'Other'];
  *  from Stage 2 — see OL_JUMP_TARGET_INTERNALS on the backend. Values
  *  updated 2026-09-18 (explicit request) to match the renumbering — must
  *  stay in step with OL_STAGE_DISPLAY there. */
+/* BUG FOUND AND FIXED 2026-09-24: these values are submitted as a DISPLAY
+   stage number, resolved back to an internal stage on the backend via
+   OL_INTERNAL_BY_DISPLAY.get(display) — they must always match the CURRENT
+   live numbering (constants/stages.js's WORKFLOW / offlease.service.js's
+   OL_ACTIVE_STAGE_NUMS), not be hand-duplicated once and left behind. This
+   array was never updated when internal Stage 10 ("LR & Return
+   Transportation") was removed 2026-09-22, which shifted Gate In/Inspection/
+   Final Billing's own display numbers back down by one — so choosing
+   "Stage 5 – Inspection Checklist" here was silently submitting moveToStage
+   = "5", which the backend now resolves to Final Billing (today's real
+   Stage 5), not Inspection. Confirmed harmless for every jump recorded
+   BEFORE 2026-09-22 (those genuinely used the old numbering), but a live
+   landmine for any jump made after it and before this fix. */
 const MOVE_JUMP_TARGET_OPTIONS = [
-  { value: '4', label: 'Stage 4 – Gate In' },
-  { value: '5', label: 'Stage 5 – Inspection Checklist' },
-  { value: '6', label: 'Stage 6 – Final Billing' }
+  { value: '3', label: 'Stage 3 – Gate In' },
+  { value: '4', label: 'Stage 4 – Inspection Checklist' },
+  { value: '5', label: 'Stage 5 – Final Billing' }
 ];
 
 /**
@@ -1259,10 +1287,22 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * Reason = "Client Scope" additionally captures a free-text Scope. Reason =
  * "Other" additionally captures a free-text Comment / Type.
  *
- * Self-contained: this never reads STAGE-8/9/10 or Transportation data —
- * only the container number it's given and its own fields.
+ * `fmsChecked` (explicit request 2026-09-24): stays false while the STAGE-8
+ * check above is still loading, locking the whole form until it resolves —
+ * whether or not a STAGE-8 record actually exists for this container.
+ * `fmsFound` (explicit, twice-confirmed request 2026-09-24): once checked,
+ * the form stays locked UNTIL a STAGE-8 record IS found for this container —
+ * not the other way around. This is a deliberate reversal of the feature's
+ * original "escape hatch for containers with none" framing (raised once as
+ * a conflict and re-confirmed by the user in plain terms), so a container
+ * only becomes movable here once its STAGE-8 movement is actually on file.
+ * Enforced again server-side (saveOffLeaseMoveToStage/Fast) — this is a
+ * convenience gate, not the authoritative check. A container with no
+ * STAGE-8 record yet keeps showing as "Pending" in Transportation (with an
+ * explicit "Stage 8 Fetch Pending" label — FmsDots in StagePageBase.jsx)
+ * until this unlocks.
  */
-function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMoved }) {
+function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound, alreadyMoved, onMoved }) {
   const [reason, setReason] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [clientScope, setClientScope] = useState('');
@@ -1346,6 +1386,15 @@ function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMove
     );
   }
 
+  /* REVERSED 2026-09-24 (explicit, repeated request — overrides this
+     component's own earlier "usable only when STAGE-8 is ABSENT" design):
+     the form now stays locked until STAGE-8 IS found for this container,
+     not the other way around. This inverts the feature's original "escape
+     hatch for containers with no FMS data" purpose, but the user confirmed
+     this exact behavior twice, in plain terms, after I raised the
+     conflict — so it stands as stated. */
+  const locked = busy || !canMove || !fmsChecked || !fmsFound;
+
   return (
     <div className={styles.fmsWrap}>
       <h3 className={styles.sectionTitle}>Move To Stage</h3>
@@ -1354,14 +1403,14 @@ function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMove
           field={{ key: 'reason', label: 'Reason', type: 'select', options: MOVE_REASON_OPTIONS }}
           value={reason}
           onChange={(v) => { setReason(v); setError(''); }}
-          disabled={busy || !canMove}
+          disabled={locked}
         />
         {reason === 'Client to Client' && (
           <Field
             field={{ key: 'newClientName', label: 'New Client Name', type: 'text', required: true }}
             value={newClientName}
             onChange={setNewClientName}
-            disabled={busy || !canMove}
+            disabled={locked}
           />
         )}
         {reason === 'Client Scope' && (
@@ -1369,7 +1418,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMove
             field={{ key: 'clientScope', label: 'Scope', type: 'text', required: true }}
             value={clientScope}
             onChange={setClientScope}
-            disabled={busy || !canMove}
+            disabled={locked}
           />
         )}
         {reason === 'Other' && (
@@ -1377,7 +1426,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMove
             field={{ key: 'commentType', label: 'Comment / Type', type: 'text', required: true }}
             value={commentType}
             onChange={setCommentType}
-            disabled={busy || !canMove}
+            disabled={locked}
           />
         )}
         {reason && (
@@ -1386,19 +1435,19 @@ function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMove
               field={{ key: 'moveRemarks', label: 'Remarks', type: 'textarea' }}
               value={remarks}
               onChange={setRemarks}
-              disabled={busy || !canMove}
+              disabled={locked}
             />
             <Field
               field={{ key: 'moveDate', label: 'Lifting Date', type: 'date', required: true }}
               value={date}
               onChange={setDate}
-              disabled={busy || !canMove}
+              disabled={locked}
             />
             <Field
               field={{ key: 'moveToStage', label: 'Move To Stage', type: 'select', options: MOVE_JUMP_TARGET_OPTIONS, required: true }}
               value={moveToStage}
               onChange={setMoveToStage}
-              disabled={busy || !canMove}
+              disabled={locked}
             />
           </>
         )}
@@ -1406,10 +1455,16 @@ function MoveToStageSection({ containerNo, rowNum, canMove, alreadyMoved, onMove
 
       {error && <div className={styles.error}>{error}</div>}
       {!canMove && <p className={styles.sectionHint}>You don't have permission to move this stage.</p>}
+      {canMove && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
+      {canMove && fmsChecked && !fmsFound && (
+        <p className={styles.sectionHint}>
+          No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.
+        </p>
+      )}
 
       {reason && (
         <div className={styles.actions}>
-          <Button type="button" variant="primary" loading={busy} disabled={!canMove} onClick={handleMove}>
+          <Button type="button" variant="primary" loading={busy} disabled={locked} onClick={handleMove}>
             {busy ? 'Moving…' : 'Move'}
           </Button>
         </div>

@@ -9,8 +9,9 @@ import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchApprovalQueue, decideApproval, sendBackToStage1FromApproval, lookupContainer } from '../../services/offLease.service.js';
+import { fetchApprovalQueue, decideApproval, sendBackToStage1FromApproval, decideClientToClient, lookupContainer } from '../../services/offLease.service.js';
 import { RejectModal } from './RejectModal.jsx';
+import { ClientToClientModal } from './ClientToClientModal.jsx';
 import { getStageCounts as fetchStageCounts } from '../../api/offlease.api.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
@@ -137,7 +138,14 @@ const APPROVAL_DETAIL_ONLY_HEADERS = new Set([
 ]);
 
 function ApprovalQueue() {
-  const { data, loading, error, reload } = useAsync(() => fetchApprovalQueue(), []);
+  /* 'pending' (default) or 'clientToClient' — see getOffLeaseApprovalData's
+     own doc comment on the backend for why the latter exists: a "Client to
+     Client" decision deliberately never releases into Stage 2, so without
+     this second view those records would have nowhere left to be seen once
+     decided. Explicit request 2026-09-23, same tab-row pattern as Stage 1's
+     own Pending/Hold/Reject (StagePageBase.jsx). */
+  const [subView, setSubView] = useState('pending');
+  const { data, loading, error, reload } = useAsync(() => fetchApprovalQueue(subView === 'clientToClient' ? 'clientToClient' : undefined), [subView]);
   usePolling(() => reload({ silent: true }));
   useAutoRefresh('off-lease', () => reload({ silent: true }));
   const { canAct } = usePermission();
@@ -189,6 +197,7 @@ function ApprovalQueue() {
      match Lease Expiry's inline style instead. */
   const [selectedIdx, setSelectedIdx] = useState(null);
   const selected = selectedIdx != null ? filtered.find((it) => it._rowNum === selectedIdx) : null;
+  const switchSubView = (key) => { setSubView(key); setSearch(''); setSelectedIdx(null); };
 
   const selectedItems = useMemo(
     () => filtered.filter((r) => selectedKeys.has(r._rowNum)),
@@ -245,6 +254,30 @@ function ApprovalQueue() {
       setApproveError(apiErrorMessage(e));
     } finally {
       setApproveBusy(false);
+    }
+  };
+
+  /* "Client to Client" (single only, no bulk — ClientToClientModal.jsx's own
+     doc comment explains why) — a 4th outcome alongside Approve/Send Back/
+     Reject. ctcItem null = closed. */
+  const [ctcItem, setCtcItem] = useState(null);
+  const [ctcBusy, setCtcBusy] = useState(false);
+  const [ctcError, setCtcError] = useState('');
+  const closeCtc = () => { setCtcItem(null); setCtcError(''); };
+
+  const handleClientToClientSubmit = async (clientName, remarks) => {
+    if (!ctcItem) return;
+    setCtcBusy(true);
+    setCtcError('');
+    try {
+      const message = await decideClientToClient(ctcItem.row[0], clientName, remarks, ctcItem._rowNum);
+      if (message === 'ALREADY_PROCESSED') setActionError('This row was already actioned by someone else.');
+      closeCtc();
+      await reload();
+    } catch (e) {
+      setCtcError(apiErrorMessage(e));
+    } finally {
+      setCtcBusy(false);
     }
   };
 
@@ -317,11 +350,34 @@ function ApprovalQueue() {
 
       {!selected ? (
         <>
+          {/* Pending / Client to Client — a "Client to Client" decision
+              deliberately never releases into Stage 2 (see
+              getOffLeaseApprovalData's doc comment on the backend), so it
+              needs its own place to still be seen once decided, same
+              "drops out of the normal queue and appears here instead"
+              pattern as Stage 1's own Pending/Hold/Reject. */}
+          <div className={styles.tabRow}>
+            <button
+              type="button"
+              className={`${styles.tab} ${subView === 'pending' ? styles.tabActive : ''}`}
+              onClick={() => switchSubView('pending')}
+            >
+              Pending
+            </button>
+            <button
+              type="button"
+              className={`${styles.tab} ${subView === 'clientToClient' ? styles.tabActive : ''}`}
+              onClick={() => switchSubView('clientToClient')}
+            >
+              Client to Client
+            </button>
+          </div>
+
           <div className={styles.toolbar}>
             <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
           </div>
 
-          {canActApproval && selectedItems.length > 0 && (
+          {subView === 'pending' && canActApproval && selectedItems.length > 0 && (
             <div className={styles.bulkBar}>
               <span className={styles.bulkCount}>{selectedItems.length} selected</span>
               <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
@@ -335,21 +391,21 @@ function ApprovalQueue() {
           )}
 
           <DataGrid
-            headers={[...visibleHeaders, ...(data?.tatBudget ? [`TAT (${data.tatBudget})`] : [])]}
+            headers={[...visibleHeaders, ...(subView === 'pending' && data?.tatBudget ? [`TAT (${data.tatBudget})`] : [])]}
             rows={pageRows}
             loading={loading}
             error={error}
             onRetry={reload}
-            selectable={canActApproval}
+            selectable={subView === 'pending' && canActApproval}
             selectedKeys={selectedKeys}
             onToggleRow={toggleRow}
             onToggleAll={toggleAllOnPage}
             rowKey={(r) => r._rowNum}
-            emptyMessage="No off-lease intimations awaiting approval"
+            emptyMessage={subView === 'pending' ? 'No off-lease intimations awaiting approval' : 'No Client to Client transfers yet'}
             onRowClick={(item) => setSelectedIdx(item._rowNum)}
             renderRow={(values, item) => [
               ...visibleColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
-              ...(data?.tatBudget
+              ...(subView === 'pending' && data?.tatBudget
                 ? [<td key="tat">{item?.tat
                   ? (
                     <>
@@ -362,31 +418,6 @@ function ApprovalQueue() {
                   : '—'}</td>]
                 : [])
             ]}
-            renderActions={canActApproval ? (item) => (
-              <div className={styles.actionsCell}>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={() => setApproveItem(item)}
-                >
-                  Approve
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setSendBackItem(item)}
-                >
-                  Send Back
-                </Button>
-                <Button
-                  size="sm"
-                  variant="danger"
-                  onClick={() => setRejectItem(item)}
-                >
-                  Reject
-                </Button>
-              </div>
-            ) : undefined}
           />
 
           <Pagination page={page} totalPages={totalPages} onPrev={prevPage} onNext={nextPage} onPage={setPage} />
@@ -398,11 +429,12 @@ function ApprovalQueue() {
           headers={headers}
           detailColIdx={detailColIdx}
           total={filtered.length}
-          canAct={canActApproval}
+          canAct={subView === 'pending' && canActApproval}
           onBack={() => setSelectedIdx(null)}
           onApprove={() => { setSelectedIdx(null); setApproveItem(selected); }}
           onSendBack={() => { setSelectedIdx(null); setSendBackItem(selected); }}
           onReject={() => { setSelectedIdx(null); setRejectItem(selected); }}
+          onClientToClient={() => { setSelectedIdx(null); setCtcItem(selected); }}
         />
       )}
 
@@ -442,6 +474,15 @@ function ApprovalQueue() {
         submitLabel="Send Back"
         variant="secondary"
       />
+
+      <ClientToClientModal
+        open={!!ctcItem}
+        item={ctcItem}
+        submitting={ctcBusy}
+        error={ctcError}
+        onClose={closeCtc}
+        onSubmit={handleClientToClientSubmit}
+      />
     </Card>
   );
 }
@@ -450,8 +491,16 @@ function ApprovalQueue() {
  * Approval queue's inline row detail — same "Back to List" pattern as Lease
  * Expiry's own LeaseExpiryDetail, showing every column (rate/amount
  * excepted) rather than just the ones the table kept visible, plus
- * Approve/Send Back/Reject right here so a record can be decided on without
- * going back to the table first. Explicit request 2026-09-11.
+ * Approve/Client to Client/Send Back/Reject right here so a record can be
+ * decided on without going back to the table first. Explicit request
+ * 2026-09-11.
+ *
+ * This is now the ONLY place these four actions live — the table's own
+ * inline Actions column was removed 2026-09-23 (explicit request) once
+ * "Client to Client" made it a 4th stacked button per row, too tall/cramped
+ * to sit inline. Clicking a row already opened this same detail view before
+ * that removal, so nothing is lost — just one fewer (redundant, now
+ * genuinely too cluttered) way to reach it.
  *
  * "Return Transportation PO Required?" briefly lived on this screen
  * (2026-09-18) before moving to Stage 1's own form the same day, where the
@@ -459,7 +508,7 @@ function ApprovalQueue() {
  * stageFields.js's STAGE_FIELDS[1]. The parent renders this with
  * `key={item._rowNum}` so switching rows resets this local state.
  */
-function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, onApprove, onSendBack, onReject }) {
+function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, onApprove, onSendBack, onReject, onClientToClient }) {
   const containerNo = item.row?.[0];
 
   return (
@@ -483,6 +532,7 @@ function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, on
         {canAct && (
           <div className={styles.detailFooter} style={{ marginTop: 16 }}>
             <Button size="sm" variant="primary" onClick={onApprove}>Approve</Button>
+            <Button size="sm" variant="secondary" onClick={onClientToClient}>Client to Client</Button>
             <Button size="sm" variant="secondary" onClick={onSendBack}>Send Back</Button>
             <Button size="sm" variant="danger" onClick={onReject}>Reject</Button>
           </div>

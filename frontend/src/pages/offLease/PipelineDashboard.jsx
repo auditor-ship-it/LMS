@@ -269,16 +269,22 @@ export function PipelineDashboard({ onOpenTab }) {
       >
         {exportError && <p className={styles.actionError}>{exportError}</p>}
         <div className={styles.toolbar}>
-          <FilterBar
-            filters={[{
-              key: 'month',
-              label: 'Month',
-              value: monthFilter,
-              onChange: setMonthFilter,
-              options: monthOptions
-            }]}
-          />
-          <SearchBar value={search} onChange={setSearch} placeholder="Search container, client, lease ID…" />
+          {/* Month grouped with Search in their own row so they always sit
+              side by side — explicit request 2026-09-23: the toolbar's own
+              space-between wrap previously let Month isolate onto its own
+              line above Search instead of sitting next to it. */}
+          <div className={styles.searchRow}>
+            <FilterBar
+              filters={[{
+                key: 'month',
+                label: 'Month',
+                value: monthFilter,
+                onChange: setMonthFilter,
+                options: monthOptions
+              }]}
+            />
+            <SearchBar value={search} onChange={setSearch} placeholder="Search container, client, lease ID…" />
+          </div>
           {/* An active filter has to be visible and removable here — otherwise
               a shrunken list looks like missing data. */}
           {stageFilter != null && (
