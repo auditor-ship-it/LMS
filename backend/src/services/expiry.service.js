@@ -114,8 +114,23 @@ export async function _expiryOrderNoMap() {
   // Expiry page load — several tabs/users opening it in the same moment
   // used to mean that many independent copies of both reads.
   return cacheGetOrLoad(EXPIRY_ORDMAP_CACHE_KEY, EXPIRY_ORDMAP_TTL_SECS, async () => {
-    const map = {};      // container-only key -> Order No (legacy shape, kept for containers that only ever appear under one client)
-    const byClient = {}; // "containerKey::clientName" -> Order No — disambiguates a reused container number
+    /* BUG FOUND AND FIXED 2026-09-24, same day this STAGE-9 source was
+       added: STAGE-9's `s9Map`/`s9ByClient` are kept SEPARATE from
+       Operation-sheet's `map`/`byClient` (not merged into one shared pair)
+       and checked in full — container-only included — before falling back
+       to Operation sheet at all. Confirmed live on SZLU9909636: STAGE-9's
+       own Lease row spells the client "LAURUS LABS LIMITED", Operation
+       sheet spells the SAME real client "Laurus Labs Limited Unit 4" — two
+       different strings for one client. A single shared byClient map let
+       Operation sheet's differently-spelled entry (OR448) answer the
+       client-specific lookup first, even though STAGE-9 (OR451) had a
+       perfectly good CONTAINER-level match — client-spelling drift between
+       two systems must never let the lower-priority source win just
+       because it happened to also have that exact spelling on file. */
+    const s9Map = {};      // container-only key -> Order No, STAGE-9 (Lease) only
+    const s9ByClient = {}; // "containerKey::clientName" -> Order No, STAGE-9 (Lease) only
+    const map = {};        // container-only key -> Order No, Operation sheet/New Lease
+    const byClient = {};   // "containerKey::clientName" -> Order No, Operation sheet/New Lease
 
     try {
       const { rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
@@ -127,10 +142,10 @@ export async function _expiryOrderNoMap() {
         for (const part of _splitContainers(row[STAGE9_LEASE_ORDER.CONTAINER])) {
           const k = _normKey(part);
           if (!k) continue;
-          if (!map[k]) map[k] = o; // STAGE-9 (Lease) takes priority over every source below
+          if (!s9Map[k]) s9Map[k] = o;
           if (client) {
             const ck = `${k}::${client}`;
-            if (!byClient[ck]) byClient[ck] = o;
+            if (!s9ByClient[ck]) s9ByClient[ck] = o;
           }
         }
       }
@@ -166,7 +181,7 @@ export async function _expiryOrderNoMap() {
           for (const part of parts) {
             const k = _normKey(part);
             if (!k) continue;
-            if (!map[k]) map[k] = o; // first non-blank wins -> Operation sheet takes priority
+            if (!map[k]) map[k] = o; // first non-blank wins within this tier -> Operation sheet takes priority over New Lease
             if (client) {
               const ck = `${k}::${client}`;
               if (!byClient[ck]) byClient[ck] = o;
@@ -175,7 +190,7 @@ export async function _expiryOrderNoMap() {
         }
       } catch (e) { /* never break the expiry screen */ }
     }
-    return { map, byClient };
+    return { map, byClient, s9Map, s9ByClient };
   });
 }
 
@@ -185,11 +200,19 @@ export async function _expiryOrderNoMap() {
  *  overwhelming majority of containers, never reused). `clientName` is the
  *  DISPLAYED client for the row being built, not necessarily the sheet's own
  *  raw cell — same value the row shows everywhere else, so the Order No
- *  always matches what the rest of the row says. */
+ *  always matches what the rest of the row says.
+ *
+ * STAGE-9 (Lease-scoped, `s9Map`/`s9ByClient`) is checked FULLY — client
+ * match, then container-only — before ANY Operation-sheet-sourced value, not
+ * merged into the same byClient map. See _expiryOrderNoMap's own doc comment
+ * for the exact bug (client-name spelling drift between the two systems)
+ * this ordering fixes. */
 export function _resolveOrderNo(ordMap, containerNo, clientName) {
   const k = _normKey(containerNo);
   if (!k) return '';
   const client = _normClient(clientName);
+  if (client && ordMap.s9ByClient[`${k}::${client}`]) return ordMap.s9ByClient[`${k}::${client}`];
+  if (ordMap.s9Map[k]) return ordMap.s9Map[k];
   if (client) {
     const viaClient = ordMap.byClient[`${k}::${client}`];
     if (viaClient) return viaClient;

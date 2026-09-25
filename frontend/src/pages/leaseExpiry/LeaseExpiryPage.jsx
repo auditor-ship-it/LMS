@@ -9,7 +9,7 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchExpiryList, actionExpiryRow, syncSalePersons, saveExpiryRowRemark, exportExpiryToGoogleSheet } from '../../services/expiry.service.js';
+import { fetchExpiryList, actionExpiryRow, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { OffLeaseModal } from './OffLeaseModal.jsx';
 import { RenewalHandoffModal } from './RenewalHandoffModal.jsx';
@@ -66,7 +66,6 @@ export function LeaseExpiryPage() {
   const [actionError, setActionError] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [syncNote, setSyncNote] = useState('');
 
   /* Bulk selection, keyed by _idx — see the comment on `rows` above for why
@@ -230,31 +229,6 @@ export function LeaseExpiryPage() {
     }
   };
 
-  /* Exports the currently-filtered table (not just the visible page) to a
-     brand-new, standalone Google Sheet — same columns as the on-screen grid
-     below, built from raw values rather than renderCellValue's JSX. */
-  const handleExportToGoogleSheet = async () => {
-    setExporting(true);
-    setActionError('');
-    try {
-      const exportHeaders = [...tableHeaders, 'Ageing', 'Days Left', 'Renewal Status', 'Remarks'];
-      const exportRows = filtered.map((item) => [
-        ...tableColIdx.map((ci) => (item.row || [])[ci] ?? ''),
-        BAND_LABEL[item.band] || '',
-        formatDays(item.daysLeft),
-        item.actionStatus || '',
-        item.remark || ''
-      ]);
-      const title = `Lease Expiry Export - ${new Date().toLocaleDateString()}`;
-      const res = await exportExpiryToGoogleSheet(title, exportHeaders, exportRows);
-      window.open(res.url, '_blank', 'noopener,noreferrer');
-    } catch (e) {
-      setActionError(apiErrorMessage(e));
-    } finally {
-      setExporting(false);
-    }
-  };
-
   const runAction = async (item, status) => {
     const containerNo = item.row?.[0];
     const key = `${containerNo}-${status}`;
@@ -396,9 +370,6 @@ export function LeaseExpiryPage() {
           <>
             <Button variant="secondary" size="sm" loading={syncing} onClick={handleSyncSalePersons}>
               Sync Sale Person
-            </Button>
-            <Button variant="secondary" size="sm" loading={exporting} onClick={handleExportToGoogleSheet}>
-              Export to Google Sheet
             </Button>
             <Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>
           </>

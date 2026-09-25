@@ -6,11 +6,10 @@ import { useAsync } from '../../hooks/useAsync.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
-import { fetchOffLeaseDashboard, exportOffLeaseToGoogleSheet } from '../../services/offLease.service.js';
+import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { fetchMyTasks } from '../../services/myTask.service.js';
 import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
-import { apiErrorMessage } from '../../shared/auth/index.js';
 import { toDate } from '../../utils/formatDateTime.js';
 import { OrderBookView } from './OrderBookView.jsx';
 import { ContainerDetailModal } from './ContainerDetailModal.jsx';
@@ -67,8 +66,6 @@ export function PipelineDashboard({ onOpenTab }) {
      Date only ever moves forward in step with "when did this actually
      happen", never a planned future date. */
   const [monthFilter, setMonthFilter] = useState('');
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
 
   const kpis = data?.kpis || {};
@@ -127,27 +124,6 @@ export function PipelineDashboard({ onOpenTab }) {
       it.clientName.toLowerCase().includes(term) ||
       it.leaseId.toLowerCase().includes(term));
   }, [items, debouncedSearch, stageFilter, monthFilter]);
-
-  const handleExportToGoogleSheet = async () => {
-    setExporting(true);
-    setExportError('');
-    try {
-      const headers = ['Container No', 'Lease ID', 'Client Name', 'Size', 'Type', 'Location', 'Off-Lease Intimation Date', 'Deployed Date', 'Valid Upto', 'Current Stage'];
-      const rows = filtered.map((it) => [
-        it.container, it.leaseId, it.clientName, it.size, it.type, it.location,
-        it.intimationDate || '', it.deployedDate || '', it.validUpto || '',
-        it.stageClass === 'approval' ? 'Pending Approval' : it.stageClass === 'done' ? 'Released' : it.stageClass === 'rejected' ? 'Rejected' : (STAGES.find((s) => s.number === it.currentStageNum)?.label || '')
-      ]);
-      const monthLabel = monthFilter ? monthOptions.find((m) => m.value === monthFilter)?.label : 'All Months';
-      const title = `Off-Lease Export - ${monthLabel} - ${new Date().toLocaleDateString()}`;
-      const res = await exportOffLeaseToGoogleSheet(title, headers, rows);
-      window.open(res.url, '_blank', 'noopener,noreferrer');
-    } catch (e) {
-      setExportError(apiErrorMessage(e));
-    } finally {
-      setExporting(false);
-    }
-  };
 
   /* Clicking the active card again clears it — the same control that applied
      the filter removes it, so there is no hunting for a reset. */
@@ -260,14 +236,10 @@ export function PipelineDashboard({ onOpenTab }) {
                 </button>
               ))}
             </div>
-            <Button variant="secondary" size="sm" loading={exporting} onClick={handleExportToGoogleSheet}>
-              Export to Google Sheet
-            </Button>
             <Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>
           </>
         }
       >
-        {exportError && <p className={styles.actionError}>{exportError}</p>}
         <div className={styles.toolbar}>
           {/* Month grouped with Search in their own row so they always sit
               side by side — explicit request 2026-09-23: the toolbar's own

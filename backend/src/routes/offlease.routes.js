@@ -36,6 +36,9 @@ router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveSt
    since neither is a normal stage-column save (see saveOffLeaseMoveToStage's
    doc comment in offlease.service.js). */
 router.post('/:containerNo/move-to-stage', asyncHandler(offLeaseController.saveMoveToStage));
+/* Stage 2's "Client to Client" DO-first flow — explicit request 2026-09-24;
+   see saveOffLeaseMoveToStageClientToClientPending's own doc comment. */
+router.post('/:containerNo/move-to-stage/client-to-client-pending', asyncHandler(offLeaseController.saveMoveToStageClientToClientPending));
 router.post('/:containerNo/send-back', asyncHandler(offLeaseController.saveSendBack));
 router.get('/:containerNo/move-history', asyncHandler(offLeaseController.getMoveHistoryForContainer));
 
@@ -76,14 +79,6 @@ router.get('/dashboard', asyncHandler(offLeaseController.getDashboardData));
 router.get('/efficiency', asyncHandler(offLeaseController.getEfficiencyData));
 router.get('/:containerNo/detail', asyncHandler(offLeaseController.getContainerDetail));
 router.get('/:containerNo/outstanding', asyncHandler(offLeaseController.getOutstanding));
-
-/* Dashboard's month-wise export — turns the caller's own already-filtered
-   list into a brand-new Google Sheet (see sheetExport.service.js). Same
-   no-extra-permission-gate pattern as Lease Expiry's identical route
-   (expiry.routes.js) — still behind requireAuth above, no app data read
-   server-side beyond what the caller already sent. Explicit request
-   2026-09-23. */
-router.post('/export-sheet', asyncHandler(offLeaseController.exportToGoogleSheet));
 
 /* Tracking-sheet bootstrap — moves a container off "Deployed" onto Off-Lease Tracking */
 router.post('/tracking', asyncHandler(offLeaseController.addToTracking));

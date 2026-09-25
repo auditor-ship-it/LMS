@@ -78,7 +78,7 @@ import { safeStr, safeAmt, toNum, formatDateVal, parseDate } from '../utils/form
 import { normKey } from '../utils/normalize.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
-import { checkActionPermission } from './permissions.service.js';
+import { checkActionPermission, userHasAction } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getCollection } from './mongo.service.js';
@@ -88,7 +88,7 @@ import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service
 import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer } from './stage8.service.js';
+import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
@@ -2126,6 +2126,25 @@ export async function getOffLeaseData(stage, opts = {}, user) {
       item.rejectTimestamp = intApprovalTimestampCol >= 0 ? safeStr(row[intApprovalTimestampCol]) : '';
     }
 
+    /* "Client to Client" pending-DO draft, on Transportation's own list —
+       explicit request 2026-09-24. A row with one of these is NOT yet
+       _isMovedOut (that's exactly what keeps it in this queue at all — see
+       the intimation-approval/bypass filtering above), so the frontend needs
+       this to show "Client to Client — Stage 8 Fetch Pending (DO: ...)"
+       instead of the generic "no STAGE-8 record" label (StagePageBase.jsx's
+       FmsDots). Same fields as getOffLeaseStageDetail's own _ctcPending. */
+    if (Number(stage) === OL_STAGE2_INTERNAL) {
+      const ctcPendingDo = safeStr(row[OL_CTC_PENDING_DO_COL]).trim();
+      if (ctcPendingDo) {
+        item.ctcPending = {
+          doNumber: ctcPendingDo,
+          newClientName: safeStr(row[OL_CTC_PENDING_NEW_CLIENT_COL]),
+          remarks: safeStr(row[OL_CTC_PENDING_REMARKS_COL]),
+          date: safeStr(row[OL_CTC_PENDING_DATE_COL])
+        };
+      }
+    }
+
     finalData.push(item);
   }
   return { headers: displayHeaders, data: finalData, stage, stageLabel: info.label, statusCol: info.statusCol };
@@ -2618,9 +2637,20 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
        recorded on Stage 2's own form when reopened, and — for whichever
        stage this row was actively jumped TO — offer Send Back there. */
     const jumpTargetInternal = _jumpTargetInternal(row);
+    const moveReason = safeStr(row[OL_MOVE_REASON_COL]);
+    /* A "Client to Client" jump may also be sent back from Billing even when
+       it originally landed somewhere earlier (Gate In/Inspection) — explicit
+       request 2026-09-24, confirmed live on SJKU4000104: its jump targeted
+       Inspection, which was then completed normally and let it progress on
+       its own all the way to Billing, where its real Transportation data
+       (see _populateTransportationFromClientToClientLease) still needed
+       fetching. Client Scope/Other are unaffected — they keep the original
+       "only at the exact stage the jump landed" rule, since neither has a
+       Billing-side re-fetch to offer. */
+    const ctcSendBackFromBilling = moveReason === 'Client to Client' && Number(stage) === OL_BILLING_INTERNAL;
     result._move = {
       active: _isMovedOut(row),
-      reason: safeStr(row[OL_MOVE_REASON_COL]),
+      reason: moveReason,
       newClientName: safeStr(row[OL_MOVE_NEW_CLIENT_COL]),
       clientScope: safeStr(row[OL_MOVE_CLIENT_SCOPE_COL]),
       arrivalDate: safeStr(row[OL_MOVE_ARRIVAL_DATE_COL]),
@@ -2629,7 +2659,30 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       date: safeStr(row[OL_MOVE_DATE_COL]),
       jumpTargetInternal,
       jumpTargetDisplay: jumpTargetInternal != null ? displayStageNum(jumpTargetInternal) : null,
-      canSendBackHere: jumpTargetInternal != null && jumpTargetInternal === Number(stage)
+      canSendBackHere: (jumpTargetInternal != null && jumpTargetInternal === Number(stage)) || ctcSendBackFromBilling
+    };
+
+    /* "Client to Client" pending-DO draft — explicit request 2026-09-24, see
+       OL_CTC_PENDING_*_COL's own doc comment in olHeaders.generated.js.
+       Exposed the same way _move is: cheap (already-fetched columns), shown
+       on Stage 2 so the submitter can see what they entered while waiting on
+       checkPendingClientToClientMoves to confirm it. `active` is
+       specifically "drafted but not yet finalized" — once
+       checkPendingClientToClientMoves finds a STAGE-8 match it fills the
+       REAL OL_MOVE_* columns too, which flips _move.active true and makes
+       this row disappear from Transportation's own pending queue, so a row
+       is never "active" in both objects at once. */
+    const ctcPendingDo = safeStr(row[OL_CTC_PENDING_DO_COL]);
+    result._ctcPending = {
+      active: !result._move.active && ctcPendingDo.trim() !== '',
+      doNumber: ctcPendingDo,
+      newClientName: safeStr(row[OL_CTC_PENDING_NEW_CLIENT_COL]),
+      remarks: safeStr(row[OL_CTC_PENDING_REMARKS_COL]),
+      date: safeStr(row[OL_CTC_PENDING_DATE_COL]),
+      jumpTargetDisplay: (() => {
+        const t = parseInt(safeStr(row[OL_CTC_PENDING_TARGET_COL]), 10);
+        return OL_JUMP_TARGET_INTERNALS.includes(t) ? displayStageNum(t) : null;
+      })()
     };
 
     /* Hold state — only ever meaningful on Stage 1 itself, but cheap
@@ -2976,6 +3029,28 @@ const OL_MOVE_ALL_COLS = [
   OL_MOVE_CLIENT_SCOPE_COL, OL_MOVE_ARRIVAL_DATE_COL
 ];
 
+/** Stage 2's "Client to Client" — REDESIGNED 2026-09-24 (explicit request):
+ *  submitting it no longer jumps the container out of Transportation
+ *  immediately. It only fills these DRAFT columns (a manually-entered DO
+ *  Number plus everything else the real move will eventually need) — the
+ *  OL_MOVE_* columns above stay blank, so _isMovedOut(row) stays false and
+ *  the container keeps showing in Transportation's own pending queue,
+ *  labelled "Client to Client — Stage 8 Fetch Pending". A background check
+ *  (checkPendingClientToClientMoves) matches this DO Number against STAGE-8
+ *  on a cadence; once found, it copies this draft into the real OL_MOVE_*
+ *  columns via the exact same _moveColumnValues shape saveOffLeaseMoveToStage
+ *  already writes, which is what actually executes the jump. Left in place
+ *  (not cleared) once confirmed — a historical record of the original
+ *  submission, same "never lose the audit trail" reasoning as
+ *  offleaseMoveHistory.service.js. */
+const OL_CTC_PENDING_DO_COL = 338;
+const OL_CTC_PENDING_NEW_CLIENT_COL = 339;
+const OL_CTC_PENDING_REMARKS_COL = 340;
+const OL_CTC_PENDING_DATE_COL = 341;
+const OL_CTC_PENDING_TARGET_COL = 342;
+const OL_CTC_PENDING_BY_COL = 343;
+const OL_CTC_PENDING_TIMESTAMP_COL = 344;
+
 export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other'];
 
 /** DISPLAY stage number (what the UI and this Move To Stage dropdown show,
@@ -3011,6 +3086,147 @@ function _isMovedOut(row) {
 function _jumpTargetInternal(row) {
   const v = parseInt(safeStr(row[OL_MOVE_JUMP_TARGET_COL]).trim(), 10);
   return OL_JUMP_TARGET_INTERNALS.includes(v) ? v : null;
+}
+
+/**
+ * Off-Lease Transportation column (45-99, see OL_STAGE_INFO[6]) -> the
+ * matching STAGE-8/9 field name (allFields' own [header, value] shape) — the
+ * two are almost a field-for-field match by design (Transportation exists to
+ * record the same transport-movement details FMS already captures). Used
+ * only by _populateTransportationFromClientToClientLease, on a Send Back
+ * from Stage 5 to Stage 2 for a "Client to Client" move — see that
+ * function's own doc comment and getClientToClientLeaseMovement in
+ * stage8.service.js. Hand-written rather than a fuzzy name-matcher: this
+ * writes real data into real columns, so an exact, reviewable list beats an
+ * automatic joiner that could silently mis-map if either sheet's wording
+ * ever drifts. Columns 96-99 (Stage 6 Remark/Timestamp/User/Status) are
+ * deliberately absent — set separately as this action's own metadata (96-98)
+ * or left alone entirely (99, the completion status — see the calling
+ * function's doc comment for why this must never auto-complete Stage 2).
+ */
+const OL_CTC_TRANSPORT_FIELD_MAP = {
+  45: 'Vehicle Placed By',
+  46: 'Quotation Number',
+  47: 'Order Received Number',
+  48: 'DO Number',
+  49: 'Vehicle no',
+  50: 'Cash Memo Number',
+  51: 'Cash Memo Date',
+  52: 'Cash Memo Received Date',
+  53: 'Vehicle Reached at Pick-up Location (Date)',
+  54: 'Loading City',
+  55: 'Destination City',
+  56: 'Loading Date',
+  57: 'Transit Days',
+  58: 'Km',
+  59: 'Expected Delivery Date',
+  60: 'Size',
+  61: 'Container Type',
+  62: 'Quantity',
+  63: 'Vehicle Type',
+  64: 'Movement Type',
+  65: 'Transportation Type',
+  66: 'Container Number',
+  67: 'WT',
+  68: 'Pick-up Address',
+  69: 'Delivery Address',
+  70: 'Delivery Pin Code',
+  71: 'Customer Name',
+  73: 'Payment Type',
+  74: 'Payment Terms',
+  76: 'Payment Due Date',
+  77: 'Other Charges, if any',
+  78: 'Detention Charge at Loading Point',
+  79: 'Less Late Delivery Amount',
+  80: 'Crane / Hydra Charge',
+  81: 'Unloading Labour Charge',
+  82: 'Cleaning Charge',
+  83: 'Collection Memo',
+  84: 'LR Scanned Copy',
+  85: 'Vehicle Name Plate Photo',
+  86: 'Container Photo - (Single) with Container number visible',
+  87: 'Door Photo with Seal',
+  88: 'Inside full view',
+  89: 'Machine Photo with Power Cable and Keypad',
+  90: 'Full Video All Sides',
+  92: 'Driving Licence',
+  93: 'RC Book',
+  94: 'Transporter Name',
+  95: 'Freight Cost'
+};
+
+/** Case-insensitive exact header match against an allFields()-shaped
+ *  [header, value][] array, or '' if that header wasn't present/blank. */
+function _fmsFieldValue(fields, headerName) {
+  if (!Array.isArray(fields)) return '';
+  const wanted = headerName.trim().toLowerCase();
+  const hit = fields.find(([h]) => safeStr(h).trim().toLowerCase() === wanted);
+  return hit ? safeStr(hit[1]) : '';
+}
+
+/**
+ * Auto-populates Stage 2's Transportation columns (45-98, never 99 — see
+ * below) from the "Client to Client" re-lease booking FMS already has for
+ * this container's NEW client — explicit request 2026-09-24, confirmed live
+ * against SJKU4000104/GRMU5181208 (see getClientToClientLeaseMovement's doc
+ * comment for why the ordinary FMS lookups miss this data entirely). Called
+ * from saveOffLeaseSendBack when a "Client to Client" move is sent back from
+ * Stage 5 to Stage 2, so the record doesn't land back in Transportation with
+ * every field blank when its real transport data has been sitting in FMS the
+ * whole time.
+ *
+ * Prefers STAGE-9 (the richer, transport-execution record) for every field
+ * it has, falling back to STAGE-8 (the leaner movement/booking record) only
+ * for the handful of fields STAGE-9 doesn't carry. Column 99 (Stage 2's own
+ * completion status) is deliberately never written here — Stage 2 has no
+ * fillable status column of its own by design (see OL_STAGE2_INTERNAL's
+ * bypass in getOffLeaseData); it completes itself the same way every other
+ * container's does, off the STAGE-10 delivery signal or a future manual
+ * move, once one actually happens. Auto-populating the informational fields
+ * is not the same as auto-completing the stage.
+ *
+ * Returns true if a Lease-type movement or transport record was found (and
+ * therefore something was written), false if nothing matched yet — the
+ * caller still completes the send-back either way (the container must
+ * appear in Stage 2 regardless of whether FMS already has the data), and
+ * checkPendingClientToClientMoves' own extension picks up the retry later
+ * for the false case (see its doc comment).
+ */
+async function _populateTransportationFromClientToClientLease(rn, row, containerNo, newClientName, userEmail) {
+  let fms;
+  try {
+    fms = await getClientToClientLeaseMovement(containerNo, newClientName);
+  } catch (e) {
+    console.error('[OL-SEND-BACK-STAGE2] FMS re-fetch failed (non-fatal, will retry via checkPendingClientToClientMoves):', e?.message || e);
+    return false;
+  }
+  if (!fms?.movement && !fms?.transport) return false;
+
+  const values = {};
+  for (const [col, header] of Object.entries(OL_CTC_TRANSPORT_FIELD_MAP)) {
+    const v = _fmsFieldValue(fms.transport?.fields, header) || _fmsFieldValue(fms.movement?.fields, header);
+    if (v) values[col] = v;
+  }
+  if (!Object.keys(values).length) return false;
+
+  const stamp = dmyTime(new Date());
+  values[96] = `Auto-populated from STAGE-8/9 (Client to Client re-fetch) on ${stamp}`;
+  values[97] = stamp;
+  values[98] = userEmail || '';
+
+  const cellUpdates = Object.entries(values).map(([col, val]) => ({
+    range: `'${OL_SHEET}'!${colLetter(Number(col))}${rn}`, values: [[val]]
+  }));
+  await batchUpdateValues(cellUpdates);
+
+  try {
+    const patch = {};
+    for (const [col, val] of Object.entries(values)) patch[`row.${col}`] = val;
+    await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: { ...patch, updatedAt: new Date() } });
+  } catch (e) {
+    console.error('[OL-SEND-BACK-STAGE2] mirror patch failed (reconcile will correct):', e?.message || e);
+  }
+  return true;
 }
 
 /** True when stage `s` sits strictly BETWEEN Transportation and an active
@@ -3136,15 +3352,22 @@ async function _assertStage8MovementFound(containerNo, clientName) {
  * GATED ON STAGE-8 BEING FOUND, not absent — explicit, twice-confirmed
  * request 2026-09-24 (a deliberate reversal of this feature's original
  * framing, which was "for containers with no STAGE-8 record at all"): this
- * function now REJECTS the move unless a real STAGE-8 movement record has
+ * function REJECTS the move unless a real STAGE-8 movement record has
  * already been matched for this container+client (see
- * _assertStage8MovementFound just above). A container with no STAGE-8
- * record yet simply stays "Pending" in Transportation — shown with an
- * explicit "Stage 8 Fetch Pending" label (FmsDots, StagePageBase.jsx) — and
- * this whole action is unavailable until one is fetched, enforced here as
- * well as by the frontend's own `fmsFound` gate (StageDetailModal.jsx).
+ * _assertStage8MovementFound just above).
  *
-
+ * REDESIGNED AGAIN THE SAME DAY for Reason = "Client to Client" specifically
+ * (explicit follow-up request): that reason no longer submits through this
+ * function's instant-jump path at all — see
+ * saveOffLeaseMoveToStageClientToClientPending instead, which only records a
+ * DRAFT (holding a manually-entered DO Number) and leaves the container
+ * genuinely pending in Transportation until a background check matches that
+ * DO against STAGE-8, at which point IT calls the exact same
+ * _moveColumnValues shape this function writes below to finalize the jump.
+ * This function and its Stage-8-found gate remain exactly as before for
+ * Reason = "Client Scope" / "Other" — unaffected by the redesign, still
+ * instant, still requiring STAGE-8 to already be found.
+ *
  * All three reasons record moveToStage (a DISPLAY stage number: 3, 4 or 5) as
  * the container's real destination stage (Gate In / Inspection / Billing)
  * plus a Date, and the record appears there directly — see _jumpSkipsStage's
@@ -3248,19 +3471,233 @@ export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, use
   return 'OK';
 }
 
+/** Validates + shapes a "Client to Client" PENDING submission — the new
+ *  DO-first flow, explicit request 2026-09-24. Pure (no I/O), same reasoning
+ *  as _prepareMoveToStage. `moveToStage` reuses that SAME destination
+ *  validation (Stage 3/4/5 — Gate In/Inspection/Final Billing) — the pending
+ *  draft already records where this container will actually land once
+ *  STAGE-8 confirms it, so checkPendingClientToClientMoves has nothing left
+ *  to ask the user for at finalize time. */
+function _prepareCtcPending({ doNumber, newClientName, remarks, date, moveToStage }) {
+  const doNo = safeStr(doNumber).trim();
+  if (!doNo) throw new AppError('DO Number is required');
+  const clientName = safeStr(newClientName).trim();
+  if (!clientName) throw new AppError('New Client Name is required');
+  const d = safeStr(date).trim();
+  if (!d) throw new AppError('Date is required');
+  const display = parseInt(moveToStage, 10);
+  const jumpTargetInternal = OL_INTERNAL_BY_DISPLAY.get(display);
+  if (!OL_JUMP_TARGET_INTERNALS.includes(jumpTargetInternal)) {
+    throw new AppError('Move To Stage must be one of: Stage 3, Stage 4, Stage 5');
+  }
+  return { doNo, clientName, remarks: safeStr(remarks).trim(), date: d, jumpTargetInternal };
+}
+
+/**
+ * Stage 2's "Client to Client" — the DO-first flow, explicit request
+ * 2026-09-24 (see OL_CTC_PENDING_*_COL's own doc comment in
+ * olHeaders.generated.js for the full design). Records a DRAFT only: the
+ * real OL_MOVE_* columns stay untouched, so _isMovedOut(row) stays false and
+ * the container keeps showing in Transportation's own pending queue,
+ * labelled "Client to Client — Stage 8 Fetch Pending (DO: ...)" — see
+ * FmsDots in StagePageBase.jsx. checkPendingClientToClientMoves (below) is
+ * what actually executes the jump, once the DO Number entered here matches a
+ * real STAGE-8 movement.
+ *
+ * Live-only (no separate Fast/Mongo-first path) — same reasoning as
+ * saveOffLeaseApprovalClientToClient: a much lower-frequency action than the
+ * instant Client Scope/Other jumps, not worth a second code path to keep in
+ * sync. Does patch the Mongo mirror immediately below, though, so the
+ * submitting user sees their own draft without waiting on the 5-minute
+ * reconcile.
+ */
+export async function saveOffLeaseMoveToStageClientToClientPending(containerNo, payload = {}, userEmail, knownRow) {
+  await checkActionPermission(`offlease${OL_STAGE2_INTERNAL}`, userEmail);
+  const shaped = _prepareCtcPending(payload);
+
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    if (_isMovedOut(row)) return 'ALREADY_PROCESSED';
+
+    const stamp = dmyTime(new Date());
+    const values = {
+      [OL_CTC_PENDING_DO_COL]: shaped.doNo,
+      [OL_CTC_PENDING_NEW_CLIENT_COL]: shaped.clientName,
+      [OL_CTC_PENDING_REMARKS_COL]: shaped.remarks,
+      [OL_CTC_PENDING_DATE_COL]: shaped.date,
+      [OL_CTC_PENDING_TARGET_COL]: String(shaped.jumpTargetInternal),
+      [OL_CTC_PENDING_BY_COL]: userEmail || '',
+      [OL_CTC_PENDING_TIMESTAMP_COL]: stamp
+    };
+    const cellUpdates = Object.entries(values).map(([col, val]) => ({
+      range: `'${OL_SHEET}'!${colLetter(Number(col))}${rn}`, values: [[val]]
+    }));
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const patch = {};
+      for (const [col, val] of Object.entries(values)) patch[`row.${col}`] = val;
+      await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: { ...patch, updatedAt: new Date() } });
+    } catch (e) {
+      console.error('[OL-CTC-PENDING] mirror patch failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/**
+ * Background check for Transportation's "Client to Client" pending drafts —
+ * explicit request 2026-09-24. Scans every Off-Lease Tracking row with a
+ * pending DO Number (OL_CTC_PENDING_DO_COL) and no real move yet
+ * (!_isMovedOut), and for each one, checks whether STAGE-8 now has a
+ * matching movement (getStage8MovementByDo). Once found, copies the draft
+ * into the real OL_MOVE_* columns via the same shape saveOffLeaseMoveToStage
+ * itself writes — THIS is what actually executes the jump, removing the
+ * container from Transportation's pending queue and landing it on its
+ * pre-chosen destination stage (Gate In / Inspection / Final Billing), plus
+ * logs the same MOVED audit-trail entry a normal Move To Stage would.
+ *
+ * Registered on a cron alongside the other STAGE-8/9/10-dependent jobs
+ * (jobs/index.js) — same 5-minute cadence as the Sheets<->Mongo reconcile
+ * this depends on, since a DO typed in today can only ever match a STAGE-8
+ * row that reconcile has already pulled in.
+ *
+ * Best-effort per row: one row's STAGE-8 read or write failure must never
+ * stop the rest of the batch from being checked.
+ */
+export async function checkPendingClientToClientMoves() {
+  const { rows } = await getSheetDataFromMongo(OL_SHEET);
+  let checked = 0, finalized = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row[0] || String(row[0]).trim() === '') continue;
+    if (_isMovedOut(row)) continue;
+    const doNo = safeStr(row[OL_CTC_PENDING_DO_COL]).trim();
+    if (!doNo) continue;
+    checked++;
+
+    try {
+      const movement = await getStage8MovementByDo(doNo);
+      if (!movement) continue;
+
+      const rn = i + 2;
+      const containerNo = safeStr(row[0]);
+      const shaped = {
+        reason: 'Client to Client',
+        newClientName: safeStr(row[OL_CTC_PENDING_NEW_CLIENT_COL]),
+        clientScope: '',
+        arrivalDate: '',
+        remarks: safeStr(row[OL_CTC_PENDING_REMARKS_COL]),
+        commentType: '',
+        date: safeStr(row[OL_CTC_PENDING_DATE_COL]),
+        jumpTargetInternal: parseInt(safeStr(row[OL_CTC_PENDING_TARGET_COL]), 10)
+      };
+      const userEmail = safeStr(row[OL_CTC_PENDING_BY_COL]);
+      const stamp = dmyTime(new Date());
+      const values = _moveColumnValues(shaped, userEmail, stamp);
+      const cellUpdates = Object.entries(values).map(([col, val]) => ({
+        range: `'${OL_SHEET}'!${colLetter(Number(col))}${rn}`, values: [[val]]
+      }));
+      await batchUpdateValues(cellUpdates);
+
+      try {
+        const patch = {};
+        for (const [col, val] of Object.entries(values)) patch[`row.${col}`] = val;
+        await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: { ...patch, updatedAt: new Date() } });
+      } catch (e) {
+        console.error('[OL-CTC-PENDING] finalize mirror patch failed (reconcile will correct):', e?.message || e);
+      }
+
+      try {
+        await addMoveHistoryEntry({
+          containerNo, leaseId: safeStr(row[1]), clientName: safeStr(row[5]),
+          event: 'MOVED', reason: shaped.reason, commentType: shaped.commentType, remarks: shaped.remarks, date: shaped.date,
+          fromStage: stageCaption(OL_STAGE2_INTERNAL),
+          toStage: stageCaption(shaped.jumpTargetInternal),
+          by: userEmail || 'system (auto — STAGE-8 confirmed)'
+        });
+      } catch (e) {
+        console.error('[OL-CTC-PENDING] history log failed (non-fatal):', e?.message || e);
+      }
+
+      finalized++;
+      console.log(`[OL-CTC-PENDING] Finalized ${containerNo} — DO ${doNo} matched STAGE-8, moved to ${stageCaption(shaped.jumpTargetInternal)}`);
+    } catch (e) {
+      console.error(`[OL-CTC-PENDING] check failed for row ${i + 2} (will retry next cycle):`, e?.message || e);
+    }
+  }
+
+  /* Second pass, same cycle: retries the Transportation re-fetch for a row
+   * already Sent Back to Stage 2 (saveOffLeaseSendBack) whose FMS booking
+   * wasn't there yet at send-back time — see that function's own doc comment
+   * for why the New Client Name column (291) is deliberately left behind as
+   * this retry's marker even though the move itself is no longer "active".
+   * Stops retrying once the DO Number column (48) is filled, whether from
+   * this retry or a later manual entry — no separate "done" flag needed. */
+  let refetched = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row[0] || String(row[0]).trim() === '') continue;
+    if (_isMovedOut(row)) continue;
+    const newClientName = safeStr(row[OL_MOVE_NEW_CLIENT_COL]).trim();
+    if (!newClientName) continue;
+    if (safeStr(row[48]).trim()) continue; // Transportation DO Number already populated
+
+    try {
+      const rn = i + 2;
+      const containerNo = safeStr(row[0]);
+      const found = await _populateTransportationFromClientToClientLease(rn, row, containerNo, newClientName, 'system (auto — retry)');
+      if (found) {
+        refetched++;
+        console.log(`[OL-CTC-PENDING] Re-fetched Transportation data for ${containerNo} (Client to Client send-back retry)`);
+      }
+    } catch (e) {
+      console.error(`[OL-CTC-PENDING] send-back re-fetch retry failed for row ${i + 2} (will retry next cycle):`, e?.message || e);
+    }
+  }
+
+  console.log(`[OL-CTC-PENDING] Cycle complete — checked ${checked}, finalized ${finalized}, send-back re-fetches ${refetched}`);
+  return { checked, finalized, refetched };
+}
+
 /**
  * Reverses an active "Move To Stage" jump — either reason, both set a
- * destination stage now. Clears all 8 live move-state columns,
- * which is what naturally makes the record reappear in Stage 2's own
- * pending queue again (see _isMovedOut/_jumpTargetInternal) — no duplicate
- * record is created, this is the SAME row. The permanent audit trail is
- * untouched (a new SENT_BACK entry is appended alongside the earlier MOVED
- * one, neither is ever deleted).
+ * destination stage now. Clears the live move-state columns, which is what
+ * naturally makes the record reappear in Stage 2's own pending queue again
+ * (see _isMovedOut/_jumpTargetInternal) — no duplicate record is created,
+ * this is the SAME row. The permanent audit trail is untouched (a new
+ * SENT_BACK entry is appended alongside the earlier MOVED one, neither is
+ * ever deleted).
  *
- * Permission is checked against the stage being sent back FROM (the one the
- * caller is currently looking at, since that's what they need edit rights
- * on to act from it) rather than Stage 2's own — deliberately different
- * from saveOffLeaseMoveToStage above.
+ * Permission is normally checked against the stage being sent back FROM (the
+ * one the caller is currently looking at, since that's what they need edit
+ * rights on to act from it) rather than Stage 2's own — deliberately
+ * different from saveOffLeaseMoveToStage above. "Client to Client" adds a
+ * fallback: it may also be actioned from Billing's own permission when the
+ * jump's original target permission is missing — see canSendBackHere's own
+ * extension in getOffLeaseStageDetail for why (a CTC row can progress past
+ * its jump target and only become actionable again once it reaches Billing).
+ *
+ * "Client to Client" ALSO — explicit request 2026-09-24, confirmed live on
+ * SJKU4000104/GRMU5181208 — re-fetches this container's real transport data
+ * from FMS and populates Stage 2's Transportation columns with it before
+ * returning, since by the time one of these needs sending back its Stage 8
+ * booking has usually already been made (see
+ * _populateTransportationFromClientToClientLease's own doc comment for why
+ * the ordinary FMS lookups never surface it). The Move To Stage "New Client
+ * Name" column (291) is deliberately the ONE move column left uncleared for
+ * this reason — not because it still means anything as a "live" field
+ * (_isMovedOut only ever checks the Reason column, 290, so the row still
+ * counts as sent back), but so checkPendingClientToClientMoves' own
+ * extension can retry this same re-fetch later if FMS doesn't have the
+ * booking yet at send-back time.
  */
 export async function saveOffLeaseSendBack(containerNo, userEmail, knownRow) {
   return withSheetLock(OL_SHEET, async () => {
@@ -3273,19 +3710,24 @@ export async function saveOffLeaseSendBack(containerNo, userEmail, knownRow) {
     const row = rows[rn - 2] || [];
     const jumpTarget = _jumpTargetInternal(row);
     if (jumpTarget == null) throw new AppError('This record was not moved via Move To Stage — nothing to send back.');
-    await checkActionPermission(`offlease${jumpTarget}`, userEmail);
-
     const priorReason = safeStr(row[OL_MOVE_REASON_COL]);
+    const isCtc = priorReason === 'Client to Client';
+    if (!(await userHasAction(userEmail, `offlease${jumpTarget}`))) {
+      await checkActionPermission(`offlease${isCtc ? OL_BILLING_INTERNAL : jumpTarget}`, userEmail);
+    }
+
+    const priorNewClientName = safeStr(row[OL_MOVE_NEW_CLIENT_COL]);
     const priorCommentType = safeStr(row[OL_MOVE_COMMENT_TYPE_COL]);
     const priorRemarks = safeStr(row[OL_MOVE_REMARKS_COL]);
     const priorDate = safeStr(row[OL_MOVE_DATE_COL]);
 
-    const cellUpdates = OL_MOVE_ALL_COLS.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
+    const colsToClear = isCtc ? OL_MOVE_ALL_COLS.filter((c) => c !== OL_MOVE_NEW_CLIENT_COL) : OL_MOVE_ALL_COLS;
+    const cellUpdates = colsToClear.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
     await batchUpdateValues(cellUpdates);
 
     try {
       const patch = {};
-      for (const c of OL_MOVE_ALL_COLS) patch[`row.${c}`] = '';
+      for (const c of colsToClear) patch[`row.${c}`] = '';
       const r = await getCollection(OL_SHEET).updateOne({ key: `row_${rn - 2}` }, { $set: patch });
       if (!r.matchedCount) console.warn(`[OL-MOVE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
     } catch (e) {
@@ -3303,12 +3745,23 @@ export async function saveOffLeaseSendBack(containerNo, userEmail, knownRow) {
       console.error('[OL-MOVE] history log failed (non-fatal):', e?.message || e);
     }
 
+    if (isCtc && priorNewClientName) {
+      const merged = row.slice();
+      for (const c of colsToClear) merged[c] = '';
+      const found = await _populateTransportationFromClientToClientLease(rn, merged, containerNo, priorNewClientName, userEmail);
+      return found ? 'OK_FMS_POPULATED' : 'OK_FMS_NOT_FOUND';
+    }
+
     return 'OK';
   });
 }
 
 /** Mongo-first fast path for Send Back — same trade-off as the other Fast
- *  paths in this file. */
+ *  paths in this file. Clears the same columns saveOffLeaseSendBack does
+ *  (leaving 291 alone for a "Client to Client" row — see that function's own
+ *  doc comment) for instant list feedback; the queued replay runs the real
+ *  function above, which is what actually performs the FMS re-fetch — this
+ *  path only ever clears columns, never populates from FMS itself. */
 export async function saveOffLeaseSendBackFast(containerNo, userEmail, knownRow) {
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
@@ -3318,10 +3771,14 @@ export async function saveOffLeaseSendBackFast(containerNo, userEmail, knownRow)
 
   const jumpTarget = _jumpTargetInternal(found.row);
   if (jumpTarget == null) throw new AppError('This record was not moved via Move To Stage — nothing to send back.');
-  await checkActionPermission(`offlease${jumpTarget}`, userEmail);
+  const isCtc = safeStr(found.row[OL_MOVE_REASON_COL]) === 'Client to Client';
+  if (!(await userHasAction(userEmail, `offlease${jumpTarget}`))) {
+    await checkActionPermission(`offlease${isCtc ? OL_BILLING_INTERNAL : jumpTarget}`, userEmail);
+  }
 
+  const colsToClear = isCtc ? OL_MOVE_ALL_COLS.filter((c) => c !== OL_MOVE_NEW_CLIENT_COL) : OL_MOVE_ALL_COLS;
   const patch = {};
-  for (const c of OL_MOVE_ALL_COLS) patch[`row.${c}`] = '';
+  for (const c of colsToClear) patch[`row.${c}`] = '';
 
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
   const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);

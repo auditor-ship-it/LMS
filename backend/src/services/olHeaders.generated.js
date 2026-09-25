@@ -85,6 +85,23 @@
  * of Stage 2 onward's queues (see the intimation-approval gate check in
  * getOffLeaseData) while still updating the Master workbook to Off-Lease,
  * same as a normal Approve (see saveOffLeaseApprovalClientToClient).
+ *
+ * Indices 338..344 ("Client to Client - Pending DO Number", "...Pending New
+ * Client Name", "...Pending Remarks", "...Pending Lifting Date", "...Pending
+ * Move To Stage Target", "...Pending Submitted By", "...Pending Submitted
+ * Timestamp") are the same kind of deliberate, hand-added exception — added
+ * 2026-09-24 for Stage 2 (Transportation)'s OWN "Client to Client" Move To
+ * Stage reason (a completely separate feature from Stage 1A's, above,
+ * despite the similar name): explicit request that Client to Client no
+ * longer jump the container out of Transportation immediately. Submitting it
+ * now only fills THESE pending columns (a draft, holding a manually-entered
+ * DO Number) — the real OL_MOVE_* columns (290-297, "Move To Stage ...")
+ * stay blank, so _isMovedOut(row) stays false and the container correctly
+ * keeps showing in Transportation's own pending queue. A background job
+ * (checkPendingClientToClientMoves, offlease.service.js) matches the pending
+ * DO Number against STAGE-8 on a cadence, and once found, copies this draft
+ * into the real OL_MOVE_* columns to actually execute the jump — see
+ * saveOffLeaseMoveToStageClientToClientPending's doc comment.
  */
 export const OL_HEADERS = [
   "Container No", "Lease ID", "Size", "Type",
@@ -176,4 +193,8 @@ export const OL_HEADERS = [
   "Transportation Payment Proof", "Total Outstanding Payment Proof",
   "LR Return Transportation Remark", "LR Return Transportation Timestamp", "LR Return Transportation User", "LR Return Transportation Status",
   "Container Photos (PDF)", "Client to Client - New Client Name",
+  "Client to Client - Pending DO Number", "Client to Client - Pending New Client Name",
+  "Client to Client - Pending Remarks", "Client to Client - Pending Lifting Date",
+  "Client to Client - Pending Move To Stage Target", "Client to Client - Pending Submitted By",
+  "Client to Client - Pending Submitted Timestamp",
 ];

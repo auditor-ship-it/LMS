@@ -40,6 +40,16 @@ export const saveMoveToStage = (containerNo, { reason, newClientName, clientScop
 export const saveSendBack = (containerNo, rowNum) =>
   apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/send-back`, { rowNum }).then((r) => r.data.message);
 
+/** POST /api/offlease/:containerNo/move-to-stage/client-to-client-pending —
+ *  Stage 2's "Client to Client" DO-first flow, explicit request 2026-09-24.
+ *  Records a draft only (`doNumber` required, the DO Number STAGE-8 will
+ *  eventually carry); the actual jump happens later, in the background, once
+ *  that DO matches a real STAGE-8 movement. `rowNum`: see getStageDetail's
+ *  doc comment. */
+export const saveMoveToStageClientToClientPending = (containerNo, { doNumber, newClientName, remarks, date, moveToStage, rowNum }) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/move-to-stage/client-to-client-pending`, { doNumber, newClientName, remarks, date, moveToStage, rowNum })
+    .then((r) => r.data.message);
+
 /** GET /api/offlease/:containerNo/move-history — full Move To Stage / Send
  *  Back audit trail for one record, newest first. */
 export const getMoveHistory = (containerNo, leaseId) =>

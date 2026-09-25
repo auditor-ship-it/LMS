@@ -1,4 +1,4 @@
-import { getExpiryData, saveExpiryAction, refreshSalePersons, getCompanyContainers, createRenewalLink, saveExpiryRemark, exportToGoogleSheet } from '../api/expiry.api.js';
+import { getExpiryData, saveExpiryAction, refreshSalePersons, getCompanyContainers, createRenewalLink, saveExpiryRemark } from '../api/expiry.api.js';
 
 export async function fetchExpiryList() {
   return getExpiryData('pending');
@@ -27,10 +27,4 @@ export async function fetchCompanyContainers(company) {
 /** Mints the signed handoff link and returns { url, containers, expiresInSecs }. */
 export async function requestRenewalLink(company, containers) {
   return createRenewalLink(company, containers);
-}
-
-/** Turns the caller's own already-filtered table into a brand-new
- *  standalone Google Sheet. Returns { url, spreadsheetId }. */
-export async function exportExpiryToGoogleSheet(title, headers, rows) {
-  return exportToGoogleSheet(title, headers, rows);
 }

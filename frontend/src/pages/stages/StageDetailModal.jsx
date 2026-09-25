@@ -7,7 +7,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
@@ -396,21 +396,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   doc comment on the backend. Reads nothing from STAGE-8/9/10
                   itself; only ever writes to this container's own Off-Lease
                   Tracking row.
-                  `fmsChecked` (explicit request 2026-09-24): the form stays
-                  locked until the STAGE-8 check above has actually resolved
-                  (found or not) — it must never be usable before the system
-                  has even looked. `fmsFound` (explicit, twice-confirmed
-                  request 2026-09-24 — REVERSED from this feature's original
-                  "escape hatch for containers with none" design after the
-                  second confirmation): the form only UNLOCKS once STAGE-8 IS
-                  found for this container; it stays locked, not even
-                  submittable, while there is no STAGE-8 record yet. A
-                  container with no STAGE-8 record keeps showing as "Pending"
-                  in Transportation (with an explicit "Stage 8 Fetch Pending"
-                  label — see FmsDots in StagePageBase.jsx) until one lands.
-                  Enforced again server-side in saveOffLeaseMoveToStage/Fast,
-                  not just here — this UI gate is a convenience, not the real
-                  check. */}
+                  `fmsChecked` (explicit request 2026-09-24): applies only to
+                  Client Scope/Other now — the form stays locked until the
+                  STAGE-8 check above has actually resolved (found or not); it
+                  must never be usable before the system has even looked.
+                  `fmsFound` (explicit, twice-confirmed request 2026-09-24 —
+                  REVERSED from this feature's original "escape hatch for
+                  containers with none" design after the second confirmation):
+                  same two reasons only unlock once STAGE-8 IS found for this
+                  container. Client to Client is exempt from both (see
+                  MoveToStageSection's own doc comment) — REDESIGNED same day,
+                  it needs a DO Number instead and defers the actual jump to
+                  `checkPendingClientToClientMoves` on the backend, exposed
+                  here via `ctcPending` (data?._ctcPending). A container stuck
+                  on either path keeps showing as "Pending" in Transportation
+                  (see FmsDots in StagePageBase.jsx) until it resolves.
+                  Enforced again server-side in saveOffLeaseMoveToStage/Fast
+                  and saveOffLeaseMoveToStageClientToClientPending, not just
+                  here — this UI gate is a convenience, not the real check. */}
               {identityOnly && (
                 <MoveToStageSection
                   containerNo={containerNo}
@@ -418,7 +421,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   canMove={canAct(`offlease${stageNumber}`)}
                   fmsChecked={suppliedFms || !fmsLoading}
                   fmsFound={!!fmsMovement}
+                  doFetched={!!String(data?.col_48 || '').trim()}
                   alreadyMoved={data?._move}
+                  ctcPending={data?._ctcPending}
                   onMoved={() => { onSaved?.(); onClose(); }}
                 />
               )}
@@ -1283,36 +1288,47 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * doc comment on the backend. That destination stage then offers Send Back
  * (SendBackPanel below) to undo it.
  *
- * Reason = "Client to Client" additionally captures a New Client Name.
  * Reason = "Client Scope" additionally captures a free-text Scope. Reason =
- * "Other" additionally captures a free-text Comment / Type.
+ * "Other" additionally captures a free-text Comment / Type. Both stay
+ * gated on `fmsFound` exactly as before: `fmsChecked` locks the whole form
+ * until the STAGE-8 check above resolves at all; once resolved, these two
+ * reasons stay locked until a STAGE-8 record IS found (explicit,
+ * twice-confirmed request 2026-09-24 — a deliberate reversal of this
+ * feature's original "escape hatch for containers with none" framing).
+ * Enforced again server-side (saveOffLeaseMoveToStage/Fast).
  *
- * `fmsChecked` (explicit request 2026-09-24): stays false while the STAGE-8
- * check above is still loading, locking the whole form until it resolves —
- * whether or not a STAGE-8 record actually exists for this container.
- * `fmsFound` (explicit, twice-confirmed request 2026-09-24): once checked,
- * the form stays locked UNTIL a STAGE-8 record IS found for this container —
- * not the other way around. This is a deliberate reversal of the feature's
- * original "escape hatch for containers with none" framing (raised once as
- * a conflict and re-confirmed by the user in plain terms), so a container
- * only becomes movable here once its STAGE-8 movement is actually on file.
- * Enforced again server-side (saveOffLeaseMoveToStage/Fast) — this is a
- * convenience gate, not the authoritative check. A container with no
- * STAGE-8 record yet keeps showing as "Pending" in Transportation (with an
- * explicit "Stage 8 Fetch Pending" label — FmsDots in StagePageBase.jsx)
- * until this unlocks.
+ * Reason = "Client to Client" is REDESIGNED, same day, on top of that
+ * (explicit follow-up request): it no longer needs fmsFound at all, and no
+ * longer jumps the container anywhere on submit. Instead it asks for a DO
+ * Number and just saves a draft (submitMoveToStageClientToClientPending) —
+ * see `ctcPending` below and OL_CTC_PENDING_*_COL's own doc comment on the
+ * backend. The container stays in Transportation's own pending queue,
+ * labelled "Client to Client — Stage 8 Fetch Pending (DO: ...)", until a
+ * background job matches that DO against STAGE-8 and finalizes the jump on
+ * its own — nothing left to do here once the draft is saved.
+ *
+ * `doFetched` — explicit request 2026-09-25, on top of everything above: the
+ * whole section (not just the submit button — the Reason dropdown itself)
+ * stays closed for ALL THREE reasons until Transportation's own DO Number
+ * (col_48) is already on file, whether that arrived via the "Client to
+ * Client" Send Back re-fetch (saveOffLeaseSendBack's
+ * _populateTransportationFromClientToClientLease) or any other route. This
+ * sits ABOVE the per-reason checks above, not in place of them — Client
+ * Scope/Other's own fmsChecked/fmsFound lock is unchanged once this outer
+ * gate opens.
  */
-function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound, alreadyMoved, onMoved }) {
+function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound, doFetched, alreadyMoved, ctcPending, onMoved }) {
   const [reason, setReason] = useState('');
   const [newClientName, setNewClientName] = useState('');
   const [clientScope, setClientScope] = useState('');
   const [commentType, setCommentType] = useState('');
+  const [doNumber, setDoNumber] = useState('');
   const [remarks, setRemarks] = useState('');
   const [date, setDate] = useState('');
   const [moveToStage, setMoveToStage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [done, setDone] = useState(null); // { reason, label } once moved
+  const [done, setDone] = useState(null); // { label } once moved or saved as pending
 
   // Already recorded (this modal was reopened after a Move) — show what was
   // saved instead of an editable form; there's nothing left to submit here,
@@ -1335,23 +1351,72 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
     );
   }
 
+  // Client to Client draft already saved, still awaiting the background
+  // STAGE-8 match — nothing editable here; it either resolves on its own or
+  // stays exactly like this. No Send-Back-style undo exists for a draft
+  // (there's nothing to undo — it hasn't moved anywhere yet).
+  if (ctcPending?.active) {
+    return (
+      <div className={styles.fmsWrap}>
+        <h3 className={styles.sectionTitle}>Move To Stage</h3>
+        <p className={styles.sectionHint}>
+          Client to Client — Stage 8 Fetch Pending (DO: {ctcPending.doNumber})
+          {ctcPending.newClientName ? ` — New Client: ${ctcPending.newClientName}` : ''}
+          {ctcPending.date ? ` · Lifting ${ctcPending.date}` : ''}
+          {ctcPending.remarks ? ` · ${ctcPending.remarks}` : ''}
+          {ctcPending.jumpTargetDisplay ? ` · Will move to Stage ${ctcPending.jumpTargetDisplay} once confirmed` : ''}
+        </p>
+        <p className={styles.sectionHint}>
+          This container stays in Transportation until STAGE-8 confirms DO {ctcPending.doNumber} — checked automatically
+          every few minutes, nothing further to do here.
+        </p>
+      </div>
+    );
+  }
+
+  // Explicit request 2026-09-25: Move To Stage stays fully closed — not even
+  // the Reason dropdown — until this container's own DO Number is already on
+  // file (col_48). Fetch DO first, THEN Move To Stage opens.
+  if (!doFetched) {
+    return (
+      <div className={styles.fmsWrap}>
+        <h3 className={styles.sectionTitle}>Move To Stage</h3>
+        <p className={styles.sectionHint}>
+          Locked until this container's DO Number is fetched into Transportation — nothing to move yet.
+        </p>
+      </div>
+    );
+  }
+
   const handleMove = async () => {
     if (!reason) { setError('Select a Reason first.'); return; }
     setError('');
 
     if (!date) { setError('Date is required.'); return; }
     if (!moveToStage) { setError('Select a Move To Stage destination.'); return; }
-
-    const payload = { reason, remarks: remarks.trim(), date, moveToStage, rowNum };
     const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => o.value === moveToStage);
     const destLabel = target?.label || `Stage ${moveToStage}`;
-    let successLabel = '';
+
     if (reason === 'Client to Client') {
       const name = newClientName.trim();
       if (!name) { setError('New Client Name is required.'); return; }
-      payload.newClientName = name;
-      successLabel = `Client to Client (${name}) — moved directly to ${destLabel}`;
-    } else if (reason === 'Client Scope') {
+      const doNo = doNumber.trim();
+      if (!doNo) { setError('DO Number is required.'); return; }
+      setBusy(true);
+      try {
+        await submitMoveToStageClientToClientPending(containerNo, { doNumber: doNo, newClientName: name, remarks: remarks.trim(), date, moveToStage, rowNum });
+        setDone({ label: `Client to Client (${name}) — saved as pending, awaiting STAGE-8 confirmation for DO ${doNo}` });
+      } catch (e) {
+        setError(apiErrorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    const payload = { reason, remarks: remarks.trim(), date, moveToStage, rowNum };
+    let successLabel = '';
+    if (reason === 'Client Scope') {
       const scope = clientScope.trim();
       if (!scope) { setError('Scope is required.'); return; }
       payload.clientScope = scope;
@@ -1366,7 +1431,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
     setBusy(true);
     try {
       await submitMoveToStage(containerNo, payload);
-      setDone({ reason, label: successLabel });
+      setDone({ label: successLabel });
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
@@ -1377,8 +1442,8 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
   if (done) {
     return (
       <div className={styles.savedPanel}>
-        <p className={styles.savedTitle}>Moved</p>
-        <p className={styles.savedHint}>{containerNo} is recorded as moved — {done.label}.</p>
+        <p className={styles.savedTitle}>Saved</p>
+        <p className={styles.savedHint}>{containerNo} — {done.label}.</p>
         <div className={styles.savedActions}>
           <Button type="button" variant="primary" onClick={onMoved}>Done</Button>
         </div>
@@ -1386,14 +1451,12 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
     );
   }
 
-  /* REVERSED 2026-09-24 (explicit, repeated request — overrides this
-     component's own earlier "usable only when STAGE-8 is ABSENT" design):
-     the form now stays locked until STAGE-8 IS found for this container,
-     not the other way around. This inverts the feature's original "escape
-     hatch for containers with no FMS data" purpose, but the user confirmed
-     this exact behavior twice, in plain terms, after I raised the
-     conflict — so it stands as stated. */
-  const locked = busy || !canMove || !fmsChecked || !fmsFound;
+  /* Client to Client no longer needs fmsChecked/fmsFound at all — see this
+     component's own doc comment. Client Scope/Other keep the REVERSED
+     2026-09-24 gate (locked until STAGE-8 IS found), unaffected by the
+     Client to Client redesign. */
+  const isCtc = reason === 'Client to Client';
+  const locked = busy || !canMove || (!isCtc && (!fmsChecked || !fmsFound));
 
   return (
     <div className={styles.fmsWrap}>
@@ -1403,15 +1466,23 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
           field={{ key: 'reason', label: 'Reason', type: 'select', options: MOVE_REASON_OPTIONS }}
           value={reason}
           onChange={(v) => { setReason(v); setError(''); }}
-          disabled={locked}
+          disabled={busy || !canMove}
         />
         {reason === 'Client to Client' && (
-          <Field
-            field={{ key: 'newClientName', label: 'New Client Name', type: 'text', required: true }}
-            value={newClientName}
-            onChange={setNewClientName}
-            disabled={locked}
-          />
+          <>
+            <Field
+              field={{ key: 'newClientName', label: 'New Client Name', type: 'text', required: true }}
+              value={newClientName}
+              onChange={setNewClientName}
+              disabled={locked}
+            />
+            <Field
+              field={{ key: 'doNumber', label: 'DO Number', type: 'text', required: true }}
+              value={doNumber}
+              onChange={setDoNumber}
+              disabled={locked}
+            />
+          </>
         )}
         {reason === 'Client Scope' && (
           <Field
@@ -1455,17 +1526,23 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
 
       {error && <div className={styles.error}>{error}</div>}
       {!canMove && <p className={styles.sectionHint}>You don't have permission to move this stage.</p>}
-      {canMove && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
-      {canMove && fmsChecked && !fmsFound && (
+      {canMove && !isCtc && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
+      {canMove && !isCtc && fmsChecked && !fmsFound && (
         <p className={styles.sectionHint}>
           No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.
+        </p>
+      )}
+      {canMove && isCtc && (
+        <p className={styles.sectionHint}>
+          Saving this records a draft only — the container stays in Transportation until the DO Number above matches a
+          real STAGE-8 movement, checked automatically every few minutes.
         </p>
       )}
 
       {reason && (
         <div className={styles.actions}>
           <Button type="button" variant="primary" loading={busy} disabled={locked} onClick={handleMove}>
-            {busy ? 'Moving…' : 'Move'}
+            {busy ? 'Saving…' : isCtc ? 'Save' : 'Move'}
           </Button>
         </div>
       )}
@@ -1475,28 +1552,58 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
 
 /**
  * Shown on whichever stage (Gate In / Inspection / Billing) a record was
- * directly jumped to via Move To Stage (Reason = "Other") — see
- * getOffLeaseStageDetail's `_move.canSendBackHere` on the backend. Reverses
- * the jump: the record returns to Stage 2's own pending queue, the same row
- * (nothing duplicated), with its full history preserved in the separate
- * audit-trail sheet regardless.
+ * directly jumped to via Move To Stage — see getOffLeaseStageDetail's
+ * `_move.canSendBackHere` on the backend. Reverses the jump: the record
+ * returns to Stage 2's own pending queue, the same row (nothing duplicated),
+ * with its full history preserved in the separate audit-trail sheet
+ * regardless.
+ *
+ * "Client to Client" (explicit request 2026-09-24, confirmed live on
+ * SJKU4000104/GRMU5181208): sending one of these back ALSO re-fetches its
+ * real transport data from FMS and populates Stage 2's Transportation
+ * columns with it — see the backend's saveOffLeaseSendBack/
+ * _populateTransportationFromClientToClientLease doc comments. That's also
+ * why this panel can appear on Billing even when the jump originally landed
+ * earlier (Gate In/Inspection): canSendBackHere allows it once a "Client to
+ * Client" row has progressed all the way to Billing without ever getting
+ * that data. `submitSendBack`'s return value distinguishes the three
+ * outcomes so the confirmation matches what actually happened.
  */
 function SendBackPanel({ containerNo, rowNum, moveInfo, onSentBack }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [result, setResult] = useState(null); // 'OK' | 'OK_FMS_POPULATED' | 'OK_FMS_NOT_FOUND'
 
   const handleSendBack = async () => {
     setError('');
     setBusy(true);
     try {
-      await submitSendBack(containerNo, rowNum);
-      onSentBack?.();
+      const r = await submitSendBack(containerNo, rowNum);
+      setResult(r || 'OK');
     } catch (e) {
       setError(apiErrorMessage(e));
     } finally {
       setBusy(false);
     }
   };
+
+  const isCtc = moveInfo.reason === 'Client to Client';
+
+  if (result) {
+    return (
+      <div className={styles.savedPanel}>
+        <p className={styles.savedTitle}>Sent back to Stage 2</p>
+        <p className={styles.savedHint}>
+          {result === 'OK_FMS_POPULATED' && `${containerNo}'s Stage 8 transport data was found and Transportation has been pre-filled from it.`}
+          {result === 'OK_FMS_NOT_FOUND' && `${containerNo} is back in Stage 2, but no Stage 8 booking for ${moveInfo.newClientName || 'the new client'} was found yet — it will keep retrying automatically every few minutes.`}
+          {result === 'OK' && `${containerNo} is back in Stage 2's pending queue.`}
+        </p>
+        <div className={styles.savedActions}>
+          <Button type="button" variant="primary" onClick={() => onSentBack?.(result)}>Done</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.savedPanel}>
@@ -1510,6 +1617,12 @@ function SendBackPanel({ containerNo, rowNum, moveInfo, onSentBack }) {
         {moveInfo.date ? ` · ${moveInfo.date}` : ''}
         {moveInfo.remarks ? ` · ${moveInfo.remarks}` : ''}
       </p>
+      {isCtc && (
+        <p className={styles.sectionHint}>
+          Sending this back to Stage 2 will also re-fetch its Stage 8 transport data from FMS (matched against
+          {' '}{moveInfo.newClientName || 'the new client'}) and pre-fill Transportation with it, if it's available yet.
+        </p>
+      )}
       {error && <div className={styles.error}>{error}</div>}
       <div className={styles.savedActions}>
         <Button type="button" variant="secondary" loading={busy} onClick={handleSendBack}>

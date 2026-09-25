@@ -464,6 +464,22 @@ export async function findOffleaseMovement(containerNo, clientName, rows) {
 }
 
 /**
+ * The last STAGE-8 Offlease movement row whose own DO number (Delivery
+ * Order OR Booking Order — STAGE-8 carries both, see readOffleaseRows)
+ * matches the given DO number, or null. Added 2026-09-24 for Transportation's
+ * "Client to Client" pending-DO flow (offlease.service.js's
+ * checkPendingClientToClientMoves): unlike every other lookup in this file,
+ * this one is keyed purely on a DO number a human typed in — no container or
+ * client to cross-check against — so it is deliberately narrow (STAGE-8
+ * only, not the STAGE-10 whole-row scan matchByDo does) and still enforces
+ * MIN_DO_LEN so a placeholder token ("NA", "-") can never spuriously match.
+ */
+export async function getStage8MovementByDo(doNumber) {
+  const rows = await readOffleaseRows();
+  return matchByDoField(rows, [doNumber], 'deliveryOrderNo') || matchByDoField(rows, [doNumber], 'bookingOrderNo');
+}
+
+/**
  * The FMS chain for ONE container — the same three lookups the Stage 2 grid
  * does, for the container-detail screen. Reads Mongo (fast, always
  * available) rather than a live-Sheets cache, so this never fails on quota.
@@ -660,6 +676,85 @@ export async function getMatchedFmsForContainer(containerNo, clientName) {
   ]);
   const movement = matchRow(rows8, containerNo, clientName);
   const transport = matchRow(rows9, containerNo, clientName);
+  const doKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo, transport?.doNumber].filter(Boolean);
+  const delivery = matchByDo(rows10, doKeys);
+  return { movement, transport, delivery };
+}
+
+/** Every STAGE-8 row with Movement Type = Lease — deliberately NOT reused by
+ *  readOffleaseRows() above (which exists specifically to exclude these: "90
+ *  of 1,100+ rows are Offlease", the rest being ordinary new deployments
+ *  across the whole business). Needed only for the ONE case where a "Lease"
+ *  row IS the record this app wants: a Stage 2 "Client to Client" move sends
+ *  a container straight to a NEW client without ever passing through a
+ *  depot, so its real transport booking is filed in FMS as a normal Lease
+ *  movement to that new client, not an Offlease one — see
+ *  getClientToClientLeaseMovement's doc comment. */
+async function readLeaseMovementRows() {
+  return cachedFmsRead(`${S8_TAB}::lease`, async () => {
+    const { headers, rows } = await getSheetDataFromMongo(S8_TAB);
+    return rows
+      .filter((r) => safeStr(r[S8.MOVEMENT_TYPE]).trim().toLowerCase() === 'lease')
+      .map((r) => ({
+        containerNo: safeStr(r[S8.CONTAINER]).trim(),
+        containerKeys: normContainerKeys(r[S8.CONTAINER]),
+        clientName: safeStr(r[S8.CLIENT]).trim(),
+        movementType: safeStr(r[S8.MOVEMENT_TYPE]).trim(),
+        deliveryCity: safeStr(r[S8.CITY]).trim(),
+        sizeType: safeStr(r[S8.SIZE_TYPE]).trim(),
+        timestamp: safeStr(r[S8.TIMESTAMP]).trim(),
+        deliveryOrderNo: safeStr(r[S8.DELIVERY_ORDER_NO]).trim(),
+        bookingOrderNo: safeStr(r[S8.BOOKING_ORDER_NO]).trim(),
+        fields: allFields(headers, r)
+      }))
+      .filter((r) => r.containerNo);
+  });
+}
+
+/** STAGE-9 counterpart of readLeaseMovementRows — same "Lease, not Offlease"
+ *  scope, same reason. */
+async function readLeaseStage9Rows() {
+  return cachedFmsRead(`${S9_TAB}::lease`, async () => {
+    const { headers, rows } = await getSheetDataFromMongo(S9_TAB);
+    return rows
+      .filter((r) => safeStr(r[S9.MOVEMENT_TYPE]).trim().toLowerCase() === 'lease')
+      .map((r) => ({
+        containerNo: safeStr(r[S9.CONTAINER]).trim(),
+        containerKeys: normContainerKeys(r[S9.CONTAINER]),
+        clientName: safeStr(r[S9.CLIENT]).trim(),
+        doNumber: safeStr(r[S9.DO_NUMBER]).trim(),
+        fields: allFields(headers, r)
+      }))
+      .filter((r) => r.containerNo);
+  });
+}
+
+/**
+ * The FMS movement/transport/delivery chain for a Stage 2 "Client to Client"
+ * move, keyed on the container + the move's OWN "New Client Name" — NOT the
+ * Off-Lease row's own (old) client, which is how every other lookup in this
+ * file works and exactly why they all miss this data. Explicit request
+ * 2026-09-24 (Stage 5 -> Stage 2 send-back re-fetch): confirmed live on
+ * SJKU4000104 ("Tata Advanced" in this app, "TATA ADVANCED SYSTEMS LTD" in
+ * FMS) and GRMU5181208 ("SVMA AGRO PRODUCTS LTD", spelled identically in
+ * both) — both containers' real DO was sitting in STAGE-8/9 as Movement Type
+ * "Lease" under the new client the whole time; getMatchedFmsForContainer
+ * found nothing for either because that reader (by design) only ever looks
+ * at Movement Type "Offlease".
+ *
+ * Matched by container + new-client only (no date/cycle bound, unlike
+ * getFmsForContainer) — safe here specifically because the new client name
+ * is itself the disambiguator a stale older cycle would fail: an earlier
+ * "Lease" booking for this same container almost certainly named a
+ * DIFFERENT client (its previous deployment), so requiring THIS new client
+ * to match already excludes it without needing a separate time boundary.
+ */
+export async function getClientToClientLeaseMovement(containerNo, newClientName) {
+  const [rows8, rows9, rows10] = await Promise.all([
+    readLeaseMovementRows(), readLeaseStage9Rows(), readStage10Rows()
+  ]);
+  const movement = matchRow(rows8, containerNo, newClientName);
+  const transport = matchRow(rows9, containerNo, newClientName);
   const doKeys = [movement?.deliveryOrderNo, movement?.bookingOrderNo, transport?.doNumber].filter(Boolean);
   const delivery = matchByDo(rows10, doKeys);
   return { movement, transport, delivery };
