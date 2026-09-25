@@ -2,7 +2,7 @@ import {
   getOffLeaseApprovalData, saveOffLeaseApprovalAction, sendRejectedToStage1, sendBackFromApproval, saveApprovalClientToClient, getOffLeaseContainerDetail,
   addToOffLeaseTracking, getOffLeaseDashboardData,
   getMovementSourceContainers, getMovementSourceContainer, getStage9Movements, saveStage9Movement,
-  getRemarkThread, addRemark, updateRemark, deleteRemark, exportToGoogleSheet
+  getRemarkThread, addRemark, updateRemark, deleteRemark
 } from '../api/offlease.api.js';
 import { invalidate } from '../shared/dataBus.js';
 
@@ -76,10 +76,4 @@ export async function fetchMovements() {
 }
 export async function submitMovement(payload) {
   return saveStage9Movement(payload);
-}
-
-/* Dashboard's month-wise "Export to Google Sheet" — same generic export
-   Lease Expiry uses. */
-export async function exportOffLeaseToGoogleSheet(title, headers, rows) {
-  return exportToGoogleSheet(title, headers, rows);
 }

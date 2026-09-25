@@ -116,9 +116,3 @@ export const getStage9Movements = () => apiClient.get('/offlease/stage9/movement
 /** POST /api/offlease/stage9/movements — appends one row to the Stage 9 sheet. */
 export const saveStage9Movement = (payload) =>
   apiClient.post('/offlease/stage9/movements', payload).then((r) => r.data);
-
-/** POST /api/offlease/export-sheet — turns the caller's own already-filtered
- *  Dashboard list into a brand-new standalone Google Sheet. Resolves to
- *  { url, spreadsheetId }. Same generic export Lease Expiry uses. */
-export const exportToGoogleSheet = (title, headers, rows) =>
-  apiClient.post('/offlease/export-sheet', { title, headers, rows }).then((r) => r.data);

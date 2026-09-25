@@ -9,7 +9,6 @@ import { getOffLeaseEfficiencyReport } from '../services/offleaseEfficiency.serv
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
-import { exportRowsToGoogleSheet } from '../services/sheetExport.service.js';
 
 /* ---- Core 8-stage pipeline ---- */
 
@@ -171,6 +170,19 @@ export async function saveMoveToStage(req, res) {
   const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, rowNum } = req.body || {};
   const message = await offLeaseService.saveOffLeaseMoveToStageFast(
     req.params.containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }, req.user.email, rowNum
+  );
+  res.json({ message });
+}
+
+/** Stage 2's "Client to Client" — the DO-first flow, explicit request
+ *  2026-09-24. Records a draft only (see
+ *  saveOffLeaseMoveToStageClientToClientPending's own doc comment); the
+ *  actual jump happens later, in the background, once the DO Number entered
+ *  here matches a real STAGE-8 movement. */
+export async function saveMoveToStageClientToClientPending(req, res) {
+  const { doNumber, newClientName, remarks, date, moveToStage, rowNum } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseMoveToStageClientToClientPending(
+    req.params.containerNo, { doNumber, newClientName, remarks, date, moveToStage }, req.user.email, rowNum
   );
   res.json({ message });
 }
@@ -600,15 +612,4 @@ export async function feedsNewLeaseReff(req, res) {
 export async function feedsAllSheets(req, res) {
   await assertRolesAdmin(req.user.email);
   res.json({ message: await offLeaseService.whatFeedsAllSheets() });
-}
-
-/** POST /api/offlease/export-sheet — turns whatever headers/rows the caller
- *  already has on screen (the Dashboard's month-filtered pipeline list, most
- *  likely) into a brand-new Google Sheet — same generic export used by Lease
- *  Expiry (expiry.controller.js), see sheetExport.service.js. Never reads
- *  app data itself; the frontend sends exactly what it's already rendering
- *  (already scoped/filtered), same trust level as a client-side Excel export. */
-export async function exportToGoogleSheet(req, res) {
-  const { title, headers, rows } = req.body;
-  res.json(await exportRowsToGoogleSheet(title, headers, rows));
 }

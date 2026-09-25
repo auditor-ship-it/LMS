@@ -67,6 +67,7 @@ import { copyApprovedData } from '../services/offlease.service.js';
 import { runSheetsReconciliation } from './sheetsReconcile.job.js';
 import { refreshStage3FormCache } from '../services/stage3Form.service.js';
 import { warmFmsCache } from '../services/stage8.service.js';
+import { checkPendingClientToClientMoves } from '../services/offlease.service.js';
 import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js';
 import { logger } from '../utils/logger.js';
 
@@ -111,6 +112,13 @@ const FMS_REFRESH_MINUTES = '3,8,13,18,23,28,33,38,43,48,53,58';
    Mongo read for these three large collections happened on whichever real
    user's Stage 2 tab switch landed on an expired application-level cache. */
 const WARM_FMS_CACHE_MINUTES = '4,9,14,19,24,29,34,39,44,49,54,59';
+/* 1 minute after WARM_FMS_CACHE_MINUTES — Transportation's "Client to
+   Client" pending-DO check (explicit request 2026-09-24) needs the FRESHEST
+   possible STAGE-8 mirror to match a newly-typed DO Number against, so it
+   runs last in this same 5-minute chain, after reconcile has pulled STAGE-8
+   in and warmFmsCache has refreshed the application-level read cache on top
+   of it. See checkPendingClientToClientMoves' own doc comment. */
+const CTC_PENDING_CHECK_MINUTES = '5,10,15,20,25,30,35,40,45,50,55,0';
 
 export function registerSheetsSync() {
   // STAGE-8/9/10 (2026-08-28): now part of runSheetsReconciliation's own
@@ -120,7 +128,9 @@ export function registerSheetsSync() {
   cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
   cron.schedule(`${FMS_REFRESH_MINUTES} * * * *`, safeRun('refreshStage3FormCache', refreshStage3FormCache));
   cron.schedule(`${WARM_FMS_CACHE_MINUTES} * * * *`, safeRun('warmFmsCache', warmFmsCache));
+  cron.schedule(`${CTC_PENDING_CHECK_MINUTES} * * * *`, safeRun('checkPendingClientToClientMoves', checkPendingClientToClientMoves));
   logger.info('[SYNC] Sheets<->Mongo reconciliation registered (every 5 min, offset :01) — now includes STAGE-8/9/10');
   logger.info('[SYNC] Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
   logger.info('[SYNC] STAGE-8/9/10 application cache warm registered (every 5 min, offset :04)');
+  logger.info('[SYNC] Transportation "Client to Client" pending-DO check registered (every 5 min, offset :05)');
 }

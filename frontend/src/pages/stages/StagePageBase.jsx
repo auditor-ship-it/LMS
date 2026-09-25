@@ -103,8 +103,15 @@ function FmsDots({ item }) {
       </span>
       {/* Explicit request 2026-09-24: a clear text status, not just the dot's
           hover tooltip — this is also exactly the condition that locks
-          MoveToStageSection (StageDetailModal.jsx) until it clears. */}
-      {dotState(item?.movement) === 'missing' && <span className={styles.stage8Pending}>Stage 8 Fetch Pending</span>}
+          MoveToStageSection's Client Scope/Other reasons (StageDetailModal.jsx)
+          until it clears. Client to Client's own draft (item.ctcPending, set
+          by getOffLeaseData for Transportation rows — explicit follow-up
+          request the same day) gets its own, more specific label instead,
+          since it's a DO Number waiting on the same background match, not
+          the Move To Stage form itself waiting on the check above. */}
+      {item?.ctcPending
+        ? <span className={styles.stage8Pending}>Client to Client — Stage 8 Fetch Pending (DO: {item.ctcPending.doNumber})</span>
+        : dotState(item?.movement) === 'missing' && <span className={styles.stage8Pending}>Stage 8 Fetch Pending</span>}
     </>
   );
 }
