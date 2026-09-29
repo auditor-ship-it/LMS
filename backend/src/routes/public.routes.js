@@ -98,5 +98,7 @@ router.get('/sales-os/renewals', requirePublicApiKey('salesos'), asyncHandler(re
 // ?companyNames=Name+A,Name+B,... — lets Sales OS's own backend batch-check
 // which KAM companies have a Lease match, to drive a "Lease" nav filter.
 router.get('/sales-os/company-match', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.companyMatch)));
+// ?employeeCode=X or ?employeeCodes=X,Y,Z — per-salesperson dashboard numbers.
+router.get('/sales-os/renewal-stats', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalStats)));
 
 export default router;

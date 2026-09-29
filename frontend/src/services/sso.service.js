@@ -1,4 +1,4 @@
-import { startSsoSession, startLeaseExpirySsoSession, confirmSsoCompany, saveSsoRenewal } from '../api/sso.api.js';
+import { startSsoSession, startLeaseExpirySsoSession, confirmSsoCompany, saveSsoRenewal, saveSsoRenewalDraft } from '../api/sso.api.js';
 
 /** Kicks off the Sales OS SSO handoff — `searchParams` is the deep link's
  *  own URLSearchParams, forwarded as a plain object. */
@@ -17,4 +17,8 @@ export async function confirmLeaseCompany(existingLeadId, companyName) {
 
 export async function submitSalesOsRenewal(payload) {
   return saveSsoRenewal(payload);
+}
+
+export async function saveSalesOsRenewalDraft(payload) {
+  return saveSsoRenewalDraft(payload);
 }

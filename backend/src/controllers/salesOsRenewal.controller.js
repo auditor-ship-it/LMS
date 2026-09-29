@@ -14,3 +14,23 @@ export async function listRenewals(req, res) {
 export async function companyMatch(req, res) {
   res.json({ data: await salesOsRenewal.matchCompanies(req.query.companyNames) });
 }
+
+/** GET /api/public/v1/sales-os/renewal-stats?employeeCode=X or
+ *  ?employeeCodes=X,Y,Z — per-salesperson dashboard numbers (pending,
+ *  overdue, awaiting approval, approved this month). Read-only, same
+ *  "salesos" key scope. See salesOsRenewal.service.js#getRenewalStats. */
+export async function renewalStats(req, res) {
+  const single = String(req.query.employeeCode || '').trim();
+  const codes = single
+    ? [single]
+    : String(req.query.employeeCodes || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+  const data = await Promise.all(codes.map(async (code) => {
+    try {
+      return await salesOsRenewal.getRenewalStats(code);
+    } catch (e) {
+      return { status: 'error', employeeCode: code, message: e?.message || 'Lookup failed' };
+    }
+  }));
+  res.json({ data });
+}

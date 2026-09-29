@@ -19,6 +19,10 @@ export const startLeaseExpirySsoSession = (params) =>
 export const confirmSsoCompany = (existingLeadId, companyName) =>
   apiClient.post('/sso/sales-os/confirm-company', { existingLeadId, companyName }).then((r) => r.data);
 
-/** POST /api/sso/sales-os/renewal — saves the completed renewal. */
+/** POST /api/sso/sales-os/renewal — "Submit" (stages for Pushpa's approval). */
 export const saveSsoRenewal = (payload) =>
   apiClient.post('/sso/sales-os/renewal', payload).then((r) => r.data);
+
+/** POST /api/sso/sales-os/renewal-draft — "Save" (draft, nothing required). */
+export const saveSsoRenewalDraft = (payload) =>
+  apiClient.post('/sso/sales-os/renewal-draft', payload).then((r) => r.data);

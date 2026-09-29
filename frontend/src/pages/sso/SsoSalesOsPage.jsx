@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth, setStoredToken, apiErrorMessage } from '../../shared/auth/index.js';
 import { Button, Icon, LoadingState, ErrorState } from '../../components/ui/index.js';
-import { startSalesOsSso, confirmLeaseCompany, submitSalesOsRenewal } from '../../services/sso.service.js';
+import { startSalesOsSso, confirmLeaseCompany, submitSalesOsRenewal, saveSalesOsRenewalDraft } from '../../services/sso.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { CompleteDocumentModal } from '../renewDocument/CompleteDocumentModal.jsx';
 import { ROUTES } from '../../constants/routes.js';
@@ -20,11 +20,14 @@ import styles from './SsoSalesOsPage.module.css';
  * Steps: authenticating -> (company picker, only if ambiguous) -> container
  * checklist -> the SAME "Update Agreement" modal Renew & Document uses
  * in-app (reused verbatim, bulk mode — one form applied to every selected
- * container, exactly like RenewDocumentPage.jsx's own multi-select action)
- * -> success. This is deliberately NOT a separate custom form: it must be
- * the exact same fields, saved through the exact same backend actions, so a
- * renewal entered via Sales OS looks identical in Lease to one entered by
- * an ops user in-app — see salesOsRenewal.service.js#saveRenewal.
+ * container, exactly like RenewDocumentPage.jsx's own multi-select action,
+ * Save-or-Submit and all) -> success. This is deliberately NOT a separate
+ * custom form: it must be the exact same fields, saved through the exact
+ * same backend actions, so a renewal entered via Sales OS looks identical in
+ * Lease to one entered by an ops user in-app. Submit STAGES the renewal for
+ * Pushpa Shetty's approval (2026-09-29 approval workflow) rather than
+ * completing it immediately — see salesOsRenewal.service.js#saveRenewal /
+ * #saveRenewalDraftForSalesOs.
  */
 export function SsoSalesOsPage() {
   const [searchParams] = useSearchParams();
@@ -97,40 +100,62 @@ export function SsoSalesOsPage() {
 
   const selectedContainers = useMemo(() => containers.filter((c) => selected.has(c.containerNo)), [containers, selected]);
 
-  /** Wired to CompleteDocumentModal's bulk `onSubmit` — same shape
-   *  RenewDocumentPage.jsx#handleBulkDocSubmit uses: upload whatever files
-   *  were chosen ONCE, then apply the same form values to every selected
-   *  container. */
+  /** Shared by Save and Submit below — uploads whatever files were chosen
+   *  ONCE, then applies the same form values to every selected container. */
+  const buildRenewalBody = async (form) => {
+    const [signedCopyUrl, poFileUrl] = await Promise.all([
+      form.signedCopy ? uploadStageFile(form.signedCopy) : '',
+      form.poFile ? uploadStageFile(form.poFile) : ''
+    ]);
+    return {
+      existingLeadId: context.existingLeadId,
+      successType: context.successType,
+      lm: context.lm,
+      clientName: context.clientName,
+      requestId: context.requestId,
+      containers: selectedContainers.map((c) => ({
+        containerNo: c.containerNo,
+        renewedDate: form.renewedDate,
+        validTill: form.validTill,
+        signedCopyUrl,
+        poNo: form.poNo,
+        poFileUrl,
+        billingCycle: form.billingCycle,
+        poValidity: form.poValidity,
+        remarks: form.remarks
+      }))
+    };
+  };
+
+  /** Wired to CompleteDocumentModal's bulk `onSubmit` (Submit) — same shape
+   *  RenewDocumentPage.jsx#handleBulkDocSubmit uses. Stages the renewal for
+   *  Pushpa's approval, same as an in-app Submit does (2026-09-29 approval
+   *  workflow) — not immediately final. */
   const handleFormSubmit = async (form) => {
     setFormBusy(true);
     setFormError('');
     try {
-      const [signedCopyUrl, poFileUrl] = await Promise.all([
-        form.signedCopy ? uploadStageFile(form.signedCopy) : '',
-        form.poFile ? uploadStageFile(form.poFile) : ''
-      ]);
-
-      const res = await submitSalesOsRenewal({
-        existingLeadId: context.existingLeadId,
-        successType: context.successType,
-        lm: context.lm,
-        clientName: context.clientName,
-        requestId: context.requestId,
-        containers: selectedContainers.map((c) => ({
-          containerNo: c.containerNo,
-          renewedDate: form.renewedDate,
-          validTill: form.validTill,
-          signedCopyUrl,
-          poNo: form.poNo,
-          poFileUrl,
-          billingCycle: form.billingCycle,
-          poValidity: form.poValidity,
-          remarks: form.remarks
-        }))
-      });
+      const res = await submitSalesOsRenewal(await buildRenewalBody(form));
       setSaved(res);
       setFormOpen(false);
       setStep('success');
+    } catch (e) {
+      setFormError(apiErrorMessage(e));
+    } finally {
+      setFormBusy(false);
+    }
+  };
+
+  /** Wired to CompleteDocumentModal's `onSave` (Save) — the modal always
+   *  renders this button now (2026-09-29 Save/Submit split); without a
+   *  handler, clicking it throws. Persists a draft, container stays in
+   *  Documents Pending, modal stays open (same as the in-app "Save" button —
+   *  there's more to fill in or double-check before Submit). */
+  const handleFormSave = async (form) => {
+    setFormBusy(true);
+    setFormError('');
+    try {
+      await saveSalesOsRenewalDraft(await buildRenewalBody(form));
     } catch (e) {
       setFormError(apiErrorMessage(e));
     } finally {
@@ -239,6 +264,7 @@ export function SsoSalesOsPage() {
         error={formError}
         onClose={() => setFormOpen(false)}
         onSubmit={handleFormSubmit}
+        onSave={handleFormSave}
       />
     </div>
   );

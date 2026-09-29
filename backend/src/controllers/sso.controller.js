@@ -22,8 +22,14 @@ export async function confirmCompany(req, res) {
   res.json(await salesOsRenewal.confirmCompany(existingLeadId, companyName));
 }
 
-/** POST /api/sso/sales-os/renewal — saves the completed renewal.
- *  req.user comes from the SSO session established by startSession above. */
+/** POST /api/sso/sales-os/renewal — "Submit". req.user comes from the SSO
+ *  session established by startSession above. */
 export async function saveRenewal(req, res) {
   res.json(await salesOsRenewal.saveRenewal(req.user, req.body));
+}
+
+/** POST /api/sso/sales-os/renewal-draft — "Save". See
+ *  salesOsRenewal.service.js#saveRenewalDraftForSalesOs. */
+export async function saveRenewalDraft(req, res) {
+  res.json(await salesOsRenewal.saveRenewalDraftForSalesOs(req.user, req.body));
 }
