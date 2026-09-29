@@ -5,6 +5,7 @@ export const ROUTES = {
   APPROVE_LEASE: '/approve-lease',
   LEASE_EXPIRY: '/lease-expiry',
   RENEW_DOCUMENT: '/renew-document',
+  APPROVAL_PENDING: '/approval-pending',
   OFF_LEASE: '/off-lease',
   OFF_LEASE_EFFICIENCY: '/off-lease-efficiency',
   DEPLOYED_SUMMARY: '/deployed-summary',

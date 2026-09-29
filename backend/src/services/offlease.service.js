@@ -88,7 +88,7 @@ import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service
 import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement } from './stage8.service.js';
+import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
@@ -2516,6 +2516,36 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+
+    /* Explicit request 2026-09-29: Stage 3's (Inspection Checklist) own
+       "Container Received Date" (col_24) is the same real-world event
+       STAGE-10 Site Delivery already records as "Vehicle Reached at Site
+       Date" — auto-fetch it instead of asking the inspector to look it up
+       and type it by hand. Only when col_24 is still blank: this never
+       overwrites a value someone already entered, and it is only a
+       convenience pre-fill on the read side — nothing is written to the
+       sheet until the inspector actually submits the form, same as every
+       other auto-populated suggestion in this file. Best-effort: no
+       STAGE-10 match yet, or the lookup itself fails, just leaves the field
+       blank exactly as before this existed. No cycle-start bound, same
+       explicit, twice-confirmed decision as getContainerDetail's own
+       identical getFmsForContainer call (see that controller's doc comment). */
+    if (Number(stage) === 3 && !safeStr(result.col_24).trim()) {
+      try {
+        const fms = await getFmsForContainer(containerNo, safeStr(row[5]));
+        const vehicleReached = fms?.delivery?.fields?.find(
+          ([h]) => String(h || '').trim().toLowerCase() === 'vehicle reached at site date'
+        );
+        // NOT fmtCell — that renders "DD-MM-YYYY" (fine for display, but
+        // this is a type:'date' field, and <input type="date"> only accepts
+        // "YYYY-MM-DD"; anything else is silently rejected and shows blank,
+        // exactly the bug this auto-fetch exists to fix.
+        const d = vehicleReached ? parseDate(vehicleReached[1]) : null;
+        if (d) {
+          result.col_24 = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
+      } catch (e) { /* best-effort — form still opens with a blank field */ }
+    }
 
     /* Billing Reconciliation's Cost Reference card: the checklist's own
        itemised Estimate Value total, computed here because only this

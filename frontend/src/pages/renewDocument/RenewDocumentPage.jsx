@@ -7,7 +7,7 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { useAuth, apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchDocumentList, submitDocumentCompletion } from '../../services/renewDocument.service.js';
+import { fetchDocumentList, submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { CompleteDocumentModal } from './CompleteDocumentModal.jsx';
@@ -110,39 +110,94 @@ export function RenewDocumentPage() {
     return next;
   });
 
-  const openDoc = (item) => { setDocError(''); setDocItem({ containerNo: item.row?.[0], rowNum: item._rowNum }); };
+  const openDoc = (item) => {
+    setDocError('');
+    setDocItem({
+      containerNo: item.row?.[0],
+      rowNum: item._rowNum,
+      // Pre-fill from the DRAFT columns only (AA-AD plus the DRAFT_* PO/
+      // Billing Cycle/PO Validity ones) — REDESIGNED 2026-09-29 (approval
+      // workflow): Save/Submit no longer touch the real PO/Billing Cycle/PO
+      // Validity columns on the row at all (see saveRenewalDraft/
+      // completeDocStage's own doc comments on the backend) — only
+      // decideRenewalApproval's Approve path ever writes those, and only
+      // once approved, so the real columns can't be used to pre-fill a draft
+      // anymore.
+      draft: {
+        renewedDate: item.draftRenewedDate || '',
+        validTill: item.draftValidTill || '',
+        remarks: item.draftRemarks || '',
+        poNo: item.draftPoNo || '',
+        poValidity: item.draftPoValidity || '',
+        billingCycle: item.draftBillingCycle || '',
+        submittedDate: item.renewalSubmittedDate || '',
+        approvalStatus: item.approvalStatus || '',
+        approvalRemarks: item.approvalRemarks || ''
+      }
+    });
+  };
+
+  /* Shared by Save and Submit — same payload shape, same uploads, only the
+     backend call (and what happens to the modal/list after) differs. */
+  const buildDocPayload = async (containerNo, rowNum, payload) => {
+    // Uploaded concurrently, not one after the other — the PO file has no
+    // reason to wait on the signed copy finishing first, and this was
+    // roughly doubling the wait whenever a form carried both.
+    const [signedCopyUrl, poFileUrl] = await Promise.all([
+      payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+      payload.poFile ? uploadStageFile(payload.poFile) : ''
+    ]);
+    return {
+      containerNo,
+      renewedDate: payload.renewedDate,
+      validTill: payload.validTill,
+      signedCopyUrl,
+      remarks: payload.remarks,
+      userEmail: user?.email || '',
+      poNo: payload.poNo,
+      poFileUrl,
+      billingCycle: payload.billingCycle,
+      poValidity: payload.poValidity,
+      rowNum
+    };
+  };
 
   const handleDocSubmit = async (payload) => {
     if (!docItem) return;
     setDocBusy(true);
     setDocError('');
     try {
-      // Uploaded concurrently, not one after the other — the PO file has no
-      // reason to wait on the signed copy finishing first, and this was
-      // roughly doubling the wait whenever a form carried both.
-      const [signedCopyUrl, poFileUrl] = await Promise.all([
-        payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-        payload.poFile ? uploadStageFile(payload.poFile) : ''
-      ]);
-
       // docItem.rowNum: this exact Deployed row — see completeRenewalDocStage's
       // doc comment for why container number alone isn't safe here.
-      const result = await submitDocumentCompletion({
-        containerNo: docItem.containerNo,
-        renewedDate: payload.renewedDate,
-        validTill: payload.validTill,
-        signedCopyUrl,
-        remarks: payload.remarks,
-        userEmail: user?.email || '',
-        poNo: payload.poNo,
-        poFileUrl,
-        billingCycle: payload.billingCycle,
-        poValidity: payload.poValidity,
-        rowNum: docItem.rowNum
-      });
+      const body = await buildDocPayload(docItem.containerNo, docItem.rowNum, payload);
+      const result = await submitDocumentCompletion(body);
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else if (result === 'MISSING_PO') setDocError('A PO number/file URL is required first.');
       else if (result === 'MISSING_AGR') setDocError('A signed agreement copy URL is required first.');
+      else {
+        setDocItem(null); setSelectedContainer(null);
+        await reload();
+        invalidate('deployed-sheet');
+      }
+    } catch (e) {
+      setDocError(apiErrorMessage(e));
+    } finally {
+      setDocBusy(false);
+    }
+  };
+
+  /* "Save" — explicit request 2026-09-28: persists the draft, the container
+     STAYS in Documents Pending (unlike Submit, which clears it out), so this
+     closes the modal and reloads exactly like Submit success does — the row
+     is still there, just now pre-filled with what was just saved. */
+  const handleDocSave = async (payload) => {
+    if (!docItem) return;
+    setDocBusy(true);
+    setDocError('');
+    try {
+      const body = await buildDocPayload(docItem.containerNo, docItem.rowNum, payload);
+      const result = await saveDocumentDraft(body);
+      if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else {
         setDocItem(null); setSelectedContainer(null);
         await reload();
@@ -195,6 +250,52 @@ export function RenewDocumentPage() {
         .filter(Boolean);
       if (failed.length) {
         setBulkError(`Failed for: ${failed.join(', ')}. The rest were updated.`);
+      } else {
+        setBulkOpen(false);
+        setSelectedKeys(new Set());
+      }
+      await reload();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setBulkError(apiErrorMessage(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  /* Bulk "Save" — same shape as handleBulkDocSubmit, but nothing required
+     (a draft can be partial) so there's no MISSING_PO/MISSING_AGR case to
+     check, and every selected container stays in Documents Pending. */
+  const handleBulkDocSave = async (payload) => {
+    if (!selectedItems.length) return;
+    setBulkBusy(true);
+    setBulkError('');
+    try {
+      const [signedCopyUrl, poFileUrl] = await Promise.all([
+        payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+        payload.poFile ? uploadStageFile(payload.poFile) : ''
+      ]);
+
+      const results = await Promise.allSettled(selectedItems.map(async (it) => {
+        const result = await saveDocumentDraft({
+          containerNo: it.row?.[0],
+          renewedDate: payload.renewedDate,
+          validTill: payload.validTill,
+          signedCopyUrl,
+          remarks: payload.remarks,
+          poNo: payload.poNo,
+          poFileUrl,
+          billingCycle: payload.billingCycle,
+          poValidity: payload.poValidity,
+          rowNum: it._rowNum
+        });
+        if (result === 'INVALID_STATE') throw new Error(result);
+      }));
+      const failed = results
+        .map((r, i) => (r.status === 'rejected' ? selectedItems[i].row?.[0] : null))
+        .filter(Boolean);
+      if (failed.length) {
+        setBulkError(`Failed for: ${failed.join(', ')}. The rest were saved.`);
       } else {
         setBulkOpen(false);
         setSelectedKeys(new Set());
@@ -294,6 +395,7 @@ export function RenewDocumentPage() {
         error={docError}
         onClose={() => setDocItem(null)}
         onSubmit={handleDocSubmit}
+        onSave={handleDocSave}
       />
 
       <CompleteDocumentModal
@@ -303,6 +405,7 @@ export function RenewDocumentPage() {
         error={bulkError}
         onClose={() => setBulkOpen(false)}
         onSubmit={handleBulkDocSubmit}
+        onSave={handleBulkDocSave}
       />
     </>
   );

@@ -40,6 +40,13 @@ export const NAV_TREE = {
     // restore it for everyone.
     // { key: 'approve', label: 'Approve Lease', path: ROUTES.APPROVE_LEASE, icon: 'check', sidebarKey: 'approve', section: 'Agreements', taskKey: 'pendingApprovals' },
     { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', sidebarKey: 'renewDocument', section: 'Agreements', taskKey: 'renewPending' },
+    // Explicit request 2026-09-29: its own sidebar page, not a tab on Renew &
+    // Document (which is how this was first built the same day) — see
+    // ApprovalPendingPage.jsx. No sidebarKey yet, same "always visible until
+    // a matching Sidebar Access column exists" convention as Reports below —
+    // real access to the Approve/Reject buttons themselves is still gated by
+    // the 'renewApproval' PERMISSION key (page renders view-only without it).
+    { key: 'approvalPending', label: 'Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },

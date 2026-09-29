@@ -217,7 +217,16 @@ export function PipelineDashboard({ onOpenTab }) {
           footnote={kpis.outstandingWithDamageCount > 0 ? `${kpis.outstandingWithDamageCount} with damage` : undefined}
           onClick={() => toggleFilter('outstanding')}
         />
-        <StatCard icon="check" label="Completed this month" value={kpis.completedThisMonth ?? '—'} loading={loading} tint="success" />
+        {/* Explicit request 2026-09-29: replaces "Completed this month" —
+            Stage 6 (KAM, internal 8) was the one active stage with no card
+            of its own on this dashboard at all; same pattern as every other
+            Stage N card above (STAGE_ICONS[8]/byStage[8] already existed and
+            were computed, just never rendered here). */}
+        <StatCard
+          icon={STAGE_ICONS[8]} label="Stage 6 · KAM" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
+          footnote={STAGES.find((s) => s.number === 8)?.owner}
+          onClick={() => toggleFilter(8)}
+        />
       </div>
 
       <Card

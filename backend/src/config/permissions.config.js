@@ -79,7 +79,16 @@ export const PERMISSION_KEYS = [
    * by editing the live sheet directly, same as any other permission
    * mistake, not by a code-level escape hatch). */
   { key: 'rolesAdmin', label: 'Roles & Access Admin' },
-  { key: 'apiAdmin', label: 'API Access Admin' }
+  { key: 'apiAdmin', label: 'API Access Admin' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * Renew & Document's approval workflow, explicit request 2026-09-29: a
+   * submitted renewal needs Pushpa Shetty's approval before it's applied
+   * (see expiry.service.js's decideRenewalApproval). Defaults to false for
+   * everyone — no hardcoded fallback, same "no baseline" rule as
+   * rolesAdmin/apiAdmin above — so this key must be explicitly granted to
+   * pushpa.shetty@crystalgroup.in (and anyone else meant to approve) via
+   * Roles & Access after this ships, or nobody can approve anything yet. */
+  { key: 'renewApproval', label: 'Renew & Document: Approval (Pushpa)' }
   /* offlease10 (Off-Lease Stage 3: LR & Return Transportation) — added
      2026-09-18, REMOVED 2026-09-22 (explicit request: Stage 3 itself was
      removed from the pipeline entirely, LR & Return Transportation + its

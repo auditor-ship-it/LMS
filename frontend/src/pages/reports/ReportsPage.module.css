@@ -56,3 +56,22 @@
   color: var(--text);
 }
 .monthSelect:focus { outline: none; border-color: var(--accent); }
+
+/* Renewals week-wise breakdown — explicit request 2026-09-28. */
+.weekRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.weekChip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.weekChipLabel { font-size: 11.5px; font-weight: 600; color: var(--text-2); }
+.weekChipCount { font-size: 12.5px; font-weight: 800; color: var(--text); }

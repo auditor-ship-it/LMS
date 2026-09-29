@@ -50,6 +50,29 @@ function inRange(key, year, month) {
   return true;
 }
 
+/** Explicit request 2026-09-28: "total renew ... week wise". Same two-format
+ *  parsing as monthKeyOf (dd/MM/yyyy needs component parsing, ISO needs its
+ *  leading yyyy-MM-dd), reduced to that date's own Monday — a plain calendar
+ *  week (Mon-Sun), not an ISO week number, since the label shown is the
+ *  week's start date, not a number nobody would recognise. */
+function weekStartOf(stamp) {
+  const s = String(stamp || '').trim();
+  let d = null;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  else {
+    const dmy = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+    if (dmy) d = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+  }
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diffToMonday);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+const WEEK_LABEL_FMT = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short' });
+
 export function ReportsPage() {
   const offlease = useAsync(fetchOffLeaseDashboard, []);
   const renewals = useAsync(fetchRenewalLog, []);
@@ -64,9 +87,20 @@ export function ReportsPage() {
   const [year, setYear] = useState(() => String(new Date().getFullYear()));
   const [month, setMonth] = useState(() => String(new Date().getMonth() + 1).padStart(2, '0'));
 
+  /* Explicit request 2026-09-28: Sale-Person-wise filter for renewals (and
+     New Leases, which already carries the same field). Off-Lease has no
+     Sale Person of its own (see getOffLeaseDashboardData's item shape) so it
+     is deliberately unaffected by this filter. */
+  const [salePerson, setSalePerson] = useState('all');
+
   const olItems = offlease.data?.items || [];
   const rnItems = renewals.data?.data || [];
   const nlItems = newLease.data?.data || [];
+
+  const salePersons = useMemo(
+    () => [...new Set([...rnItems, ...nlItems].map((r) => r.saleExec).filter(Boolean))].sort(),
+    [rnItems, nlItems]
+  );
 
   /* Every month key on the page, from ALL reports — the filter is shared, so
      its options must cover everything it can filter. */
@@ -103,12 +137,36 @@ export function ReportsPage() {
   [olItems, year, month]);
 
   const renewalRows = useMemo(() => rnItems
-    .filter((r) => inRange(monthKeyOf(r.timestamp), year, month)),
-  [rnItems, year, month]);
+    .filter((r) => inRange(monthKeyOf(r.timestamp), year, month))
+    .filter((r) => salePerson === 'all' || r.saleExec === salePerson),
+  [rnItems, year, month, salePerson]);
 
   const newLeaseRows = useMemo(() => nlItems
-    .filter((r) => inRange(monthKeyOf(r.deployedDate), year, month)),
-  [nlItems, year, month]);
+    .filter((r) => inRange(monthKeyOf(r.deployedDate), year, month))
+    .filter((r) => salePerson === 'all' || r.saleExec === salePerson),
+  [nlItems, year, month, salePerson]);
+
+  /* "Total renew ... week wise" — renewalRows already carries every other
+     active filter (year/month/sale person), so this is just one more
+     reduction on top, not a second independent query. Sorted newest-first,
+     same convention as the report tables below. */
+  const renewalsByWeek = useMemo(() => {
+    const buckets = new Map(); // weekStart epoch ms -> count
+    for (const r of renewalRows) {
+      const start = weekStartOf(r.timestamp);
+      if (!start) continue;
+      const key = start.getTime();
+      buckets.set(key, (buckets.get(key) || 0) + 1);
+    }
+    return [...buckets.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([ms, count]) => {
+        const start = new Date(ms);
+        const end = new Date(ms);
+        end.setDate(end.getDate() + 6);
+        return { key: ms, label: `${WEEK_LABEL_FMT.format(start)} – ${WEEK_LABEL_FMT.format(end)}`, count };
+      });
+  }, [renewalRows]);
 
   const loading = offlease.loading || renewals.loading || newLease.loading;
   const reloadAll = () => { offlease.reload(); renewals.reload(); newLease.reload(); };
@@ -139,8 +197,8 @@ export function ReportsPage() {
       newLeaseRows.map((r) => [r.deployedDate, r.container, r.clientName, r.orderNo, r.orderType, r.qty, r.size, r.productType, r.location, r.saleExec]));
 
     add('Agreement Renewals',
-      ['Renewed On', 'Container No', 'Client Name', 'Valid Till', 'PO No', 'PO File', 'Agreement File', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By'],
-      renewalRows.map((r) => [r.timestamp, r.container, r.clientName, r.validTill, r.poNo, r.poFile, r.agreementFile, r.oldPoNo, r.oldPoFile, r.oldAgreementFile, r.updatedBy]));
+      ['Renewed On', 'Container No', 'Client Name', 'Valid Till', 'PO No', 'PO File', 'Agreement File', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By', 'Sale Person'],
+      renewalRows.map((r) => [r.timestamp, r.container, r.clientName, r.validTill, r.poNo, r.poFile, r.agreementFile, r.oldPoNo, r.oldPoFile, r.oldAgreementFile, r.updatedBy, r.saleExec]));
 
     const stamp = periodLabel.replace(/[^A-Za-z0-9]+/g, '-');
     XLSX.writeFile(wb, `Reports-${stamp}.xlsx`);
@@ -175,6 +233,12 @@ export function ReportsPage() {
         <select id="rep-month" className={styles.monthSelect} value={month} onChange={(e) => setMonth(e.target.value)}>
           <option value="all">All months</option>
           {monthsInYear.map((m) => <option key={m} value={m}>{MONTHS[Number(m) - 1] || m}</option>)}
+        </select>
+
+        <label className={styles.filterLabel} htmlFor="rep-sale-person">Sale Person</label>
+        <select id="rep-sale-person" className={styles.monthSelect} value={salePerson} onChange={(e) => setSalePerson(e.target.value)}>
+          <option value="all">All</option>
+          {salePersons.map((sp) => <option key={sp} value={sp}>{sp}</option>)}
         </select>
 
         <Button variant="secondary" size="sm" onClick={reloadAll} disabled={loading}>Refresh</Button>
@@ -241,12 +305,25 @@ export function ReportsPage() {
       <Card title="Agreement Renewal Report">
         {!renewals.loading && renewals.error && <ErrorState message={renewals.error} onRetry={renewals.reload} />}
         {!renewals.loading && renewals.data?.error && <ErrorState message={renewals.data.error} onRetry={renewals.reload} />}
+        {/* Explicit request 2026-09-28: renewals broken down week-wise, on
+            top of the year/month/sale-person filter already applied above —
+            same renewalRows the table below reads, just grouped further. */}
+        {!renewals.loading && renewalsByWeek.length > 0 && (
+          <div className={styles.weekRow}>
+            {renewalsByWeek.map((w) => (
+              <div key={w.key} className={styles.weekChip}>
+                <span className={styles.weekChipLabel}>{w.label}</span>
+                <span className={styles.weekChipCount}>{w.count}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {(renewals.loading || (!renewals.error && !renewals.data?.error)) && (
           <DataGrid
             headers={[
               'Renewed On', 'Container No', 'Client Name', 'Valid Till',
               'PO No', 'PO File', 'Agreement File',
-              'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By'
+              'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By', 'Sale Person'
             ]}
             rows={renewalRows}
             loading={renewals.loading}
@@ -263,7 +340,8 @@ export function ReportsPage() {
               <td key="op">{r.oldPoNo || '—'}</td>,
               <td key="opf">{renderCellValue(r.oldPoFile)}</td>,
               <td key="oaf">{renderCellValue(r.oldAgreementFile)}</td>,
-              <td key="u">{r.updatedBy || '—'}</td>
+              <td key="u">{r.updatedBy || '—'}</td>,
+              <td key="sp">{r.saleExec || '—'}</td>
             ]}
           />
         )}

@@ -10,24 +10,59 @@ const EMPTY_FORM = {
   poFile: null
 };
 
+/** Whatever's already in `item.draft` (a prior Save, or existing PO/Billing
+ *  Cycle values already on the row — see RenewDocumentPage.jsx's openDoc)
+ *  turned into this form's shape. Dates arrive as ISO strings (the backend
+ *  always writes new Date(x).toISOString()) — <input type="date"> needs
+ *  plain YYYY-MM-DD. */
+function toDateInputValue(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+}
+function formFromDraft(draft) {
+  if (!draft) return EMPTY_FORM;
+  return {
+    renewedDate: toDateInputValue(draft.renewedDate),
+    validTill: toDateInputValue(draft.validTill),
+    remarks: draft.remarks || '',
+    poNo: draft.poNo || '',
+    poValidity: toDateInputValue(draft.poValidity),
+    billingCycle: draft.billingCycle || '',
+    signedCopy: null,
+    poFile: null
+  };
+}
+
 /**
- * "Complete Document Stage" — Documents tab's row action. Calls
- * submitDocumentCompletion -> POST /expiry/renewal/complete-document-stage;
- * the signed copy / PO file are uploaded to Drive first (RenewDocumentPage's
- * handleDocSubmit) and their resulting URLs sent in place of signedCopy/poFile.
+ * "Complete Document Stage" — Documents tab's row action. Two ways to leave
+ * this form, explicit request 2026-09-28:
+ *   - Save (onSave -> saveRenewalDraft -> POST .../save-document-draft):
+ *     persists whatever's filled in as a draft, nothing required, the
+ *     container STAYS in Documents Pending and can be reopened later —
+ *     reopening pre-fills from `item.draft` (a prior save, or PO/Billing
+ *     Cycle values the row already had) instead of starting blank.
+ *   - Submit (onSubmit -> submitDocumentCompletion ->
+ *     POST .../complete-document-stage): the existing, final action —
+ *     completes the renewal and clears the container out of Pending.
+ * Both send the same shaped payload; the signed copy / PO file are uploaded
+ * to Drive first either way (RenewDocumentPage's handleDocSubmit/
+ * handleDocSave) and their resulting URLs sent in place of signedCopy/poFile.
  *
  * Also doubles as the BULK version: pass `items` (an array, one entry per
  * selected container) instead of `item`. One form, filled once — every
  * field, INCLUDING the uploaded signed copy/PO file, applies identically to
  * every container in the list (e.g. one PO/agreement batch covering several
- * containers). `item` and `items` are mutually exclusive.
+ * containers). `item` and `items` are mutually exclusive; bulk has no single
+ * container's draft to pre-fill from, so it always starts blank.
  */
-export function CompleteDocumentModal({ open, item, items, submitting, error, onClose, onSubmit }) {
-  const [form, setForm] = useState(EMPTY_FORM);
+export function CompleteDocumentModal({ open, item, items, submitting, error, onClose, onSubmit, onSave }) {
   const bulk = Array.isArray(items);
+  const [form, setForm] = useState(() => (bulk ? EMPTY_FORM : formFromDraft(item?.draft)));
 
   useEffect(() => {
-    if (open) setForm(EMPTY_FORM);
+    if (open) setForm(bulk ? EMPTY_FORM : formFromDraft(item?.draft));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item, items]);
 
   if (!bulk && !item) return null;
@@ -39,6 +74,7 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
     e.preventDefault();
     onSubmit(form);
   };
+  const handleSave = () => onSave(form);
 
   return (
     <Modal
@@ -58,6 +94,25 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             <span className={styles.label}>Container</span>
             <input type="text" value={item.containerNo || ''} disabled />
           </label>
+        )}
+
+        {/* Explicit request 2026-09-29 (approval workflow): Pushpa rejected
+            this one — say why, front and centre, so the submitter isn't
+            wondering why a "completed" Submit is back here to redo. */}
+        {!bulk && item?.draft?.approvalStatus === 'Rejected' && (
+          <p className={styles.error}>
+            Rejected by Pushpa{item.draft.approvalRemarks ? `: ${item.draft.approvalRemarks}` : ' — no remarks given.'} Fix and Submit again.
+          </p>
+        )}
+
+        {/* Explicit request 2026-09-28: this container was already Saved as a
+            draft (not yet Submitted) — say so, and when, so reopening this
+            form doesn't look identical to a fresh, never-touched one. */}
+        {!bulk && item?.draft?.submittedDate && (
+          <p className={styles.hint}>
+            Draft saved — last updated {new Date(item.draft.submittedDate).toLocaleString()}. Still pending; edit and
+            Save again, or Submit to complete.
+          </p>
         )}
 
         <div className={styles.grid2}>
@@ -123,8 +178,15 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
 
         <div className={styles.footer}>
           <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
+          {/* type="button", not "submit" — Save is deliberately permissive
+              (nothing required), so it must skip the Renewed Date/Valid Till
+              inputs' native `required` validation entirely, not just this
+              form's own onSubmit handler. */}
+          <Button type="button" variant="secondary" loading={submitting} onClick={handleSave}>
+            Save
+          </Button>
           <Button type="submit" variant="primary" loading={submitting}>
-            {bulk ? `Update ${items.length}` : 'Update Agreement'}
+            {bulk ? `Submit ${items.length}` : 'Submit'}
           </Button>
         </div>
       </form>
