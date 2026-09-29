@@ -99,3 +99,27 @@ export async function completeRenewalDocStage(req, res) {
     )
   });
 }
+
+/** POST /api/expiry/renewal/save-document-draft — "Save" (draft), explicit
+ *  request 2026-09-28: same fields as complete-document-stage above, but the
+ *  record stays in Documents Pending and nothing required — see
+ *  saveRenewalDraft's own doc comment. */
+export async function saveRenewalDraft(req, res) {
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum } = req.body;
+  res.json({
+    result: await expiryService.saveRenewalDraft(
+      containerNo, renewedDate, validTill, signedCopyUrl, remarks,
+      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum
+    )
+  });
+}
+
+/** POST /api/expiry/renewal/decide-approval — Pushpa's Approve/Reject
+ *  decision, explicit request 2026-09-29. `decision` is 'approved' or
+ *  'rejected'; see decideRenewalApproval's own doc comment. */
+export async function decideRenewalApproval(req, res) {
+  const { containerNo, decision, remarks, rowNum } = req.body;
+  res.json({
+    result: await expiryService.decideRenewalApproval(containerNo, decision, remarks, req.user.email, rowNum)
+  });
+}

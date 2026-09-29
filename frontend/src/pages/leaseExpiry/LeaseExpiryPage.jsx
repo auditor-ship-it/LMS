@@ -8,11 +8,14 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
-import { apiErrorMessage } from '../../shared/auth/index.js';
+import { apiErrorMessage, useAuth } from '../../shared/auth/index.js';
 import { fetchExpiryList, actionExpiryRow, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
+import { submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
+import { uploadStageFile } from '../../services/upload.service.js';
 import { OffLeaseModal } from './OffLeaseModal.jsx';
 import { RenewalHandoffModal } from './RenewalHandoffModal.jsx';
+import { CompleteDocumentModal } from '../renewDocument/CompleteDocumentModal.jsx';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { distinctOptionsForColumn } from '../../utils/tableFilters.js';
 import styles from './LeaseExpiryPage.module.css';
@@ -57,12 +60,12 @@ export function LeaseExpiryPage() {
   useAutoRefresh('deployed-sheet', reload);
   const { canAct } = usePermission();
   const canActExpiry = canAct('expiry');
+  const { user } = useAuth();
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 250);
   const [band, setBand] = useState('');
   const [salePerson, setSalePerson] = useState('');
-  const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -88,6 +91,16 @@ export function LeaseExpiryPage() {
   const [offLeaseBusy, setOffLeaseBusy] = useState(false);
   const [offLeaseError, setOffLeaseError] = useState('');
   const closeOffLease = () => { setOffLeaseItem(null); setOffLeaseItems(null); setOffLeaseError(''); };
+
+  /* Explicit request 2026-09-29: "Renew" must open the actual Renew form
+     immediately, not silently flip a status with no form at all (the old
+     runAction(selected, 'Documents Pending') below) — Save/Submit reuse the
+     SAME CompleteDocumentModal + backend calls Renew & Document's own
+     "Update Agreement" action already uses (see RenewDocumentPage.jsx),
+     rather than duplicating that form. renewItem null = closed. */
+  const [renewItem, setRenewItem] = useState(null);
+  const [renewBusy, setRenewBusy] = useState(false);
+  const [renewError, setRenewError] = useState('');
 
   // "Renew via Sales CRM" — separate from the Renew button above, which
   // still drives THIS app's own internal renewal-status workflow
@@ -135,17 +148,30 @@ export function LeaseExpiryPage() {
     [headers]
   );
 
+  /* Explicit request 2026-09-28: the scorecards (Overdue/Upcoming and their
+     ≤30d/Critical/etc. sub-counts) must reflect the selected Sale Person,
+     the same way the table below already does — previously they always
+     summed EVERY row regardless of this filter. Deliberately its own memo,
+     independent of `band`/search (unlike `filtered` below): the band
+     sub-buttons read these same counts to render their own labels, so
+     computing them off `filtered` (which the band buttons also narrow)
+     would make a button's own count shrink to 0 the moment it's clicked. */
+  const salePersonFilteredRows = useMemo(() => {
+    if (!salePerson || salePersonColIdx < 0) return rows;
+    return rows.filter((r) => String((r.row || [])[salePersonColIdx] ?? '').trim() === salePerson);
+  }, [rows, salePerson, salePersonColIdx]);
+
   const bandCounts = useMemo(() => {
     const c = { overdue: 0, critical: 0, warning: 0, safe: 0 };
-    for (const r of rows) if (r.band && c[r.band] !== undefined) c[r.band] += 1;
+    for (const r of salePersonFilteredRows) if (r.band && c[r.band] !== undefined) c[r.band] += 1;
     return c;
-  }, [rows]);
+  }, [salePersonFilteredRows]);
 
   const overdueBuckets = useMemo(() => {
     const b = { le30: 0, le60: 0, over60: 0 };
-    for (const r of rows) if (r.band === 'overdue') b[overdueMagnitudeBucket(r)] += 1;
+    for (const r of salePersonFilteredRows) if (r.band === 'overdue') b[overdueMagnitudeBucket(r)] += 1;
     return b;
-  }, [rows]);
+  }, [salePersonFilteredRows]);
 
   const upcomingCount = bandCounts.critical + bandCounts.warning + bandCounts.safe;
   const bandValue = { overdue: bandCounts.overdue, upcoming: upcomingCount };
@@ -229,35 +255,93 @@ export function LeaseExpiryPage() {
     }
   };
 
-  const runAction = async (item, status) => {
-    const containerNo = item.row?.[0];
-    const key = `${containerNo}-${status}`;
-    setBusyKey(key);
-    setActionError('');
+  const openRenew = (item) => {
+    setRenewError('');
+    // No prior draft possible — this container's status isn't even
+    // 'Documents Pending' yet (that only happens once Save/Submit below
+    // actually runs), so the form starts blank, same as the very first time
+    // Renew & Document's own "Update Agreement" ever opens for a container.
+    setRenewItem({ containerNo: item.row?.[0], rowNum: item._rowNum, draft: null });
+  };
+
+  /* Shared by Save and Submit below. Save/Submit on Renew & Document's own
+     page can assume the container is ALREADY 'Documents Pending' (that's
+     how it got into that page's list) — but this is the FIRST click ever
+     for this container, before that status exists, and saveRenewalDraft/
+     completeDocStage both refuse to write until it does (see their own
+     guards). So this does what the old one-click Renew button used to do
+     by itself, THEN builds the same payload shape RenewDocumentPage.jsx's
+     buildDocPayload does. ALREADY_PROCESSED (a second Save on the same
+     draft, once the status is already set) is expected and harmless here,
+     not an error — only a genuine failure result should stop the save. */
+  const buildRenewPayload = async (containerNo, rowNum, payload) => {
+    const statusResult = await actionExpiryRow(containerNo, new Date().toISOString(), 'Documents Pending', rowNum);
+    if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
+      throw new Error('Could not mark this container for renewal — try again.');
+    }
+    const [signedCopyUrl, poFileUrl] = await Promise.all([
+      payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+      payload.poFile ? uploadStageFile(payload.poFile) : ''
+    ]);
+    return {
+      containerNo,
+      renewedDate: payload.renewedDate,
+      validTill: payload.validTill,
+      signedCopyUrl,
+      remarks: payload.remarks,
+      userEmail: user?.email || '',
+      poNo: payload.poNo,
+      poFileUrl,
+      billingCycle: payload.billingCycle,
+      poValidity: payload.poValidity,
+      rowNum
+    };
+  };
+
+  const handleRenewSave = async (payload) => {
+    if (!renewItem) return;
+    setRenewBusy(true);
+    setRenewError('');
     try {
-      // item._rowNum: this exact Deployed row, not just the container number
-      // — see saveExpiryAction's doc comment for why that distinction matters.
-      const result = await actionExpiryRow(containerNo, new Date().toISOString(), status, item._rowNum);
-      if (result === 'ALREADY_PROCESSED') {
-        setActionError(`${containerNo} was already actioned by someone else.`);
+      const body = await buildRenewPayload(renewItem.containerNo, renewItem.rowNum, payload);
+      const result = await saveDocumentDraft(body);
+      if (result === 'INVALID_STATE') setRenewError('Could not save — try again.');
+      else {
+        setRenewItem(null);
+        setSelectedIdx(null);
+        await reload();
+        invalidate('deployed-sheet');
       }
-      setSelectedIdx(null);
-      // ONE rule, deliberately: write, then read. The write above already
-      // completed against the live sheet, so a read taken strictly after it
-      // is authoritative — no optimistic local patch to keep in sync, no
-      // second background fetch racing it. Confirmed 2026-08-21: running an
-      // optimistic patch AND a self-triggered background reload side by
-      // side let the (slower, real Sheets-latency) reload silently
-      // overwrite the already-correct optimistic state a moment later — a
-      // visible "chip flashes in, then vanishes" bug. awaiting this reload
-      // before invalidate() also means OTHER pages' own reloads (triggered
-      // below) start after this one has already landed, not racing it.
-      await reload();
-      invalidate('deployed-sheet');
     } catch (e) {
-      setActionError(apiErrorMessage(e));
+      setRenewError(apiErrorMessage(e));
     } finally {
-      setBusyKey('');
+      setRenewBusy(false);
+    }
+  };
+
+  /* Submitting directly from THIS first-ever form (without ever clicking
+     Save) is allowed too — the "Expected Flow" only requires Save before
+     Submit when the details aren't all ready on the first sitting. */
+  const handleRenewSubmit = async (payload) => {
+    if (!renewItem) return;
+    setRenewBusy(true);
+    setRenewError('');
+    try {
+      const body = await buildRenewPayload(renewItem.containerNo, renewItem.rowNum, payload);
+      const result = await submitDocumentCompletion(body);
+      if (result === 'INVALID_STATE') setRenewError('Could not submit — try again.');
+      else if (result === 'MISSING_PO') setRenewError('A PO number/file URL is required first.');
+      else if (result === 'MISSING_AGR') setRenewError('A signed agreement copy URL is required first.');
+      else {
+        setRenewItem(null);
+        setSelectedIdx(null);
+        await reload();
+        invalidate('deployed-sheet');
+      }
+    } catch (e) {
+      setRenewError(apiErrorMessage(e));
+    } finally {
+      setRenewBusy(false);
     }
   };
 
@@ -486,9 +570,8 @@ export function LeaseExpiryPage() {
             visibleColIdx={visibleColIdx}
             total={filtered.length}
             canAct={canActExpiry}
-            busyKey={busyKey}
             onBack={() => setSelectedIdx(null)}
-            onRenew={() => runAction(selected, 'Documents Pending')}
+            onRenew={() => openRenew(selected)}
             onOffLease={() => { setOffLeaseError(''); setOffLeaseItem(selected); }}
             onRenewViaSalesCrm={customerColIdx >= 0 ? () => setRenewalHandoffItem(selected) : null}
             onRemarkSaved={patchRemark}
@@ -512,11 +595,26 @@ export function LeaseExpiryPage() {
         defaultContainer={renewalHandoffItem?.row?.[0]}
         onClose={() => setRenewalHandoffItem(null)}
       />
+
+      {/* BUG FOUND AND FIXED 2026-09-28: openRenew/handleRenewSave/
+          handleRenewSubmit were all wired up (state, handlers) but this
+          element itself was never actually added to the render tree — every
+          click correctly set renewItem, but nothing was reading it, so
+          "Renew" visibly did nothing. */}
+      <CompleteDocumentModal
+        open={!!renewItem}
+        item={renewItem}
+        submitting={renewBusy}
+        error={renewError}
+        onClose={() => setRenewItem(null)}
+        onSubmit={handleRenewSubmit}
+        onSave={handleRenewSave}
+      />
     </>
   );
 }
 
-function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKey, onBack, onRenew, onOffLease, onRenewViaSalesCrm, onRemarkSaved }) {
+function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, onBack, onRenew, onOffLease, onRenewViaSalesCrm, onRemarkSaved }) {
   const containerNo = item.row?.[0];
   // Once Renew has been clicked, this container stays here (it can be
   // renewed again in future) but is already in progress on Renew & Document
@@ -577,7 +675,7 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, busyKe
               {inProgress ? (
                 <span className={styles.viewOnlyIcon}>Sent for renewal — continue from Renew &amp; Document</span>
               ) : dueSoon ? (
-                <Button size="lg" variant="primary" loading={busyKey === `${containerNo}-Documents Pending`} onClick={onRenew}>Renew</Button>
+                <Button size="lg" variant="primary" onClick={onRenew}>Renew</Button>
               ) : (
                 <span className={styles.viewOnlyIcon}>Not due yet — Renew reappears within 15 days of expiry ({formatDays(item.daysLeft)} left)</span>
               )}

@@ -68,13 +68,6 @@ const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
  *  moved to a since-removed Stage 10 2026-09-18, back here 2026-09-22. */
 const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
 
-/** Each Payment Confirmation Yes/No on Stage 6 opens its own proof-upload
- *  field once marked Paid — explicit 2026-09-17 request, extended same day
- *  from just Inspection/Quotation to all three questions. */
-const transportPaidShown = (v) => String(v.col_326 || '').toLowerCase() === 'yes';
-const outstandingPaidShown = (v) => String(v.col_327 || '').toLowerCase() === 'yes';
-const inspectionPaidShown = (v) => String(v.col_328 || '').toLowerCase() === 'yes';
-
 /**
  * Stage 3 inspection checklist — the 8 container inspection points from the
  * printed instruction sheet, plus Curtain / Tube Light / Mantrap.
@@ -399,22 +392,16 @@ export const STAGE_FIELDS = {
      submit here — see StageDetailModal.jsx's empty-fields message. */
   7: [],
 
-  8: [
-    // REMOVED 2026-09-17 (explicit request): 'Billing & Filing' (col_122),
-    // 'FMS Closure' (col_123) upload fields and 'All documents uploaded to
-    // FMS?' (col_124). Existing data on already-saved rows is untouched —
-    // this only stops asking for them on new/unsaved records.
-    { key: 'col_125', label: 'Remark', type: 'text' },
-    /* Payment Confirmation — explicit 2026-09-17 request: FMS Closure asks
-       whether the amounts Stage 5 reconciled were actually PAID, not just
-       reconciled. See OL_STAGE8_EXTRA_COLS in offlease.service.js. */
-    { key: 'col_326', label: 'Transportation Amount Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
-    { key: 'col_330', label: 'Transportation Payment Proof', type: 'file', showIf: transportPaidShown, group: 'Payment Confirmation' },
-    { key: 'col_327', label: 'Total Outstanding Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
-    { key: 'col_331', label: 'Total Outstanding Payment Proof', type: 'file', showIf: outstandingPaidShown, group: 'Payment Confirmation' },
-    { key: 'col_328', label: 'Inspection / Quotation Amount Paid?', type: 'radio', options: YES_NO, group: 'Payment Confirmation' },
-    { key: 'col_329', label: 'Inspection / Quotation Payment Proof', type: 'file', showIf: inspectionPaidShown, group: 'Payment Confirmation' }
-  ]
+  /* REMOVED 2026-09-29 (explicit request): 'Remark' (col_125) and the whole
+     'Payment Confirmation' group (Transportation/Outstanding/Inspection
+     Amount Paid? + their proof uploads, col_326-331, added 2026-09-17) —
+     Stage 6 (KAM) no longer asks for any of this. Existing data on
+     already-saved rows is untouched (still visible in the Full Off-Lease
+     History view/PDF); this only stops asking for it going forward. Kept as
+     an empty array, same convention as internal stage 7 (Gate In) right
+     above — this stage still exists and still resolves in every stage-number
+     mapping, it simply has no fields of its own to fill in anymore. */
+  8: []
   /* Internal stage 10, "LR & Return Transportation" (displayed as "Stage 3"
      between Transportation and Gate In) lived here 2026-09-18 to 2026-09-22
      (explicit request each time) — LR details read-only from FMS plus an

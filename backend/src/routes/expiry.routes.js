@@ -30,6 +30,12 @@ router.post('/action', requirePermission('expiry'), asyncHandler(expiryControlle
 router.post('/remark', requirePermission('expiry'), asyncHandler(expiryController.saveRemark));
 
 router.post('/renewal/complete-document-stage', requirePermission('renew'), asyncHandler(expiryController.completeRenewalDocStage));
+router.post('/renewal/save-document-draft', requirePermission('renew'), asyncHandler(expiryController.saveRenewalDraft));
+/* Approval gate itself is enforced inside decideRenewalApproval
+   (checkActionPermission('renewApproval', ...)) — no requirePermission(...)
+   here, same "per-action, not per-route" pattern offlease.routes.js uses for
+   its own per-stage actions. */
+router.post('/renewal/decide-approval', asyncHandler(expiryController.decideRenewalApproval));
 
 /* "Renew via Sales CRM" handoff. The picker list is read-only (same
    open-read convention as the GETs above); minting the actual signed link

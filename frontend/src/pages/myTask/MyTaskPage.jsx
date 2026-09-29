@@ -27,7 +27,9 @@ const GROUPS = {
 
 const CARD_DEFS = [
   { key: 'pendingVerify', label: 'Pending Verify', owner: 'Yastika', path: ROUTES.VERIFY_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
-  { key: 'pendingApprovals', label: 'Pending Approvals', owner: 'Pushpa Maam', path: ROUTES.APPROVE_LEASE, group: GROUPS.PENDING, tint: 'warn', icon: 'clock' },
+  // Removed from My Task 2026-09-29 (explicit request) — the underlying
+  // Approve Lease page/route/backend counting are untouched, still reachable
+  // directly; only this scorecard tile is gone.
   { key: 'expiring7', label: 'Expiring in 7 Days', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'warn', icon: 'alert' },
   { key: 'expired', label: 'Already Expired', path: ROUTES.LEASE_EXPIRY, group: GROUPS.EXPIRY, tint: 'error', icon: 'alert' },
   { key: 'renewPending', label: 'Renew Pending', path: ROUTES.RENEW_DOCUMENT, group: GROUPS.EXPIRY, tint: 'info', icon: 'edit' },
@@ -46,6 +48,7 @@ const CARD_DEFS = [
    * ones that remain — they still index getMyTasks()'s response 1:1 by
    * internal stage number. */
   { key: 'olStage1', label: 'Off-Lease Stage 1: Intimation', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage1Hold', label: 'Off-Lease Stage 1: Hold', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'lock' },
   /* The approval gate sits BETWEEN Stage 1 and Stage 2 — same reasoning as
    * the Off-Lease tab strip ("Stage 1A (Approval)") and the Dashboard KPI
    * row ("Stage 1A · Approval"). Used to live in the Pending Actions group

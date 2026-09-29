@@ -10,9 +10,11 @@ import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
+import { LookupResult } from '../offLease/LookupResult.jsx';
+import { useStageSelection, StageSelector } from '../offLease/StageSelector.jsx';
+import { exportLookupToPdf, exportLookupToExcel } from '../offLease/lookupExport.js';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
 import { usePermission } from '../../hooks/usePermission.js';
-import { exportLookupToPdf } from '../offLease/lookupExport.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { BASE_FIELDS, STAGE_FIELDS, cabinExpectedQty, normaliseSize, isFaultStatus, SOUND_STATUSES } from './stageFields.js';
@@ -99,6 +101,38 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     [stageNumber, containerNo, data?.col_1]
   );
   const billing = billingDetail?.billing?.records?.length ? billingDetail.billing : null;
+
+  /* Explicit request 2026-09-29: KAM (Stage 6/internal 8, the pipeline's last
+     stop) should be able to review the container's ENTIRE Stage 1-5 history
+     in one place, not just Stage 5's own reference note below — and download
+     it as a PDF/Excel, same report the Container Lookup page already builds
+     (lookupExport.js). Reuses that exact same data/components rather than
+     building a second copy: lookupContainer is the same call BILLING_STAGE's
+     own billingDetail fetch above already makes, just also fired for KAM. */
+  // BUG FOUND AND FIXED 2026-09-29: this call re-reads the Operation sheet
+  // and STAGE-8/9/10 in full (the same ones the Off-Lease/FMS lookups
+  // elsewhere in this app document as routinely taking 20-30s+ EACH — see
+  // stage8.service.js's own cache-warming doc comments) — confirmed live,
+  // ~60s end to end for a single container. `loading`/`error` were never
+  // read here, so for that entire minute this section rendered nothing at
+  // all: indistinguishable from "not fetching" (reported exactly that way).
+  const { data: kamLookup, loading: kamLoading, error: kamLookupError } = useAsync(
+    () => (stageNumber === FMS_CLOSURE_STAGE && containerNo
+      ? lookupContainer(containerNo, data?.col_1 || '')
+      : Promise.resolve(null)),
+    [stageNumber, containerNo, data?.col_1]
+  );
+  const kamLookupResult = kamLookup?.found && !kamLookup?.multiple ? kamLookup : null;
+  const { filled: kamFilledStages, selected: kamSelectedStages, toggle: kamToggleStage } = useStageSelection(kamLookupResult);
+  const [kamDownloadError, setKamDownloadError] = useState('');
+  const downloadKam = (fn, ...args) => () => {
+    setKamDownloadError('');
+    try {
+      fn(kamLookupResult, ...args);
+    } catch (err) {
+      setKamDownloadError(err?.message || 'Could not build the download file.');
+    }
+  };
 
   /* Tally outstanding for this container + client, from the Accounts &
      Collection app via our own proxy. Stage 1 only — the figure the
@@ -442,7 +476,31 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 </>
               )}
 
-              {stageNumber === FMS_CLOSURE_STAGE && <Stage5ReferenceNote data={data} />}
+              {/* Explicit request 2026-09-29: replaces the old
+                  Stage5ReferenceNote card here (a single, confusingly
+                  "Final Billing (Stage 6)"-labelled reference to Stage 5's
+                  own billing answers) — the full history view below already
+                  includes that same data as part of every completed stage,
+                  so the narrower card was redundant. KAM's own full Stage 1-5
+                  history view + PDF/Excel download — see kamLookupResult's
+                  own doc comment above for why this reuses the Container
+                  Lookup page's exact components/export functions rather than
+                  a second copy. Nothing here is editable; same "reference
+                  only" convention the old card had. */}
+              {stageNumber === FMS_CLOSURE_STAGE && kamLookupResult && (
+                <div className={styles.fmsWrap}>
+                  <h3 className={styles.sectionTitle}>Full Off-Lease History (Stage 1-5)</h3>
+                  {kamFilledStages.length > 0 && (
+                    <StageSelector filled={kamFilledStages} selected={kamSelectedStages} onToggle={kamToggleStage} />
+                  )}
+                  <div className={styles.actions}>
+                    <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToExcel)}>Download Excel</Button>
+                    <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToPdf, kamSelectedStages)}>Download PDF</Button>
+                  </div>
+                  {kamDownloadError && <div className={styles.error}>{kamDownloadError}</div>}
+                  <LookupResult result={kamLookupResult} />
+                </div>
+              )}
 
               {/* Gate In's own form was removed 2026-08-24: gate/depot staff
                   already fill out a separate Google Form for every container
@@ -452,8 +510,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   here has not shown up as "Inward (Gate-In)" on that form
                   yet — there is nothing to save in the app itself. Suppressed
                   when the record arrived via a Move To Stage jump instead —
-                  SendBackPanel above already explains why it's here. */}
-              {!identityOnly && !fields.length && !data?._move?.canSendBackHere && (
+                  SendBackPanel above already explains why it's here.
+                  BUG FOUND AND FIXED 2026-09-29: this used to key off
+                  `!fields.length` alone, meaning ANY stage with no fields of
+                  its own showed this Gate-In-specific message — harmless
+                  while Gate In (7) was the only such stage, but Stage 6/KAM
+                  (internal 8) emptying its own fields the same day made this
+                  message wrongly appear there too. Scoped to Gate In by
+                  number now. */}
+              {!identityOnly && stageNumber === GATE_IN_STAGE && !fields.length && !data?._move?.canSendBackHere && (
                 <div className={styles.savedPanel}>
                   <p className={styles.savedTitle}>Waiting for Gate-In confirmation</p>
                   <p className={styles.savedHint}>
@@ -607,8 +672,12 @@ const REPORT_STAGES = [3, 5];
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
 
-/** KAM (internally stage 8, shown as Stage 6) — see Stage5ReferenceNote. */
+/** KAM (internally stage 8, shown as Stage 6). */
 const FMS_CLOSURE_STAGE = 8;
+
+/** Gate In (internally stage 7, shown as Stage 3) — no form of its own, see
+ *  the "Waiting for Gate-In confirmation" panel's own doc comment. */
+const GATE_IN_STAGE = 7;
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for
  *  Not Required, nothing while unset. */
@@ -974,47 +1043,6 @@ function Stage1DataNote({ data }) {
         <span className={styles.outstandingValue}>{renderCellValue(data.emailNotification)}</span>
       </div>
     </div>
-  );
-}
-
-/** Stage 5's own field labels (stageFields.js), paired with the _stage5Data
- *  key each one reads from — kept as one list so Stage5ReferenceNote and
- *  its data source can't quietly drift apart. */
-const STAGE5_REFERENCE_FIELDS = [
-  ['rentalsBilledTillDate', 'Rentals Billed Up To Last Date'],
-  ['outstandingAmount', 'Outstanding Amount'],
-  ['dateBilledTill', 'Date - Billed Till'],
-  ['repairChargesBilled', 'Estimated Repair Charges Billed'],
-  ['transportCostBilled', 'Transport Cost Billed'],
-  ['adjustSecurityDeposit', 'Adjust Security Deposit'],
-  ['securityDepositAmount', 'Security Deposit Amount'],
-  ['reconcileEntireCycle', 'Reconcile Entire Billing Cycle'],
-  ['remark', 'Remark']
-];
-
-/**
- * Read-only reference for Stage 6 (KAM) — every field on Stage 5's (Final
- * Billing) own form, shown alongside Stage 6's own Payment Confirmation
- * questions (stageFields.js, col_326-329) so KAM can see what Final Billing
- * reconciled while confirming what was actually paid. Editing these stays
- * on Stage 5's own form; this is reference only.
- */
-function Stage5ReferenceNote({ data }) {
-  const s5 = data?._stage5Data;
-  if (!s5 || !String(s5.status || '').trim()) return null; // Stage 5/Final Billing hasn't run yet — nothing to show
-  return (
-    <>
-      <h3 className={styles.sectionTitle}>Final Billing (Stage 6)</h3>
-      <p className={styles.sectionHint}>Answered on Stage 6's own form — reference only, not editable here.</p>
-      <div className={styles.outstandingRow}>
-        {STAGE5_REFERENCE_FIELDS.map(([key, label]) => (
-          <div className={styles.outstandingCard} key={key}>
-            <span className={styles.outstandingLabel}>{label}</span>
-            <span className={styles.outstandingValue}>{renderCellValue(s5[key])}</span>
-          </div>
-        ))}
-      </div>
-    </>
   );
 }
 

@@ -10,11 +10,35 @@ import { apiClient } from '../shared/auth/index.js';
 export const getRenewDocumentData = (filter = 'documents') =>
   apiClient.get('/expiry', { params: { filter } }).then((r) => r.data);
 
-/** POST /api/expiry/renewal/complete-document-stage — "Complete Document Stage" action.
- *  `rowNum`: see renewWithAgreement's doc comment just above. */
+/** POST /api/expiry/renewal/complete-document-stage — "Submit". REDESIGNED
+ *  2026-09-29 (approval workflow): no longer completes the renewal directly
+ *  — it stages everything and moves the record to Approval Pending, out of
+ *  Renew & Document's own Pending list, until Pushpa Shetty decides. See
+ *  completeDocStage's own doc comment on the backend. */
 export const completeRenewalDocStage = ({
   containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum
 }) =>
   apiClient.post('/expiry/renewal/complete-document-stage', {
     containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum
   }).then((r) => r.data.result);
+
+/** POST /api/expiry/renewal/save-document-draft — "Save": persists whatever
+ *  was entered as a draft, the record stays in Documents Pending, nothing
+ *  required. See saveRenewalDraft's doc comment on the backend. */
+export const saveRenewalDraft = ({
+  containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum
+}) =>
+  apiClient.post('/expiry/renewal/save-document-draft', {
+    containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum
+  }).then((r) => r.data.result);
+
+/** GET /api/expiry?filter=approval — renewals submitted, awaiting Pushpa
+ *  Shetty's Approve/Reject decision. Explicit request 2026-09-29. */
+export const getApprovalPendingData = () =>
+  apiClient.get('/expiry', { params: { filter: 'approval' } }).then((r) => r.data);
+
+/** POST /api/expiry/renewal/decide-approval — Pushpa's decision. `decision`
+ *  is 'approved' or 'rejected'. `rowNum`: see getRenewDocumentData's doc
+ *  comment above for why it addresses the exact Deployed row. */
+export const decideRenewalApproval = ({ containerNo, decision, remarks, rowNum }) =>
+  apiClient.post('/expiry/renewal/decide-approval', { containerNo, decision, remarks, rowNum }).then((r) => r.data.result);

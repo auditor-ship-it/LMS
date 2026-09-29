@@ -18,7 +18,7 @@ import { AppError } from '../utils/AppError.js';
 import { getApproveData } from './approve.service.js';
 import { getExpiryDataByFilter } from './expiry.service.js';
 import { getVerifyData } from './verify.service.js';
-import { getOffLeaseStageCounts } from './offlease.service.js';
+import { getOffLeaseStageCounts, getOffLeaseData } from './offlease.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { salePersonScopeFor, scopeCacheKey } from './salePersonAccess.service.js';
 
@@ -50,6 +50,10 @@ const MY_TASK_KEY_META = {
    * offlease.service.js's OL_STAGE_INFO internal stage numbers and are
    * unchanged; only the human-readable text changes. */
   olStage1: ['Off-Lease Stage 1: Intimation', 'olStage1'],
+  // Explicit request 2026-09-29 — a separate card for Stage 1's own Hold
+  // sub-queue (see offlease.service.js's getOffLeaseData `filter: 'hold'`
+  // branch), distinct from olStage1's plain pending count above.
+  olStage1Hold: ['Off-Lease Stage 1 Hold', 'olStage1Hold'],
   olStage2: ['Off-Lease (Retired) Lifting / Arrival', 'olStage2'],
   olStage3: ['Off-Lease Stage 5: Inspection Checklist', 'olStage3'],
   olStage4: ['Off-Lease (Retired) Quotation / Order', 'olStage4'],
@@ -92,7 +96,7 @@ export async function getMyTasks(user, force) {
     const out = {
       pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
       expiring7: 0, expired: 0, renewPending: 0,
-      olStage1: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
+      olStage1: 0, olStage1Hold: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
       /* Which cards the caller should see, or null for "show everything" (the
        * pre-existing, still-default behaviour for anyone not in this map).
        *
@@ -138,6 +142,10 @@ export async function getMyTasks(user, force) {
       out.offleaseApproval = approval ?? 0;
       for (const n of [1, 3, 5, 6, 7, 8]) out[`olStage${n}`] = olc[n] ?? 0;
     } catch (e) { /* noop */ }
+
+    /* Stage 1's own Hold sub-queue — explicit request 2026-09-29, same
+       source OffLeasePage.jsx's own Hold tab reads. */
+    try { out.olStage1Hold = ((await getOffLeaseData(1, { filter: 'hold' }, user)).data || []).length; } catch (e) { /* noop */ }
 
     return out;
   }); // single-flight: concurrent opens in the same 90s window share one fetch
