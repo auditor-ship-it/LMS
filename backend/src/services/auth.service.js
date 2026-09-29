@@ -196,6 +196,21 @@ export async function empSsoLogin(empCode) {
   return { ok: true, token, name: emp.name, email: emp.email, empId: emp.empId, at: nowIso };
 }
 
+/**
+ * Pure read lookup of the USER sheet by EmpID — no session created, no
+ * login/session-log side effects. Used by the Sales OS renewal-stats API
+ * (salesOsRenewal.service.js#getRenewalStats), which needs to resolve an
+ * employeeCode to an email/name to attribute stats, but isn't an actual
+ * sign-in — a server-to-server stats poll must not spam _auth_sessions or
+ * the login-activity log the way empSsoLogin deliberately does.
+ */
+export async function findEmployeeByCode(empCode) {
+  empCode = String(empCode == null ? '' : empCode).trim();
+  if (!empCode) return null;
+  const emp = await authFind(AUTH_COL_EMPID, empCode);
+  return emp ? { empId: emp.empId, name: emp.name, email: emp.email } : null;
+}
+
 export async function empSession(token) {
   if (!token) return null;
   const doc = await getCollection(SESSION_COLLECTION).findOneAndUpdate(

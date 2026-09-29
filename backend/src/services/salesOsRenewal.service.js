@@ -47,9 +47,13 @@ import { AppError } from '../utils/AppError.js';
 import { logger } from '../utils/logger.js';
 import { safeStr } from '../utils/format.js';
 import { normClientName } from '../utils/normalize.js';
-import { _deployedRawValues, findHeaderCol, saveExpiryAction, completeDocStage } from './expiry.service.js';
+import {
+  _deployedRawValues, findHeaderCol, saveExpiryAction, completeDocStage, saveRenewalDraft,
+  getExpiryDataByFilter, getRenewalLogReport
+} from './expiry.service.js';
 import { getCompanyContainers } from './renewalHandoff.service.js';
-import { empSsoLogin } from './auth.service.js';
+import { empSsoLogin, findEmployeeByCode } from './auth.service.js';
+import { salePersonScopeFor } from './salePersonAccess.service.js';
 
 const COMPANY_LINKS_COLLECTION = '_sales_os_company_links';
 const RENEWALS_COLLECTION = '_sales_os_renewals';
@@ -289,14 +293,23 @@ export async function confirmCompany(existingLeadId, companyName) {
  * Runs ONE container through the exact same sequence a human does manually:
  * Lease Expiry's "Renew" button (saveExpiryAction(..., 'Documents Pending',
  * ...)) IF it isn't already in that state, then Renew & Document's "Update
- * Agreement" form (completeDocStage(...)) — always. Both are called
- * SYNCHRONOUSLY against live Google Sheets (not the "Fast" Mongo-first
- * variants the internal routes use) deliberately: completeDocStage does its
- * own live Sheets read, and if saveExpiryAction had taken the Fast/outbox
- * path, that read could still see the OLD status for several seconds
- * (env.outboxPollMs) and fail with INVALID_STATE even though the transition
- * "already happened." Calling the plain versions back-to-back means the
- * second call is guaranteed to see the first call's write.
+ * Agreement" form — either "Submit" (completeDocStage) or "Save" (draft,
+ * saveRenewalDraft), per `mode`. Both write paths are called SYNCHRONOUSLY
+ * against live Google Sheets (not the "Fast" Mongo-first variants the
+ * internal routes use) deliberately: they each do their own live Sheets
+ * read, and if saveExpiryAction had taken the Fast/outbox path, that read
+ * could still see the OLD status for several seconds (env.outboxPollMs) and
+ * fail with INVALID_STATE even though the transition "already happened."
+ * Calling the plain versions back-to-back means the second call is
+ * guaranteed to see the first call's write.
+ *
+ * SUBMIT NO LONGER FINALIZES A RENEWAL (approval workflow, 2026-09-29):
+ * completeDocStage now only stages the request and hands it to Pushpa
+ * Shetty for approval — the real Agreement/PO/Billing Cycle columns and
+ * Valid Upto don't change until she approves it (decideRenewalApproval).
+ * That is Lease's own internal decision, unrelated to this integration —
+ * this function still just calls the same real function a human's Submit
+ * click calls, whatever it currently does.
  *
  * Two real entry states reach this, and both are legitimate: a container
  * fresh off Lease Expiry's pending list (needs BOTH steps — the common case,
@@ -313,10 +326,14 @@ export async function confirmCompany(existingLeadId, companyName) {
  * the exact Deployed row, same safety rule as every other write path in this
  * codebase (a container number alone is not unique across lease cycles).
  */
-async function renewOneContainer(user, valid, form) {
+async function runContainerAction(user, valid, form, mode) {
   const containerNo = valid.containerNo;
-  if (!form.renewedDate) throw new AppError(`${containerNo}: Renewed Date is required.`);
-  if (!form.validTill) throw new AppError(`${containerNo}: Agreement Valid Till is required.`);
+  if (mode === 'submit') {
+    if (!form.renewedDate) throw new AppError(`${containerNo}: Renewed Date is required.`);
+    if (!form.validTill) throw new AppError(`${containerNo}: Agreement Valid Till is required.`);
+  }
+  // Save is deliberately permissive (nothing required) — same rule
+  // CompleteDocumentModal's own "Save" button follows in-app.
 
   const currentStatus = safeStr(valid.status).trim().toLowerCase();
   if (currentStatus === '') {
@@ -330,30 +347,25 @@ async function renewOneContainer(user, valid, form) {
   }
   // else: already "Documents Pending" — the Renew step already happened
   // (in-app or on an earlier attempt through this same flow), go straight
-  // to completeDocStage below.
+  // to the Save/Submit call below.
 
-  const docResult = await completeDocStage(
-    containerNo,
-    form.renewedDate,
-    form.validTill,
-    form.signedCopyUrl || '',
-    form.remarks || '',
-    user.email,
-    form.poNo || '',
-    form.poFileUrl || '',
-    form.billingCycle || '',
-    user.email,
-    form.poValidity || '',
-    valid.rowNum
-  );
-  if (docResult === 'INVALID_STATE') {
-    throw new AppError(`"${containerNo}" could not be completed — its status changed unexpectedly. Refresh and try again.`);
+  const result = mode === 'submit'
+    ? await completeDocStage(
+        containerNo, form.renewedDate, form.validTill, form.signedCopyUrl || '', form.remarks || '',
+        user.email, form.poNo || '', form.poFileUrl || '', form.billingCycle || '', user.email, form.poValidity || '', valid.rowNum
+      )
+    : await saveRenewalDraft(
+        containerNo, form.renewedDate || '', form.validTill || '', form.signedCopyUrl || '', form.remarks || '',
+        form.poNo || '', form.poFileUrl || '', form.billingCycle || '', user.email, form.poValidity || '', valid.rowNum
+      );
+  if (result === 'INVALID_STATE') {
+    throw new AppError(`"${containerNo}" could not be ${mode === 'submit' ? 'submitted' : 'saved'} — its status changed unexpectedly. Refresh and try again.`);
   }
 
   return {
     containerNo,
-    renewedDate: form.renewedDate,
-    validTill: form.validTill,
+    renewedDate: form.renewedDate || '',
+    validTill: form.validTill || '',
     signedCopyUrl: form.signedCopyUrl || '',
     poNo: form.poNo || '',
     poFileUrl: form.poFileUrl || '',
@@ -363,21 +375,10 @@ async function renewOneContainer(user, valid, form) {
   };
 }
 
-/**
- * POST /api/sso/sales-os/renewal — the final save. `body.containers` is
- * EITHER one form per container ({containerNo, renewedDate, validTill, ...})
- * OR (bulk — the "one form applied to every selected container" mode the
- * real Update Agreement modal already supports) an array of container
- * numbers plus a single shared `form` object; both shapes are normalized to
- * one call per container below. Every container is re-validated against a
- * FRESH getCompanyContainers() read first — same defensive pattern as
- * renewalHandoff.service.js#createRenewalLink, never trust the client's
- * list. NOTE: this runs the SAME 'renew'/'expiry'-gated internal actions a
- * logged-in ops user would — the SSO'd salesperson's own LMS identity
- * (resolved by employeeCode) needs both permissions granted in Roles &
- * Access, or this throws ACCESS_DENIED exactly as it would in-app.
- */
-export async function saveRenewal(user, body) {
+/** Shared by saveRenewal (Submit) and saveRenewalDraftForSalesOs (Save):
+ *  resolves the company link, re-validates every requested container against
+ *  a fresh live read, and runs `mode` on each. */
+async function runRenewalContainers(user, body, mode) {
   const existingLeadId = safeStr(body.existingLeadId).trim();
   if (!existingLeadId) throw new AppError('existingLeadId is required.');
 
@@ -397,11 +398,31 @@ export async function saveRenewal(user, body) {
     const containerNo = safeStr(raw.containerNo).trim();
     const valid = validByNo.get(containerNo);
     if (!valid) throw new AppError(`"${containerNo}" is not currently a live container for "${link.resolvedCompanyName}" — refresh and try again.`);
-    results.push(await renewOneContainer(user, valid, raw));
+    results.push(await runContainerAction(user, valid, raw, mode));
   }
+  return { link, results };
+}
+
+/**
+ * POST /api/sso/sales-os/renewal — "Submit". `body.containers` is one form
+ * per container ({containerNo, renewedDate, validTill, ...}) — one shared
+ * form applied to every selected container, same shape the real Update
+ * Agreement modal's bulk mode sends. Every container is re-validated against
+ * a FRESH getCompanyContainers() read first — same defensive pattern as
+ * renewalHandoff.service.js#createRenewalLink, never trust the client's
+ * list. NOTE: this runs the SAME 'renew'/'expiry'-gated internal actions a
+ * logged-in ops user would — the SSO'd salesperson's own LMS identity
+ * (resolved by employeeCode) needs both permissions granted in Roles &
+ * Access, or this throws ACCESS_DENIED exactly as it would in-app. As of the
+ * 2026-09-29 approval workflow, this STAGES the renewal for Pushpa Shetty's
+ * approval rather than completing it immediately — see runContainerAction's
+ * doc comment.
+ */
+export async function saveRenewal(user, body) {
+  const { link, results } = await runRenewalContainers(user, body, 'submit');
 
   const doc = {
-    existingLeadId,
+    existingLeadId: safeStr(body.existingLeadId).trim(),
     leaseCompanyName: link.resolvedCompanyName,
     companyNameRaw: link.companyNameRaw || '',
     clientName: safeStr(body.clientName || link.resolvedCompanyName).trim(),
@@ -419,6 +440,21 @@ export async function saveRenewal(user, body) {
 
   const { insertedId } = await getCollection(RENEWALS_COLLECTION).insertOne(doc);
   return { id: String(insertedId), ...doc };
+}
+
+/**
+ * POST /api/sso/sales-os/renewal-draft — "Save". Mirrors saveRenewal above
+ * but calls saveRenewalDraft instead of completeDocStage, and does NOT write
+ * an audit receipt to _sales_os_renewals — a draft isn't a finalized event
+ * Sales OS needs to read back, matching how the in-app "Save" button leaves
+ * no trace in the Renewal Log either. Exists because CompleteDocumentModal
+ * (reused verbatim for the Sales OS wizard) always renders a Save button
+ * now (2026-09-29 Save/Submit split) — without this, clicking it would throw
+ * (no onSave handler wired).
+ */
+export async function saveRenewalDraftForSalesOs(user, body) {
+  const { results } = await runRenewalContainers(user, body, 'save');
+  return { containers: results };
 }
 
 /**
@@ -449,8 +485,75 @@ export async function listRenewalsForSalesOs(query) {
     lm: d.lm,
     employeeCode: d.employeeCode,
     // Each entry mirrors exactly what completeDocStage wrote to the Deployed
-    // sheet for that container — see renewOneContainer above.
+    // sheet for that container — see runContainerAction above.
     containers: d.containers,
     createdAt: d.createdAt
   }));
+}
+
+/**
+ * GET /api/public/v1/sales-os/renewal-stats?employeeCode=... — per-salesperson
+ * dashboard numbers for Sales OS: how many containers need renewing, how many
+ * of those are overdue, how many renewals are sitting with Pushpa awaiting her
+ * decision, and how many were actually APPROVED this calendar month (the
+ * "Renewal Log" sheet — see expiry.service.js#_logRenewal — only ever gets a
+ * row from decideRenewalApproval's Approved branch as of the 2026-09-29
+ * approval workflow; a Submit alone does not count as "done").
+ *
+ * Attribution is NOT via employeeCode directly — Lease's own data-visibility
+ * rule (salePersonAccess.service.js's SALE_PERSON_BY_EMAIL) is keyed by LOGIN
+ * EMAIL, explicit-map-only by design (see that file's header comment on why
+ * automatic name matching is refused). So: employeeCode -> email (USER sheet)
+ * -> Sale Person name (the explicit map) -> filter every list by that name,
+ * the exact same scoping getExpiryDataByFilter/getRenewalLogReport already
+ * apply for a real logged-in scoped user. `status: 'unscoped'` means this
+ * employee's email isn't in that map yet — Lease ops needs to add it before
+ * these numbers mean anything per-person (until then the underlying lists are
+ * company-wide, not this one salesperson's, so returning them would mislead
+ * rather than help).
+ */
+export async function getRenewalStats(employeeCode) {
+  const emp = await findEmployeeByCode(employeeCode);
+  if (!emp) throw new AppError('employee code not mapped', 401);
+
+  const scope = await salePersonScopeFor({ email: emp.email });
+  if (!scope) {
+    return {
+      status: 'unscoped',
+      employeeCode: emp.empId,
+      email: emp.email,
+      message: `${emp.email} is not yet mapped to a Sale Person in Lease (salePersonAccess.service.js) — ask a Lease admin to add it before these numbers can be attributed to this person.`
+    };
+  }
+
+  const user = { email: emp.email };
+  const [pending, approval, renewalLog] = await Promise.all([
+    getExpiryDataByFilter('pending', user),
+    getExpiryDataByFilter('approval', user),
+    getRenewalLogReport(user)
+  ]);
+
+  // "Needs renewing" — still awaiting a Renew/Off-Lease decision (actionStatus
+  // blank); band != 'safe' would ALSO exclude containers years from expiring,
+  // but pending already means "not yet actioned", which is what a salesperson
+  // needs to work, safe ones included (nothing wrong with seeing you're clear).
+  const needsAction = (pending.data || []).filter((it) => !it.actionStatus);
+  const overdue = needsAction.filter((it) => it.band === 'overdue');
+
+  const now = new Date();
+  const approvedThisMonth = (renewalLog.data || []).filter((row) => {
+    const d = new Date(row.timestamp);
+    return !Number.isNaN(d.getTime()) && d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  });
+
+  return {
+    status: 'ok',
+    employeeCode: emp.empId,
+    email: emp.email,
+    salesPerson: scope,
+    pendingRenewals: needsAction.length,
+    overdueRenewals: overdue.length,
+    awaitingApproval: (approval.data || []).length,
+    approvedThisMonth: approvedThisMonth.length
+  };
 }

@@ -19,5 +19,6 @@ router.post('/lease-expiry/session', asyncHandler(ssoController.startEmployeeSes
 /* Everything past the initial session hop runs as the SSO'd salesperson. */
 router.post('/sales-os/confirm-company', requireAuth, asyncHandler(ssoController.confirmCompany));
 router.post('/sales-os/renewal', requireAuth, asyncHandler(ssoController.saveRenewal));
+router.post('/sales-os/renewal-draft', requireAuth, asyncHandler(ssoController.saveRenewalDraft));
 
 export default router;
