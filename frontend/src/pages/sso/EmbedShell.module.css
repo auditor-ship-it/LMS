@@ -1,6 +1,7 @@
 /* Mirrors AppShell.module.css's `.content` wrapper (padding/max-width) so
-   the real LeaseExpiryPage looks the same as it does inside the main app,
-   just without the sidebar/topbar it normally sits next to. */
+   the real page inside looks the same as it does in the main app, just
+   without the sidebar/topbar it normally sits next to. Shared by every
+   Sales OS embed (Lease Expiry, Renew & Document, Approval Pending). */
 .wrap {
   min-height: 100vh;
   background: var(--bg);

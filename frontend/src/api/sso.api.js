@@ -14,6 +14,16 @@ export const startSsoSession = (params) =>
 export const startLeaseExpirySsoSession = (params) =>
   apiClient.post('/sso/lease-expiry/session', params).then((r) => r.data);
 
+/** POST /api/sso/renew-document/session — same plain employeeCode SSO, for
+ *  the Renew & Document embed (Update Agreement / Save / Send Back). */
+export const startRenewDocumentSsoSession = (params) =>
+  apiClient.post('/sso/renew-document/session', params).then((r) => r.data);
+
+/** POST /api/sso/approval-pending/session — same plain employeeCode SSO, for
+ *  the Approval Pending embed (Approve/Reject a submitted renewal). */
+export const startApprovalPendingSsoSession = (params) =>
+  apiClient.post('/sso/approval-pending/session', params).then((r) => r.data);
+
 /** POST /api/sso/sales-os/confirm-company — submits the user's pick from an
  *  ambiguous company match. Resolves to { companyMatch, containers }. */
 export const confirmSsoCompany = (existingLeadId, companyName) =>

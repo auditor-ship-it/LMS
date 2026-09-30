@@ -557,3 +557,55 @@ export async function getRenewalStats(employeeCode) {
     approvedThisMonth: approvedThisMonth.length
   };
 }
+
+/**
+ * GET /api/public/v1/sales-os/renewal-log?employeeCode=X&year=&month=
+ * The exact logic behind Reports.jsx's "Total renewals" scorecard, for Sales
+ * OS to reuse: same source (getRenewalLogReport — the Renewal Log sheet,
+ * scoped by Sale Person), same period filter (year + 2-digit month; default
+ * current month, matching that page's own default view — pass year=all
+ * and/or month=all for everything). `count` is what the card should show;
+ * `rows` is the click-through detail (same fields the in-app Agreement
+ * Renewal Report table shows: timestamp, container, clientName, validTill,
+ * poNo/poFile/agreementFile, old* versions, updatedBy, saleExec).
+ */
+export async function getRenewalLog(employeeCode, { year, month } = {}) {
+  const emp = await findEmployeeByCode(employeeCode);
+  if (!emp) throw new AppError('employee code not mapped', 401);
+
+  const scope = await salePersonScopeFor({ email: emp.email });
+  if (!scope) {
+    return {
+      status: 'unscoped',
+      employeeCode: emp.empId,
+      email: emp.email,
+      message: `${emp.email} is not yet mapped to a Sale Person in Lease (salePersonAccess.service.js) — ask a Lease admin to add it before this can be attributed to this person.`
+    };
+  }
+
+  const now = new Date();
+  const yearFilter = year === 'all' ? null : safeStr(year).trim() || String(now.getFullYear());
+  const rawMonth = safeStr(month).trim();
+  const monthFilter = month === 'all' ? null : (rawMonth ? rawMonth.padStart(2, '0') : String(now.getMonth() + 1).padStart(2, '0'));
+
+  const report = await getRenewalLogReport({ email: emp.email });
+  const rows = (report.data || []).filter((row) => {
+    if (!yearFilter && !monthFilter) return true;
+    const d = new Date(row.timestamp);
+    if (Number.isNaN(d.getTime())) return false;
+    if (yearFilter && String(d.getFullYear()) !== yearFilter) return false;
+    if (monthFilter && String(d.getMonth() + 1).padStart(2, '0') !== monthFilter) return false;
+    return true;
+  });
+
+  return {
+    status: 'ok',
+    employeeCode: emp.empId,
+    email: emp.email,
+    salesPerson: scope,
+    year: yearFilter || 'all',
+    month: monthFilter || 'all',
+    count: rows.length,
+    rows
+  };
+}
