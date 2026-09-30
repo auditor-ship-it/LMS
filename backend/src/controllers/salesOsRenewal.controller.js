@@ -34,3 +34,11 @@ export async function renewalStats(req, res) {
   }));
   res.json({ data });
 }
+
+/** GET /api/public/v1/sales-os/renewal-log?employeeCode=X&year=&month= — the
+ *  "Total renewals" scorecard's own count + click-through detail rows, for
+ *  one salesperson. Read-only, same "salesos" key scope. See
+ *  salesOsRenewal.service.js#getRenewalLog. */
+export async function renewalLog(req, res) {
+  res.json(await salesOsRenewal.getRenewalLog(req.query.employeeCode, { year: req.query.year, month: req.query.month }));
+}

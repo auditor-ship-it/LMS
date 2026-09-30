@@ -25,12 +25,22 @@
  *      vs "Laurus Labs Ltd"). A fuzzy key naming two different salespeople
  *      is dropped rather than guessed — the same measurement found zero such
  *      keys today, but a future lead could create one.
- * Anything still unmatched keeps the sheet's own value, so the column never
- * goes blank because of this feature. That is 4 of 354 rows today — one
- * customer the CRM spells differently enough that only a human can call it
- * ("ORBITTAL ... ENGINEERING PROJECTS PVT LTD" vs the CRM's "Orbittal ...
- * Engineering Project Pvt"), where both systems happen to name the same
- * owner anyway.
+ * A company the CRM has NO lead for at all keeps the sheet's own value, so
+ * the column never goes blank for a company this feature simply doesn't
+ * know about. That is 4 of 354 rows today — one customer the CRM spells
+ * differently enough that only a human can call it ("ORBITTAL ...
+ * ENGINEERING PROJECTS PVT LTD" vs the CRM's "Orbittal ... Engineering
+ * Project Pvt"), where both systems happen to name the same owner anyway.
+ *
+ * UNASSIGNED IS DIFFERENT FROM UNKNOWN (explicit request 2026-09-30). A
+ * company the CRM DOES have a lead for, but with no one currently assigned,
+ * used to be indistinguishable from "the CRM doesn't know this company" —
+ * both fell through to the stale sheet value, which could show a name for a
+ * company the CRM has since explicitly unassigned (confirmed live: "Network
+ * Akashic India Pvt Ltd" showed "Urvashi" from the sheet while the CRM's own
+ * matching lead(s) all have `assignedTo: null`). Now tracked separately: see
+ * exactUnassigned/fuzzyUnassigned below and getSalePersonResolver's own doc
+ * comment for the 'Unassigned' sentinel this returns for that case.
  */
 import { findLeads, isSalesCrmConfigured } from '../config/salesCrmDb.js';
 import { env } from '../config/env.js';
@@ -153,15 +163,24 @@ async function buildIndex() {
   const gen = ++generation;
   const leads = await findLeads({}, { companyName: 1, assignedTo: 1, _reassignedAt: 1, _lastUpdatedAt: 1 });
 
-  const exact = new Map();          // key -> { who, rank }
-  const fuzzyRaw = new Map();       // key -> Map(who -> ts) — see below, dedup only, not ranked
+  const exact = new Map();          // key -> { who, rank } — assigned leads only
+  const fuzzyRaw = new Map();       // key -> Map(who -> ts) — assigned leads only, dedup only, not ranked
+  const exactKnown = new Set();     // every exact key the CRM has ANY lead for, assigned or not
+  const fuzzyKnown = new Set();     // same, fuzzy key
 
   for (const lead of leads) {
     const who = String(lead?.assignedTo == null ? '' : lead.assignedTo).trim();
-    if (!who) continue;             // an unassigned lead must not blank out the sheet value
+
+    // Recorded regardless of assignment — this is what lets an unassigned
+    // lead be told apart from a company the CRM has no record of at all.
+    const ek = exactKey(lead.companyName);
+    if (ek) exactKnown.add(ek);
+    const fk = fuzzyKey(lead.companyName);
+    if (fk) fuzzyKnown.add(fk);
+
+    if (!who) continue;             // nothing further to index for an unassigned lead
     const rank = leadRank(lead);
 
-    const ek = exactKey(lead.companyName);
     if (ek) {
       const prev = exact.get(ek);
       if (!prev || rankBeats(rank, prev.rank)) exact.set(ek, { who, rank });
@@ -171,7 +190,6 @@ async function buildIndex() {
        the uniqueness filter below) — every lead sharing a key is otherwise
        interchangeable evidence for its own `who`, so this dedup doesn't need
        leadRank's tier distinction, just "have we seen this owner before". */
-    const fk = fuzzyKey(lead.companyName);
     if (fk) {
       if (!fuzzyRaw.has(fk)) fuzzyRaw.set(fk, new Map());
       const owners = fuzzyRaw.get(fk);
@@ -188,8 +206,21 @@ async function buildIndex() {
     else dropped++;
   }
 
-  logger.info(`[SALES-CRM] Lead index built: ${leads.length} leads | ${exact.size} exact keys | ${fuzzy.size} fuzzy keys${dropped ? ` | ${dropped} ambiguous fuzzy keys skipped` : ''}`);
-  return { exact, fuzzy, gen, expiresAt: Date.now() + env.salesCrmCacheSecs * 1000 };
+  /* A key the CRM has at least one lead for, but where NONE of those leads
+     currently name an assignee — confirmed "no owner", not merely "we don't
+     know this company". Checked against fuzzyRAW (every key with at least
+     one ASSIGNED lead, ambiguous or not), not the narrower `fuzzy` map —
+     a key dropped above for being ambiguous (2+ different real owners) means
+     someone DOES own it, just not identifiable from this key alone, and must
+     never be reported as unassigned. */
+  const exactUnassigned = new Set([...exactKnown].filter((k) => !exact.has(k)));
+  const fuzzyUnassigned = new Set([...fuzzyKnown].filter((k) => !fuzzyRaw.has(k)));
+
+  logger.info(
+    `[SALES-CRM] Lead index built: ${leads.length} leads | ${exact.size} exact keys | ${fuzzy.size} fuzzy keys` +
+    `${dropped ? ` | ${dropped} ambiguous fuzzy keys skipped` : ''} | ${exactUnassigned.size} exact keys confirmed unassigned`
+  );
+  return { exact, fuzzy, exactUnassigned, fuzzyUnassigned, gen, expiresAt: Date.now() + env.salesCrmCacheSecs * 1000 };
 }
 
 /** Publishes a built index, UNLESS a newer build has started since — an
@@ -211,9 +242,19 @@ async function getIndex() {
 }
 
 /**
- * Returns `(customerName) => salespersonName | null` — null meaning "the CRM
- * does not know this company", which callers must read as "keep whatever you
- * already had", never as "blank".
+ * Returns `(customerName) => salespersonName | 'Unassigned' | null`:
+ *   - a real name: the CRM's current owner for this company.
+ *   - `'Unassigned'`: the CRM HAS a lead for this company, and it explicitly
+ *     names no one — a real, current answer, not a gap. Deliberately a
+ *     non-empty, truthy string (not '' or a boolean) so it behaves correctly
+ *     everywhere a caller already writes `resolveSalePerson(x) || sheetValue`
+ *     (wins over the stale fallback, same as a real name would) or
+ *     `!!owner && matchesSalePersonScope(owner, scope)` (truthy, but then
+ *     correctly fails to match any real scoped person — excluding a scoped
+ *     caller from a company confirmed to have no owner) — no call site needed
+ *     to change for this.
+ *   - `null`: "the CRM does not know this company at all", which callers
+ *     must read as "keep whatever you already had" (the stale sheet value).
  *
  * Returns a resolver that always answers null when the CRM is unconfigured
  * or unreachable, so a caller needs no special-casing: a CRM outage silently
@@ -230,11 +271,18 @@ export async function getSalePersonResolver() {
   }
   return (customerName) => {
     const ek = exactKey(customerName);
-    if (!ek) return null;
-    const hit = idx.exact.get(ek);
-    if (hit) return hit.who;
+    if (ek) {
+      const hit = idx.exact.get(ek);
+      if (hit) return hit.who;
+      if (idx.exactUnassigned.has(ek)) return 'Unassigned';
+    }
     const fk = fuzzyKey(customerName);
-    return (fk && idx.fuzzy.get(fk)) || null;
+    if (fk) {
+      const fuzzyHit = idx.fuzzy.get(fk);
+      if (fuzzyHit) return fuzzyHit;
+      if (idx.fuzzyUnassigned.has(fk)) return 'Unassigned';
+    }
+    return null;
   };
 }
 

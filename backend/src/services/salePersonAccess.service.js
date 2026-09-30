@@ -38,21 +38,40 @@ import { safeStr } from '../utils/format.js';
  *  _offLeaseAccessGate) — same six-login screenshot, same USER-sheet
  *  credentials, this map just adds the two names that were missing.
  *
- * key.accounts@crystalgroup.in changed 'Sagar' -> 'Sagar-A' 2026-09-16,
- * explicit business request: this desk's records must always DISPLAY as
- * "Sagar-A", not "Sagar" — see SALE_PERSON_ALIASES below for how the plain
- * "Sagar" spelling (which the CRM/sheet also still carries) keeps matching
- * and gets normalized to this canonical form wherever it's shown. */
+ * key.accounts@crystalgroup.in: 'Sagar' (reverted 2026-09-30, explicit
+ * request — supersedes the 2026-09-16 request that flipped this to
+ * 'Sagar-A'). "-A" now means "temporary assignment, same person" for ANY
+ * name (see stripTemporaryAssignmentSuffix below), so there is no longer a
+ * per-name choice of which spelling "wins" — the base name without "-A" is
+ * always canonical. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',
-  'key.accounts@crystalgroup.in': 'Sagar-A',
+  'key.accounts@crystalgroup.in': 'Sagar',
   'sales1@crystalgroup.in': 'Sapna',
   'sales@crystalgroup.in': 'Gargi',
   'contactsales@crystalgroup.in': 'Laveena'
 };
 
 const norm = (v) => safeStr(v).trim().toLowerCase();
+
+/**
+ * A trailing "-A" marks a TEMPORARY assignment, not a different person —
+ * explicit request 2026-09-30: "Sagar-A" is the same person as "Sagar", just
+ * temporarily reassigned, and this is expected to keep happening for other
+ * names too as reassignments occur ("many users will in future have their
+ * name with a[n] -A"). So this is a general rule, not a per-name lookup like
+ * SALE_PERSON_ALIASES below — any current or future "<Name>-A" collapses to
+ * "<Name>" with no map entry needed. Only a literal trailing "-A" (optional
+ * surrounding whitespace, case-insensitive) qualifies — this must NOT strip
+ * names that merely end in the letter "a" (e.g. "Priya"), so a hyphen
+ * separating a standalone "A" token is required.
+ */
+function stripTemporaryAssignmentSuffix(name) {
+  const s = String(name == null ? '' : name).trim();
+  const m = s.match(/^(.+?)\s*-\s*a$/i);
+  return m ? m[1].trim() : s;
+}
 
 /* Alternate spellings the SAME person genuinely appears under in the Sales
  * CRM's `assignedTo` field — confirmed live 2026-09-07: the CRM has BOTH
@@ -62,33 +81,17 @@ const norm = (v) => safeStr(v).trim().toLowerCase();
  * scope never matched the misspelled variant. The CRM is read-only (this
  * app never writes assignments back), so the spelling can't be fixed at the
  * source; treat known aliases as the same identity here instead. Add an
- * entry only when a real person is confirmed affected, same "grows
- * deliberately" rule as SALE_PERSON_BY_EMAIL above.
+ * entry only when a real person is confirmed affected with a genuinely
+ * different (non "-A") misspelling — the "-A" case is handled generically by
+ * stripTemporaryAssignmentSuffix above and no longer needs an entry here
+ * (the former 'sagar-a': ['sagar'] entry was removed 2026-09-30 for exactly
+ * that reason).
  *
  * Keyed by the CANONICAL (displayed) spelling, with every OTHER spelling
- * that must still match and normalize to it listed as an alias.
- *
- * 'sagar-a': ['sagar'] — confirmed live the CRM/sheet carry both "Sagar"
- * (611 leads) and "Sagar-A" (73 leads) for the same desk. Originally the
- * canonical spelling was 'Sagar' with 'Sagar-A' as its alias (2026-09-16,
- * first fix); flipped THE SAME DAY per explicit business request that the
- * desk display consistently as "Sagar-A" instead — canonicalSalePersonName
- * now normalizes plain "Sagar" UP to "Sagar-A", not the other way round.
- * Matching (aliasesFor/matchesSalePersonScope) is unaffected either way —
- * both spellings always resolve to the same identity, only which spelling
- * wins the DISPLAY changed. */
+ * that must still match and normalize to it listed as an alias. */
 const SALE_PERSON_ALIASES = {
-  laveena: ['lavina'],
-  'sagar-a': ['sagar']
+  laveena: ['lavina']
 };
-
-/** `scope`'s own normalized name plus any known aliases (see
- *  SALE_PERSON_ALIASES) — every spelling that counts as the same person for
- *  matching purposes. */
-function aliasesFor(scope) {
-  const n = norm(scope);
-  return [n, ...(SALE_PERSON_ALIASES[n] || [])];
-}
 
 /**
  * The Sale Person name `user` must be restricted to, or null if they see
@@ -111,29 +114,35 @@ export async function salePersonScopeFor(user) {
   return SALE_PERSON_BY_EMAIL[email] || null;
 }
 
-/** True when a Deployed-sheet "Sale Person" cell belongs to `scope` — either
- *  an exact match or one of scope's known alternate spellings (see
- *  SALE_PERSON_ALIASES). */
+/** True when a Deployed-sheet "Sale Person" cell belongs to `scope` — same
+ *  person once both sides are reduced to their canonical form (strips a
+ *  "-A" temporary-assignment suffix, then resolves any known alternate
+ *  spelling — see canonicalSalePersonName). Comparing canonical forms
+ *  directly (rather than expanding one side into a fixed alias list) is what
+ *  lets a brand-new "<Name>-A" match its base name with no map entry. */
 export function matchesSalePersonScope(salePersonCell, scope) {
-  return aliasesFor(scope).includes(norm(salePersonCell));
+  return norm(canonicalSalePersonName(salePersonCell)) === norm(canonicalSalePersonName(scope));
 }
 
 /** The canonical name a raw Sale Person cell should be grouped/displayed
- *  under — resolves a known alias (e.g. "Lavina") back to the name the rest
- *  of the app uses ("Laveena"), untouched otherwise. Used by the Lease
- *  Expiry digest email so the same person's leases don't split into two
- *  separately-addressed groups under two spellings. */
+ *  under: strip a "-A" temporary-assignment suffix first (any name, not just
+ *  ones hardcoded below), then resolve a known genuine alternate spelling
+ *  (e.g. "Lavina" -> "Laveena", SALE_PERSON_ALIASES), untouched otherwise.
+ *  Used by the Lease Expiry digest email and the Lease Expiry page's own
+ *  Sale Person column/dropdown so the same person's leases don't split into
+ *  separately-addressed/filtered groups under two spellings. */
 export function canonicalSalePersonName(name) {
-  const n = norm(name);
+  const stripped = stripTemporaryAssignmentSuffix(name);
+  const n = norm(stripped);
   for (const [canonical, aliases] of Object.entries(SALE_PERSON_ALIASES)) {
     if (n === canonical || aliases.includes(n)) {
       // Title-case the canonical key back to the display form used elsewhere
       // in this file's own map values (e.g. 'laveena' -> 'Laveena').
       const displayName = Object.values(SALE_PERSON_BY_EMAIL).find((v) => norm(v) === canonical);
-      return displayName || name;
+      return displayName || stripped;
     }
   }
-  return name;
+  return stripped;
 }
 
 /** Stable, small cache-key suffix for a scope (one of 6 values today) — used

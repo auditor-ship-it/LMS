@@ -100,5 +100,7 @@ router.get('/sales-os/renewals', requirePublicApiKey('salesos'), asyncHandler(re
 router.get('/sales-os/company-match', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.companyMatch)));
 // ?employeeCode=X or ?employeeCodes=X,Y,Z — per-salesperson dashboard numbers.
 router.get('/sales-os/renewal-stats', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalStats)));
+// ?employeeCode=X&year=&month= — the "Total renewals" scorecard's count + detail rows.
+router.get('/sales-os/renewal-log', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalLog)));
 
 export default router;

@@ -5,6 +5,8 @@ import { ErrorBoundary } from '../components/layout/ErrorBoundary.jsx';
 import { LoginPage } from '../pages/auth/LoginPage.jsx';
 import { SsoSalesOsPage } from '../pages/sso/SsoSalesOsPage.jsx';
 import { SsoLeaseExpiryPage } from '../pages/sso/SsoLeaseExpiryPage.jsx';
+import { SsoRenewDocumentPage } from '../pages/sso/SsoRenewDocumentPage.jsx';
+import { SsoApprovalPendingPage } from '../pages/sso/SsoApprovalPendingPage.jsx';
 import { IconSprite } from '../components/ui/IconSprite.jsx';
 import { ROUTES } from '../constants/routes.js';
 
@@ -30,6 +32,10 @@ export default function App() {
             same way, no lead/company context needed. See
             pages/sso/SsoLeaseExpiryPage.jsx. */}
         <Route path="/sso/lease-expiry" element={<SsoLeaseExpiryPage />} />
+        {/* Same idea — Renew & Document (Update Agreement/Save/Send Back)
+            and Approval Pending (Approve/Reject), each the real page. */}
+        <Route path="/sso/renew-document" element={<SsoRenewDocumentPage />} />
+        <Route path="/sso/approval-pending" element={<SsoApprovalPendingPage />} />
         <Route
           path="/"
           element={(

@@ -12,9 +12,17 @@ const router = Router();
    is never required to reach it. */
 router.post('/sales-os/session', asyncHandler(ssoController.startSession));
 
-/* Same idea, but for the plain "embed the whole Lease Expiry page" case
-   (Sales OS's "Lease" section) — no KAM lead/company context needed. */
+/* Same idea, but for the plain "embed the whole page" cases — no KAM
+   lead/company context needed, just employeeCode -> session. All three route
+   to the exact same handler (startEmployeeSession does nothing page-specific)
+   — kept as separate paths only so each embed's URL is self-descriptive for
+   whoever wires it up on the Sales OS side:
+     - lease-expiry: LeaseExpiryPage (Renew, Off-Lease, Remarks)
+     - renew-document: RenewDocumentPage (Update Agreement, Save, Send Back)
+     - approval-pending: ApprovalPendingPage (Approve/Reject a submitted renewal) */
 router.post('/lease-expiry/session', asyncHandler(ssoController.startEmployeeSession));
+router.post('/renew-document/session', asyncHandler(ssoController.startEmployeeSession));
+router.post('/approval-pending/session', asyncHandler(ssoController.startEmployeeSession));
 
 /* Everything past the initial session hop runs as the SSO'd salesperson. */
 router.post('/sales-os/confirm-company', requireAuth, asyncHandler(ssoController.confirmCompany));
