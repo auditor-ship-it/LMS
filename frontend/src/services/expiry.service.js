@@ -1,10 +1,18 @@
-import { getExpiryData, saveExpiryAction, refreshSalePersons, getCompanyContainers, createRenewalLink, saveExpiryRemark } from '../api/expiry.api.js';
+import {
+  getExpiryData, saveExpiryAction, saveExpiryActionSync, refreshSalePersons, getCompanyContainers, createRenewalLink, saveExpiryRemark
+} from '../api/expiry.api.js';
 
 export async function fetchExpiryList() {
   return getExpiryData('pending');
 }
 export async function actionExpiryRow(rowId, timestamp, status, rowNum) {
   return saveExpiryAction(rowId, timestamp, status, rowNum);
+}
+
+/** Same action, but waits for the real Sheets write — see
+ *  api/expiry.api.js#saveExpiryActionSync for when to use this instead. */
+export async function actionExpiryRowSync(rowId, timestamp, status, rowNum) {
+  return saveExpiryActionSync(rowId, timestamp, status, rowNum);
 }
 
 /** Persist the Lease Expiry comment for this exact Deployed row. */

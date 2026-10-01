@@ -9,7 +9,7 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage, useAuth } from '../../shared/auth/index.js';
-import { fetchExpiryList, actionExpiryRow, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
+import { fetchExpiryList, actionExpiryRow, actionExpiryRowSync, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
@@ -273,9 +273,19 @@ export function LeaseExpiryPage() {
      by itself, THEN builds the same payload shape RenewDocumentPage.jsx's
      buildDocPayload does. ALREADY_PROCESSED (a second Save on the same
      draft, once the status is already set) is expected and harmless here,
-     not an error — only a genuine failure result should stop the save. */
+     not an error — only a genuine failure result should stop the save.
+     actionExpiryRowSync, not actionExpiryRow — BUG FOUND AND FIXED
+     2026-10-01: the plain (Fast) action writes Mongo immediately and the
+     real Sheets write ~7s later via the outbox, but saveRenewalDraft/
+     completeDocStage right below do their own LIVE Sheets read to confirm
+     this status — called back-to-back with no delay (confirmed live via
+     Sales OS's embed), that read still saw the OLD status and failed with
+     "Could not save — try again." The _sync variant waits for the real
+     Sheets write before returning, so the read after it is guaranteed to
+     see it — same fix already applied to the Sales OS SSO wizard's own
+     equivalent flow (salesOsRenewal.service.js). */
   const buildRenewPayload = async (containerNo, rowNum, payload) => {
-    const statusResult = await actionExpiryRow(containerNo, new Date().toISOString(), 'Documents Pending', rowNum);
+    const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', rowNum);
     if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
       throw new Error('Could not mark this container for renewal — try again.');
     }

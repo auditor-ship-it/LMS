@@ -7,6 +7,7 @@ import { SsoSalesOsPage } from '../pages/sso/SsoSalesOsPage.jsx';
 import { SsoLeaseExpiryPage } from '../pages/sso/SsoLeaseExpiryPage.jsx';
 import { SsoRenewDocumentPage } from '../pages/sso/SsoRenewDocumentPage.jsx';
 import { SsoApprovalPendingPage } from '../pages/sso/SsoApprovalPendingPage.jsx';
+import { RefundReviewPage } from '../pages/refundReview/RefundReviewPage.jsx';
 import { IconSprite } from '../components/ui/IconSprite.jsx';
 import { ROUTES } from '../constants/routes.js';
 
@@ -36,6 +37,12 @@ export default function App() {
             and Approval Pending (Approve/Reject), each the real page. */}
         <Route path="/sso/renew-document" element={<SsoRenewDocumentPage />} />
         <Route path="/sso/approval-pending" element={<SsoApprovalPendingPage />} />
+        {/* No-login Refund review (explicit request 2026-10-01) — reached only
+            via the signed ?rowNum=&stage=&token= link written into the
+            Offlease Bills sheet / emailed at each stage. No session exists or
+            is created here; the token itself authorizes the one row/stage it
+            names. See pages/refundReview/RefundReviewPage.jsx. */}
+        <Route path="/refund-review" element={<RefundReviewPage />} />
         <Route
           path="/"
           element={(

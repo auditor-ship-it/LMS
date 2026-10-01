@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PageHeader, Card, Button, StatCard, SearchBar, Pagination, DataGrid, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
@@ -53,6 +53,18 @@ export function RenewDocumentPage() {
   const [docItem, setDocItem] = useState(null);
   const [docBusy, setDocBusy] = useState(false);
   const [docError, setDocError] = useState('');
+
+  /* Save/Submit confirmation — explicit request 2026-10-01: neither action
+     visibly changes this row (Agreement PDF/PO PDF only populate once Pushpa
+     approves a Submit — see decideRenewalApproval), so without this message
+     the row looks untouched and a successful save looks like it silently
+     failed. Auto-dismisses, same pattern as ApiAccessPage.jsx's toast. */
+  const [toast, setToast] = useState(null);
+  useEffect(() => {
+    if (!toast) return undefined;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   /* "Send Back" to Lease Expiry — explicit request 2026-09-30. Keyed by
      container (not a single boolean) so one row's in-flight request doesn't
@@ -182,6 +194,7 @@ export function RenewDocumentPage() {
       else if (result === 'MISSING_AGR') setDocError('A signed agreement copy URL is required first.');
       else {
         setDocItem(null); setSelectedContainer(null);
+        setToast({ type: 'success', text: `${docItem.containerNo} submitted — now awaiting Pushpa's approval (Renew Approval Pending). Agreement/PO PDF will show here once she approves.` });
         await reload();
         invalidate('deployed-sheet');
       }
@@ -206,6 +219,7 @@ export function RenewDocumentPage() {
       if (result === 'INVALID_STATE') setDocError('Container is not in the document-upload stage.');
       else {
         setDocItem(null); setSelectedContainer(null);
+        setToast({ type: 'success', text: `${docItem.containerNo} saved as a draft — it stays in this list unchanged until you Submit it and Pushpa approves.` });
         await reload();
         invalidate('deployed-sheet');
       }
@@ -284,6 +298,7 @@ export function RenewDocumentPage() {
       } else {
         setBulkOpen(false);
         setSelectedKeys(new Set());
+        setToast({ type: 'success', text: `${selectedItems.length} container(s) submitted — now awaiting Pushpa's approval (Renew Approval Pending). Agreement/PO PDF will show once approved.` });
       }
       await reload();
       invalidate('deployed-sheet');
@@ -330,6 +345,7 @@ export function RenewDocumentPage() {
       } else {
         setBulkOpen(false);
         setSelectedKeys(new Set());
+        setToast({ type: 'success', text: `${selectedItems.length} container(s) saved as a draft — they stay in this list unchanged until Submitted and approved.` });
       }
       await reload();
       invalidate('deployed-sheet');
@@ -347,6 +363,12 @@ export function RenewDocumentPage() {
         subtitle="Complete post-renewal documentation for renewed containers"
         actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}
       />
+
+      {toast && (
+        <div className={`${styles.banner} ${toast.type === 'success' ? styles.bannerSuccess : ''}`}>
+          {toast.text}
+        </div>
+      )}
 
       <div className={styles.kpiRow}>
         <StatCard

@@ -82,6 +82,32 @@ export async function saveAction(req, res) {
   res.json({ result: await expiryService.saveExpiryActionFast(rowId, timestamp, status, req.user.email, rowNum) });
 }
 
+/**
+ * POST /api/expiry/action-sync — same write as saveAction above, but the
+ * PLAIN (non-Fast) saveExpiryAction: a synchronous, live-Sheets write that
+ * returns only once Google Sheets itself has the new status, not the
+ * Mongo-first + ~7s-later-outbox-replay Fast path.
+ *
+ * BUG FOUND AND FIXED 2026-10-01: LeaseExpiryPage.jsx's own "Renew" ->
+ * Update Agreement flow (buildRenewPayload) marks a fresh container
+ * 'Documents Pending' via THIS call, then immediately calls Save/Submit
+ * (saveRenewalDraft/completeDocStage), both of which do their own LIVE
+ * getSheetData() read to confirm the row is already 'documents pending'.
+ * Using the Fast path there raced that read against the outbox worker's own
+ * delay — confirmed live via Sales OS's Lease Expiry embed (SSO'd session,
+ * no slower manual page-navigation between the two calls to accidentally
+ * cover for it): Save/Submit got "Could not save — try again" (INVALID_STATE)
+ * because the live sheet still showed the OLD status when it read. The Fast
+ * path is fine on its own (bulk Renew/Off-Lease buttons elsewhere on this
+ * page) — it only breaks when something RIGHT AFTER it needs a live-Sheets
+ * read to already see its result, which is exactly buildRenewPayload's
+ * shape and no other caller's.
+ */
+export async function saveActionSync(req, res) {
+  const { rowId, timestamp, status, rowNum } = req.body;
+  res.json({ result: await expiryService.saveExpiryAction(rowId, timestamp, status, req.user.email, rowNum) });
+}
+
 /** POST /api/expiry/remark — Lease Expiry free-text comment for one Deployed
  *  row (`rowNum` = item._rowNum). Does not change renewal / off-lease status. */
 export async function saveRemark(req, res) {

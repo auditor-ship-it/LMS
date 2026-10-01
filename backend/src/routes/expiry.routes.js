@@ -26,6 +26,10 @@ router.post('/documents/upload', requirePermission('document'), asyncHandler(exp
 router.post('/documents/complete', requirePermission('document'), asyncHandler(expiryController.completeDocumentStage));
 
 router.post('/action', requirePermission('expiry'), asyncHandler(expiryController.saveAction));
+/* Synchronous (non-Fast) variant — used ONLY by callers that immediately
+   follow this with a live-Sheets-dependent read (see saveActionSync's own
+   doc comment on the backend for the exact bug this fixes). */
+router.post('/action-sync', requirePermission('expiry'), asyncHandler(expiryController.saveActionSync));
 /* Reverses saveAction — explicit request 2026-09-30, see
    sendExpiryToPendingFast's own doc comment on the backend. */
 router.post('/renewal/send-back-to-pending', requirePermission('expiry'), asyncHandler(expiryController.sendBackToPending));

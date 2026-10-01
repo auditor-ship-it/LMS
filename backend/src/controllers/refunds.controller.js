@@ -23,3 +23,20 @@ export async function decideApproval(req, res) {
   const { rowNum, stage, decision, remarks } = req.body;
   res.json({ result: await refundsService.decideRefundApproval(rowNum, stage, decision, remarks, req.user.email) });
 }
+
+/** GET /api/refund-review — no-login read for the signed review link (the
+ *  "HOD/CEO/Accounts Review Link" sheet columns). Token carries its own
+ *  rowNum/stage; verified inside the service — see getRefundEntryForReview's
+ *  doc comment. Not behind requireAuth (routes/refundReview.routes.js). */
+export async function getForReview(req, res) {
+  const { rowNum, stage, token } = req.query;
+  res.json({ headers: refundsService.REFUNDS_HEADERS, entry: await refundsService.getRefundEntryForReview(Number(rowNum), stage, token) });
+}
+
+/** POST /api/refund-review/decide — no-login decision for the signed review
+ *  link. The token IS the authorization (decideRefundApprovalViaLink skips
+ *  checkActionPermission) — same hierarchy/guards as decideApproval above. */
+export async function decideViaLink(req, res) {
+  const { rowNum, stage, token, decision, remarks } = req.body;
+  res.json({ result: await refundsService.decideRefundApprovalViaLink(Number(rowNum), stage, decision, remarks, token) });
+}

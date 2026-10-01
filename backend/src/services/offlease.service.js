@@ -75,7 +75,7 @@ import {
 import { SHEETS, EXTERNAL_SPREADSHEETS } from '../config/sheets.config.js';
 import { env } from '../config/env.js';
 import { safeStr, safeAmt, toNum, formatDateVal, parseDate } from '../utils/format.js';
-import { normKey } from '../utils/normalize.js';
+import { normKey, splitContainers } from '../utils/normalize.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { checkActionPermission, userHasAction } from './permissions.service.js';
@@ -87,6 +87,7 @@ import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
+import { _deployedRawValues, _resolveRenewalColumns } from './expiry.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
 import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
@@ -970,6 +971,18 @@ export async function reorderOffLeaseTrackingColumns() {
 
 function _orderScanCols(headers) {
   let contCol = -1, ordCol = -1;
+  /* BUG FOUND AND FIXED 2026-10-01: a loose "contains 'container'" scan picked
+     New Lease's "Basic Amount(Rent per Container)" (a money column) over the
+     real "Container No." column further right, since it comes first and also
+     contains "container" — so _scanSheetForLeaseInfo never matched ANY
+     container against New Lease, and Order No always came back blank. An
+     exact "container no[.]" match is tried first; only when nothing matches
+     exactly does this fall back to the old loose scan below (sheets whose
+     real header isn't an exact "Container No." still need something). */
+  for (let h = 0; h < headers.length; h++) {
+    const hd = String(headers[h] || '').trim().toLowerCase();
+    if (contCol === -1 && /^container\s*no\.?$/.test(hd)) contCol = h;
+  }
   for (let h = 0; h < headers.length; h++) {
     const hd = String(headers[h] || '').trim().toLowerCase();
     if (contCol === -1 && hd.indexOf('container') !== -1 && hd.indexOf('no. of') === -1 && hd.indexOf('no of') === -1 && hd.indexOf('link') === -1) contCol = h;
@@ -1055,6 +1068,45 @@ async function _findLeaseInfoForContainer(want) {
 
 async function _findOrderNosForContainer(want) {
   return (await _findLeaseInfoForContainer(want)).orders;
+}
+
+/** Every distinct "Order Received Number" the external FMS dispatch sheet
+ *  (STAGE-9) carries for this container — see getOffLeaseStageDetail's doc
+ *  comment on why this is now preferred over the lease-level lookup above.
+ *  Matched by plain substring containment on the raw "Container Number"
+ *  cell, not a strict split: that column's real data mixes commas, dashes
+ *  and stray spaces as separators inconsistently (confirmed live), so an
+ *  exact tokenizer would miss real matches more often than a loose
+ *  containment check would false-positive on fixed-format container codes.
+ *
+ *  `clientName` disambiguates a reused container number — explicit request
+ *  2026-10-01 ("match the Customer Name"), found live: SZLU9181535 has 3
+ *  STAGE-9 rows, and without a client filter an unrelated customer's order
+ *  on the same container number could get mixed in with Chemplast Sanmar
+ *  Limited's own OR443. Reuses clientMatches (stage8.service.js) — the same
+ *  tolerant-but-not-alias-fooled comparison every other FMS lookup in this
+ *  file already uses, same "prefer client-matched, fall back to
+ *  container-only if that filters out everything" rescue as matchByContainer. */
+async function _lookupStage9OrderNos(containerNo, clientName) {
+  const want = normKey(containerNo);
+  if (!want) return [];
+  const { headers, rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
+  const contCol = headers.findIndex((h) => /container number/i.test(String(h || '')));
+  const ordCol = headers.findIndex((h) => /order received number/i.test(String(h || '')));
+  const custCol = headers.findIndex((h) => /customer name/i.test(String(h || '')));
+  if (contCol < 0 || ordCol < 0) return [];
+  const hits = rows.filter((r) => normKey(r[contCol]).includes(want));
+  const picked = clientName && custCol >= 0
+    ? hits.filter((r) => clientMatches(safeStr(r[custCol]), clientName))
+    : [];
+  const chosen = picked.length ? picked : hits;
+  const seen = new Set();
+  const orders = [];
+  for (const r of chosen) {
+    const o = safeStr(r[ordCol]).trim();
+    if (o && !seen.has(o)) { seen.add(o); orders.push(o); }
+  }
+  return orders;
 }
 
 /* ==================== DIAGNOSTICS (admin-only) ==================== */
@@ -2497,6 +2549,83 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     const baseCols = { 0: 'Container No', 1: 'Lease ID', 2: 'Size', 3: 'Type', 4: 'Client Code', 5: 'Client Name', 6: 'Location', 7: 'Deployed Date', 8: 'Valid Upto', 9: 'Rate' };
     for (const b of Object.keys(baseCols)) result[`col_${b}`] = fmtCell(row[Number(b)]);
+
+    /* Agreement/PO PDF — explicit request 2026-10-01 ("show agreement pdf
+       and po pdf offlease"). These live on SHEETS.DEPLOYED, not OL_SHEET
+       (this sheet has no such columns), resolved by header text via the
+       same _resolveRenewalColumns the Lease Expiry / Renew & Document pages
+       already use for this exact sheet — see its own doc comment.
+       Best-effort, same convention as every other cross-sheet enrichment in
+       this function (the Stage 3 auto-fetch above): the form must still
+       open with these blank if the lookup fails, or if the container
+       already left the Deployed sheet. */
+    try {
+      const { values } = await _deployedRawValues();
+      const { agrCol, poPdfCol } = _resolveRenewalColumns(values[0] || []);
+      const want = normKey(containerNo);
+      const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
+      result.agreementUrl = dRow ? safeStr(dRow[agrCol]) : '';
+      result.poPdfUrl = dRow ? safeStr(dRow[poPdfCol]) : '';
+    } catch (e) {
+      result.agreementUrl = '';
+      result.poPdfUrl = '';
+    }
+
+    /* Order No — explicit request 2026-10-01 ("show order no offlease"),
+       same card as Agreement/PO PDF above. OL_SHEET has no Order No column
+       either.
+       SOURCE, decided explicitly 2026-10-01 after a direct conflict was found
+       live (CRIU4025493: New Lease/Off-Lease's own lookup resolved "OR443",
+       but the external FMS dispatch sheet (STAGE-9) carries this exact
+       container's REAL transportation order, "OR496") — user chose the FMS
+       sheet over the lease-level one. Primary: _lookupStage9OrderNos (STAGE-9,
+       matched directly by Container Number — the actual dispatch/transport
+       order this container moved under). Falls back to the old lease-level
+       _findLeaseInfoForContainer (New Lease / Operation sheet) only when
+       STAGE-9 has no record at all for this container, so a container not yet
+       in FMS still shows SOMETHING rather than nothing. A container can
+       legitimately carry more than one order across different shipments
+       (confirmed live: CRIU4025493 has both OR443 and OR496 in STAGE-9 itself)
+       — every distinct one found is kept and joined, not just the first.
+       Kept outside the try below so Stage 1's Transportation lookup (which
+       needs these same order numbers) still runs even if it itself fails. */
+    let leaseOrders = [];
+    try {
+      leaseOrders = await _lookupStage9OrderNos(containerNo, safeStr(row[5]));
+      if (!leaseOrders.length) leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
+      result.orderNos = leaseOrders.join(', ');
+    } catch (e) {
+      result.orderNos = '';
+    }
+
+    /* Explicit request 2026-10-01: "fetch order no wise stage 1 sheet...
+       Transportation One Way, Transportation Return Way" — originally Stage
+       1 only, widened the same day ("all stage fetch the transportation one
+       way and retrun way") to every stage's card, not just Stage 1's. These
+       two columns don't change per stage (they describe the container's one
+       shipment, not a per-stage fact), so the lookup itself is unchanged —
+       only the `if (Number(stage) === 1)` gate that used to wrap it is gone.
+       SHEETS.STAGE1_ORDER_FORM is the original sales order-intake form
+       (~137 cols) these two columns live on, joined here by Order No (its
+       "Order Received Number" column uses the same OR### numbering resolved
+       above). Header-resolved, not hardcoded indices, same reasoning as
+       every other cross-sheet lookup here. Best-effort/blank on no match,
+       same as above. */
+    try {
+      const { headers: s1Headers, rows: s1Rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
+      const orderRecvCol = s1Headers.findIndex((h) => /order received number/i.test(String(h || '')));
+      const oneWayCol = s1Headers.findIndex((h) => /transportation one way/i.test(String(h || '')));
+      const returnWayCol = s1Headers.findIndex((h) => /transportation return way/i.test(String(h || '')));
+      const wantOrders = new Set(leaseOrders.map((o) => safeStr(o).trim().toUpperCase()));
+      const s1Row = orderRecvCol >= 0 && wantOrders.size
+        ? s1Rows.find((r) => wantOrders.has(safeStr(r[orderRecvCol]).trim().toUpperCase()))
+        : null;
+      result.transportOneWay = s1Row && oneWayCol >= 0 ? fmtNumCell(s1Row[oneWayCol]) : '';
+      result.transportReturnWay = s1Row && returnWayCol >= 0 ? fmtNumCell(s1Row[returnWayCol]) : '';
+    } catch (e) {
+      result.transportOneWay = '';
+      result.transportReturnWay = '';
+    }
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 

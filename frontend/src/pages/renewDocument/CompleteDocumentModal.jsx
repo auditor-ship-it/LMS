@@ -111,7 +111,8 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
         {!bulk && item?.draft?.submittedDate && (
           <p className={styles.hint}>
             Draft saved — last updated {new Date(item.draft.submittedDate).toLocaleString()}. Still pending; edit and
-            Save again, or Submit to complete.
+            Save again, or Submit. Note: even after Submit, this won't disappear from the list or show its Agreement/PO
+            PDF until Pushpa approves it (Renew Approval Pending).
           </p>
         )}
 

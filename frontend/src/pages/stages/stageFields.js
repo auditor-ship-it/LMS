@@ -421,5 +421,20 @@ export const BASE_FIELDS = [
   { key: 'col_5', label: 'Client Name' },
   { key: 'col_6', label: 'Location' },
   { key: 'col_7', label: 'Deployed Date' },
-  { key: 'col_8', label: 'Valid Upto' }
+  { key: 'col_8', label: 'Valid Upto' },
+  // Explicit request 2026-10-01 ("show order no offlease") — also a
+  // cross-sheet lookup (_findLeaseInfoForContainer), not a col_N.
+  { key: 'orderNos', label: 'Order No' },
+  // Explicit request 2026-10-01 ("show agreement pdf and po pdf offlease") —
+  // not col_N: these come from a cross-sheet lookup (SHEETS.DEPLOYED), see
+  // getOffLeaseStageDetail's own doc comment. `link: true` renders them as a
+  // "View" link instead of plain text (see StageDetailModal.jsx's BASE_FIELDS block).
+  { key: 'agreementUrl', label: 'Agreement PDF', link: true },
+  { key: 'poPdfUrl', label: 'PO PDF', link: true },
+  // Explicit request 2026-10-01 ("fetch order no wise stage 1 sheet...
+  // transportation one way, transportation return way"), widened the same
+  // day to every stage ("all stage fetch the transportation one way and
+  // retrun way") — getOffLeaseStageDetail resolves these for every stage now.
+  { key: 'transportOneWay', label: 'Transportation One Way' },
+  { key: 'transportReturnWay', label: 'Transportation Return Way' }
 ];
