@@ -380,7 +380,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
           {!loading && !error && !justSaved && (
             <form onSubmit={handleSubmit}>
               <div className={styles.baseGrid}>
-                {BASE_FIELDS.map((f) => (
+                {BASE_FIELDS.filter((f) => !f.onlyStage || f.onlyStage === stageNumber).map((f) => (
                   <div key={f.key} className={styles.baseItem}>
                     <span className={styles.baseLabel}>{f.label}</span>
                     <span className={styles.baseValue}>

@@ -971,6 +971,18 @@ export async function reorderOffLeaseTrackingColumns() {
 
 function _orderScanCols(headers) {
   let contCol = -1, ordCol = -1;
+  /* BUG FOUND AND FIXED 2026-10-01: a loose "contains 'container'" scan picked
+     New Lease's "Basic Amount(Rent per Container)" (a money column) over the
+     real "Container No." column further right, since it comes first and also
+     contains "container" — so _scanSheetForLeaseInfo never matched ANY
+     container against New Lease, and Order No always came back blank. An
+     exact "container no[.]" match is tried first; only when nothing matches
+     exactly does this fall back to the old loose scan below (sheets whose
+     real header isn't an exact "Container No." still need something). */
+  for (let h = 0; h < headers.length; h++) {
+    const hd = String(headers[h] || '').trim().toLowerCase();
+    if (contCol === -1 && /^container\s*no\.?$/.test(hd)) contCol = h;
+  }
   for (let h = 0; h < headers.length; h++) {
     const hd = String(headers[h] || '').trim().toLowerCase();
     if (contCol === -1 && hd.indexOf('container') !== -1 && hd.indexOf('no. of') === -1 && hd.indexOf('no of') === -1 && hd.indexOf('link') === -1) contCol = h;
@@ -2524,12 +2536,43 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
        same card as Agreement/PO PDF above. OL_SHEET has no Order No column
        either; getOffLeaseContainerDetail's own lookup (_findLeaseInfoForContainer,
        scanning OL_ORDER_SHEETS / Operation sheet) already solves this for the
-       same container identity, reused here rather than duplicated. */
+       same container identity, reused here rather than duplicated. Kept
+       outside the try below so Stage 1's Transportation lookup (which needs
+       these same order numbers) still runs even if it itself fails. */
+    let leaseOrders = [];
     try {
-      const leaseInfo = await _findLeaseInfoForContainer(normKey(containerNo));
-      result.orderNos = leaseInfo.orders.join(', ');
+      leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
+      result.orderNos = leaseOrders.join(', ');
     } catch (e) {
       result.orderNos = '';
+    }
+
+    /* Stage 1 (Off-Lease Intimation) only — explicit request 2026-10-01:
+       "fetch order no wise stage 1 sheet... Transportation One Way,
+       Transportation Return Way". SHEETS.STAGE1_ORDER_FORM is the original
+       sales order-intake form (~137 cols) these two columns live on, joined
+       here by Order No (its "Order Received Number" column uses the same
+       OR### numbering _findLeaseInfoForContainer resolves above, once an
+       order has converted from a quotation — confirmed live: New Lease's
+       OR458 matches Stage 1 row with Order Received Number "OR458").
+       Header-resolved, not hardcoded indices, same reasoning as every other
+       cross-sheet lookup here. Best-effort/blank on no match, same as above. */
+    if (Number(stage) === 1) {
+      try {
+        const { headers: s1Headers, rows: s1Rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
+        const orderRecvCol = s1Headers.findIndex((h) => /order received number/i.test(String(h || '')));
+        const oneWayCol = s1Headers.findIndex((h) => /transportation one way/i.test(String(h || '')));
+        const returnWayCol = s1Headers.findIndex((h) => /transportation return way/i.test(String(h || '')));
+        const wantOrders = new Set(leaseOrders.map((o) => safeStr(o).trim().toUpperCase()));
+        const s1Row = orderRecvCol >= 0 && wantOrders.size
+          ? s1Rows.find((r) => wantOrders.has(safeStr(r[orderRecvCol]).trim().toUpperCase()))
+          : null;
+        result.transportOneWay = s1Row && oneWayCol >= 0 ? fmtNumCell(s1Row[oneWayCol]) : '';
+        result.transportReturnWay = s1Row && returnWayCol >= 0 ? fmtNumCell(s1Row[returnWayCol]) : '';
+      } catch (e) {
+        result.transportOneWay = '';
+        result.transportReturnWay = '';
+      }
     }
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);

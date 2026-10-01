@@ -83,9 +83,9 @@ export const SHEETS = {
   /* Sales order-intake form responses (Google Form-linked, ~137 columns,
      Quotation No/Customer/container/PO/billing detail) — added 2026-09-30
      (explicit request) so it can be mirrored into Mongo like every other
-     hot-read tab instead of read live. Not yet consumed by any page in this
-     app; mirrored so it's available the moment something needs it, with no
-     live-Sheets quota risk when that happens. */
+     hot-read tab instead of read live. First consumed 2026-10-01 by
+     offlease.service.js's getOffLeaseStageDetail (Stage 1's Transportation
+     One Way/Return Way, joined by Order No). */
   STAGE1_ORDER_FORM: 'Stage 1'
 };
 

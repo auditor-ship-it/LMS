@@ -430,5 +430,11 @@ export const BASE_FIELDS = [
   // getOffLeaseStageDetail's own doc comment. `link: true` renders them as a
   // "View" link instead of plain text (see StageDetailModal.jsx's BASE_FIELDS block).
   { key: 'agreementUrl', label: 'Agreement PDF', link: true },
-  { key: 'poPdfUrl', label: 'PO PDF', link: true }
+  { key: 'poPdfUrl', label: 'PO PDF', link: true },
+  // Explicit request 2026-10-01 ("fetch order no wise stage 1 sheet...
+  // transportation one way, transportation return way") — only resolved by
+  // getOffLeaseStageDetail for Stage 1 (Off-Lease Intimation), so only shown
+  // there; `onlyStage` is filtered in StageDetailModal.jsx's BASE_FIELDS block.
+  { key: 'transportOneWay', label: 'Transportation One Way', onlyStage: 1 },
+  { key: 'transportReturnWay', label: 'Transportation Return Way', onlyStage: 1 }
 ];
