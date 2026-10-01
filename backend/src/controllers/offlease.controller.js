@@ -145,6 +145,18 @@ export async function getStageDetail(req, res) {
   res.json(detail);
 }
 
+/** GET /:containerNo/enrichment — Order No, Agreement/PO PDF, Transportation
+ *  One Way/Return Way. Split out from getStageDetail 2026-10-01 (see
+ *  getOffLeaseCardEnrichment's own doc comment in offlease.service.js) so the
+ *  modal opens immediately on the fast base fields, and the frontend fetches
+ *  this separately/fills it in afterward — same `?rn=` convention as
+ *  getStageDetail above. */
+export async function getCardEnrichment(req, res) {
+  const rowNum = req.query.rn ? parseInt(req.query.rn, 10) : undefined;
+  const enrichment = await offLeaseService.getOffLeaseCardEnrichment(req.params.containerNo, req.user, rowNum);
+  res.json(enrichment);
+}
+
 export async function saveStage(req, res) {
   const stage = parseInt(req.params.stage, 10);
   // Permission for this stage (offlease1..offlease8) is checked inside the

@@ -15,13 +15,52 @@ function StageBadge({ status }) {
 
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
 
-const EMPTY_FORM = {
-  user: '', invoiceNumber: '', invoiceDate: '', billReceivedBy: '', vendorName: '',
-  invoiceAmount: '', amountToPay: '', paymentDueDate: '', paymentType: '', paymentTypeOther: '',
-  paymentTerms: '', ledgerHead: '', sdAmountToBeRefunded: '', sdCalculation: '',
-  cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
-  department: '', invoiceFile: null, piFile: null, attachmentsFile: null
-};
+/* Ledger Head is fixed, not user-chosen — explicit request 2026-10-01: this
+   form is Security Deposit refunds only now, so there's nothing to pick. */
+const FIXED_LEDGER_HEAD = 'Security Deposit Refundable';
+
+/* Department, same treatment — explicit request 2026-10-01 ("department auto
+   fetching operation only"): "Operation" was the dropdown's only real choice
+   already, so it's auto-filled instead of making the submitter pick it. */
+const FIXED_DEPARTMENT = 'Operation';
+
+/* Explicit request 2026-10-01: Invoice Number/Date, Payment Type/Terms, User
+   and Bill Received Date are no longer collected from this form (SD refunds
+   don't have a vendor invoice in the traditional sense) — removed from
+   EMPTY_FORM along with them. The sheet still HAS these columns
+   (REFUNDS_HEADERS unchanged, see refunds.service.js) so old rows keep their
+   data and nothing shifts column-wise; this form just stops sending values
+   for them (addRefundEntry already treats a missing field as blank via
+   safeStr, and no longer requires User/Invoice Number either). SD Amount to
+   be Refunded/SD Calculation (the old numeric fields) are removed the same
+   way — superseded by the renamed Invoice Amount/Invoice(file) fields below. */
+function makeEmptyForm() {
+  return {
+    vendorName: '',
+    invoiceAmount: '', amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
+    cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
+    invoiceFile: null, piFile: null, attachmentsFile: null
+  };
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** `dateStr` + `days`, in <input type="date">'s "yyyy-MM-dd" shape —
+ *  explicit request 2026-10-01 ("auto matically 7 days"): Payment Due Date no
+ *  longer has Payment Terms (or, since Bill Received Date was also hidden
+ *  from the form, a received date) to derive from, so it's auto-filled from
+ *  today + 7 at the moment the form is opened instead. Still a normal
+ *  editable date input afterward, in case it needs correcting. */
+function addDays(dateStr, days) {
+  if (!dateStr) return '';
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 /* Exact header sequence/names given 2026-09-30 for the base columns — matches
    the live sheet's own header row (refunds.service.js's REFUNDS_HEADERS)
@@ -65,7 +104,7 @@ export function RefundsPage() {
   const { data, loading, error, reload } = useAsync(() => (canView ? fetchRefunds() : Promise.resolve({ headers: [], data: [] })), [canView]);
   const rows = data?.data || [];
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(makeEmptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitOk, setSubmitOk] = useState(false);
@@ -87,24 +126,16 @@ export function RefundsPage() {
         form.clientLedgerFile ? uploadStageFile(form.clientLedgerFile) : ''
       ]);
       await submitRefund({
-        user: form.user,
-        invoiceNumber: form.invoiceNumber,
-        invoiceDate: form.invoiceDate,
-        billReceivedBy: form.billReceivedBy,
         vendorName: form.vendorName,
         invoiceAmount: form.invoiceAmount,
         amountToPay: form.amountToPay,
         paymentDueDate: form.paymentDueDate,
-        paymentType: form.paymentType === 'Other' && form.paymentTypeOther ? form.paymentTypeOther : form.paymentType,
-        paymentTerms: form.paymentTerms,
-        ledgerHead: form.ledgerHead,
-        sdAmountToBeRefunded: form.sdAmountToBeRefunded,
-        sdCalculation: form.sdCalculation,
-        department: form.department,
+        ledgerHead: FIXED_LEDGER_HEAD,
+        department: FIXED_DEPARTMENT,
         invoiceFileUrl, piFileUrl, attachmentsUrl,
         cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl
       });
-      setForm(EMPTY_FORM);
+      setForm(makeEmptyForm());
       setSubmitOk(true);
       await reload();
     } catch (e2) {
@@ -116,10 +147,10 @@ export function RefundsPage() {
 
   return (
     <>
-      <PageHeader title="Refunds" subtitle="Off-Lease vendor bill submission" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
+      <PageHeader title="SD Refunds" subtitle="Security Deposit refund submission" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
 
       {!canView ? (
-        <Card><div className={styles.viewOnly}>You don't have access to Refunds. Ask an admin to grant it via Roles & Access.</div></Card>
+        <Card><div className={styles.viewOnly}>You don't have access to SD Refunds. Ask an admin to grant it via Roles & Access.</div></Card>
       ) : (
         <>
           {canSubmit && (
@@ -127,19 +158,8 @@ export function RefundsPage() {
             <form onSubmit={handleSubmit} className={styles.form}>
               <div className={styles.grid3}>
                 <label className={styles.field}>
-                  <span className={styles.label}>User *</span>
-                  <input type="text" value={form.user} onChange={set('user')} required />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Bill Received Date</span>
-                  <input type="date" value={form.billReceivedBy} onChange={set('billReceivedBy')} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Department *</span>
-                  <select value={form.department} onChange={set('department')} required>
-                    <option value="">Select…</option>
-                    <option value="Operation">Operation</option>
-                  </select>
+                  <span className={styles.label}>Department</span>
+                  <input type="text" value={FIXED_DEPARTMENT} disabled />
                 </label>
               </div>
 
@@ -149,79 +169,24 @@ export function RefundsPage() {
                   <input type="text" value={form.vendorName} onChange={set('vendorName')} required />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.label}>Invoice Number *</span>
-                  <input type="text" value={form.invoiceNumber} onChange={set('invoiceNumber')} required />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Invoice Date</span>
-                  <input type="date" value={form.invoiceDate} onChange={set('invoiceDate')} />
-                </label>
-              </div>
-
-              <div className={styles.grid3}>
-                <label className={styles.field}>
-                  <span className={styles.label}>Invoice Amount *</span>
+                  <span className={styles.label}>SD Amount *</span>
                   <input type="number" step="0.01" value={form.invoiceAmount} onChange={set('invoiceAmount')} onWheel={(e) => e.target.blur()} required />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.label}>Amount to Pay *</span>
+                  <span className={styles.label}>SD Amount to be Refunded *</span>
                   <input type="number" step="0.01" value={form.amountToPay} onChange={set('amountToPay')} onWheel={(e) => e.target.blur()} required />
                 </label>
+              </div>
+
+              <div className={styles.grid3}>
                 <label className={styles.field}>
                   <span className={styles.label}>Payment Due Date</span>
                   <input type="date" value={form.paymentDueDate} onChange={set('paymentDueDate')} />
+                  <span className={styles.hint}>Auto-filled as 7 days after Bill Received Date — adjust if needed.</span>
                 </label>
-              </div>
-
-              <div className={styles.grid3}>
-                <label className={styles.field}>
-                  <span className={styles.label}>Payment Type *</span>
-                  <select value={form.paymentType} onChange={set('paymentType')} required>
-                    <option value="">Select…</option>
-                    <option value="Advance">Advance</option>
-                    <option value="Balance">Balance</option>
-                    <option value="Full Payment">Full Payment</option>
-                    <option value="On A/C Payment">On A/C Payment</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </label>
-                {form.paymentType === 'Other' && (
-                  <label className={styles.field}>
-                    <span className={styles.label}>Payment Type — Other *</span>
-                    <input type="text" value={form.paymentTypeOther} onChange={set('paymentTypeOther')} required />
-                  </label>
-                )}
-                <label className={styles.field}>
-                  <span className={styles.label}>Payment Terms *</span>
-                  <select value={form.paymentTerms} onChange={set('paymentTerms')} required>
-                    <option value="">Select…</option>
-                    <option value="Immediate Payment 1-7 Days">Immediate Payment 1-7 Days</option>
-                    <option value="7-15 Days">7-15 Days</option>
-                    <option value="15-21 Days">15-21 Days</option>
-                    <option value="21-30 Days">21-30 Days</option>
-                    <option value="30 & Above">30 & Above</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className={styles.grid3}>
                 <label className={styles.field}>
                   <span className={styles.label}>Ledger Head</span>
-                  <select value={form.ledgerHead} onChange={set('ledgerHead')}>
-                    <option value="">Select…</option>
-                    <option value="Security Deposit Refundable">Security Deposit Refundable</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className={styles.grid3}>
-                <label className={styles.field}>
-                  <span className={styles.label}>SD Amount to be Refunded</span>
-                  <input type="number" step="0.01" value={form.sdAmountToBeRefunded} onChange={set('sdAmountToBeRefunded')} onWheel={(e) => e.target.blur()} />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>SD Calculation</span>
-                  <input type="number" step="0.01" value={form.sdCalculation} onChange={set('sdCalculation')} onWheel={(e) => e.target.blur()} />
+                  <input type="text" value={FIXED_LEDGER_HEAD} disabled />
                 </label>
               </div>
 
@@ -254,25 +219,25 @@ export function RefundsPage() {
 
               <div className={styles.grid3}>
                 <label className={styles.field}>
-                  <span className={styles.label}>Invoice</span>
+                  <span className={styles.label}>SD Calculation</span>
                   <FileUpload
-                    label={form.invoiceFile ? `Selected: ${form.invoiceFile.fileName}` : 'Choose invoice file'}
+                    label={form.invoiceFile ? `Selected: ${form.invoiceFile.fileName}` : 'Choose SD calculation file'}
                     accept={ACCEPT}
                     onSelected={(file) => setForm((f) => ({ ...f, invoiceFile: file }))}
                   />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.label}>PI</span>
+                  <span className={styles.label}>Quarterly Ledger</span>
                   <FileUpload
-                    label={form.piFile ? `Selected: ${form.piFile.fileName}` : 'Choose PI file'}
+                    label={form.piFile ? `Selected: ${form.piFile.fileName}` : 'Choose quarterly ledger file'}
                     accept={ACCEPT}
                     onSelected={(file) => setForm((f) => ({ ...f, piFile: file }))}
                   />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.label}>Attachments</span>
+                  <span className={styles.label}>SD Amounts to be Refunded</span>
                   <FileUpload
-                    label={form.attachmentsFile ? `Selected: ${form.attachmentsFile.fileName}` : 'Choose attachment'}
+                    label={form.attachmentsFile ? `Selected: ${form.attachmentsFile.fileName}` : 'Choose SD amounts to be refunded file'}
                     accept={ACCEPT}
                     onSelected={(file) => setForm((f) => ({ ...f, attachmentsFile: file }))}
                   />

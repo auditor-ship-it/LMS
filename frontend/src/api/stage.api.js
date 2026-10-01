@@ -14,6 +14,13 @@ export const getStageData = (stage, filter) =>
 export const getStageDetail = (containerNo, stage, rowNum) =>
   apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/stage/${stage}`, rowNum ? { params: { rn: rowNum } } : undefined).then((r) => r.data);
 
+/** GET /api/offlease/:containerNo/enrichment — Order No, Agreement/PO PDF,
+ *  Transportation One Way/Return Way. Fetched separately from getStageDetail
+ *  above (explicit report: these made the stage modal slow to open) — same
+ *  `rowNum` reasoning as getStageDetail's own doc comment. */
+export const getCardEnrichment = (containerNo, rowNum) =>
+  apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/enrichment`, rowNum ? { params: { rn: rowNum } } : undefined).then((r) => r.data);
+
 /** POST /api/offlease/:containerNo/stage/:stage — data = { col_N: value, ... }
  *  per stageFields. `rowNum`: see getStageDetail's doc comment above — same
  *  reasoning, this time for the write, where a wrong-row match corrupts

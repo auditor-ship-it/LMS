@@ -2550,83 +2550,6 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
     const baseCols = { 0: 'Container No', 1: 'Lease ID', 2: 'Size', 3: 'Type', 4: 'Client Code', 5: 'Client Name', 6: 'Location', 7: 'Deployed Date', 8: 'Valid Upto', 9: 'Rate' };
     for (const b of Object.keys(baseCols)) result[`col_${b}`] = fmtCell(row[Number(b)]);
 
-    /* Agreement/PO PDF — explicit request 2026-10-01 ("show agreement pdf
-       and po pdf offlease"). These live on SHEETS.DEPLOYED, not OL_SHEET
-       (this sheet has no such columns), resolved by header text via the
-       same _resolveRenewalColumns the Lease Expiry / Renew & Document pages
-       already use for this exact sheet — see its own doc comment.
-       Best-effort, same convention as every other cross-sheet enrichment in
-       this function (the Stage 3 auto-fetch above): the form must still
-       open with these blank if the lookup fails, or if the container
-       already left the Deployed sheet. */
-    try {
-      const { values } = await _deployedRawValues();
-      const { agrCol, poPdfCol } = _resolveRenewalColumns(values[0] || []);
-      const want = normKey(containerNo);
-      const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
-      result.agreementUrl = dRow ? safeStr(dRow[agrCol]) : '';
-      result.poPdfUrl = dRow ? safeStr(dRow[poPdfCol]) : '';
-    } catch (e) {
-      result.agreementUrl = '';
-      result.poPdfUrl = '';
-    }
-
-    /* Order No — explicit request 2026-10-01 ("show order no offlease"),
-       same card as Agreement/PO PDF above. OL_SHEET has no Order No column
-       either.
-       SOURCE, decided explicitly 2026-10-01 after a direct conflict was found
-       live (CRIU4025493: New Lease/Off-Lease's own lookup resolved "OR443",
-       but the external FMS dispatch sheet (STAGE-9) carries this exact
-       container's REAL transportation order, "OR496") — user chose the FMS
-       sheet over the lease-level one. Primary: _lookupStage9OrderNos (STAGE-9,
-       matched directly by Container Number — the actual dispatch/transport
-       order this container moved under). Falls back to the old lease-level
-       _findLeaseInfoForContainer (New Lease / Operation sheet) only when
-       STAGE-9 has no record at all for this container, so a container not yet
-       in FMS still shows SOMETHING rather than nothing. A container can
-       legitimately carry more than one order across different shipments
-       (confirmed live: CRIU4025493 has both OR443 and OR496 in STAGE-9 itself)
-       — every distinct one found is kept and joined, not just the first.
-       Kept outside the try below so Stage 1's Transportation lookup (which
-       needs these same order numbers) still runs even if it itself fails. */
-    let leaseOrders = [];
-    try {
-      leaseOrders = await _lookupStage9OrderNos(containerNo, safeStr(row[5]));
-      if (!leaseOrders.length) leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
-      result.orderNos = leaseOrders.join(', ');
-    } catch (e) {
-      result.orderNos = '';
-    }
-
-    /* Explicit request 2026-10-01: "fetch order no wise stage 1 sheet...
-       Transportation One Way, Transportation Return Way" — originally Stage
-       1 only, widened the same day ("all stage fetch the transportation one
-       way and retrun way") to every stage's card, not just Stage 1's. These
-       two columns don't change per stage (they describe the container's one
-       shipment, not a per-stage fact), so the lookup itself is unchanged —
-       only the `if (Number(stage) === 1)` gate that used to wrap it is gone.
-       SHEETS.STAGE1_ORDER_FORM is the original sales order-intake form
-       (~137 cols) these two columns live on, joined here by Order No (its
-       "Order Received Number" column uses the same OR### numbering resolved
-       above). Header-resolved, not hardcoded indices, same reasoning as
-       every other cross-sheet lookup here. Best-effort/blank on no match,
-       same as above. */
-    try {
-      const { headers: s1Headers, rows: s1Rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
-      const orderRecvCol = s1Headers.findIndex((h) => /order received number/i.test(String(h || '')));
-      const oneWayCol = s1Headers.findIndex((h) => /transportation one way/i.test(String(h || '')));
-      const returnWayCol = s1Headers.findIndex((h) => /transportation return way/i.test(String(h || '')));
-      const wantOrders = new Set(leaseOrders.map((o) => safeStr(o).trim().toUpperCase()));
-      const s1Row = orderRecvCol >= 0 && wantOrders.size
-        ? s1Rows.find((r) => wantOrders.has(safeStr(r[orderRecvCol]).trim().toUpperCase()))
-        : null;
-      result.transportOneWay = s1Row && oneWayCol >= 0 ? fmtNumCell(s1Row[oneWayCol]) : '';
-      result.transportReturnWay = s1Row && returnWayCol >= 0 ? fmtNumCell(s1Row[returnWayCol]) : '';
-    } catch (e) {
-      result.transportOneWay = '';
-      result.transportReturnWay = '';
-    }
-
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 
     /* Return Transportation PO Required/PO/Amount (col_319/317/318) — Stage
@@ -2863,6 +2786,105 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
     console.error('[OL-DETAIL] ERROR:', e?.message || e);
     throw e instanceof AppError ? e : new AppError(`Could not load ${safeStr(containerNo)}: ${e?.message || e}`);
   }
+}
+
+/**
+ * Order No / Agreement PDF / PO PDF / Transportation One Way & Return Way —
+ * split out from getOffLeaseStageDetail 2026-10-01. These 3 cross-sheet
+ * lookups (SHEETS.DEPLOYED, STAGE-9, SHEETS.STAGE1_ORDER_FORM — each reading
+ * a few hundred to ~900 rows) made every stage-detail modal open noticeably
+ * slower once added there directly (explicit report: "fetching...is taking
+ * a lot of loading to bring the form"). Fetched separately now so the modal
+ * opens immediately with the fast base fields, and the caller fills these in
+ * afterward once this resolves — same pattern this file already uses for
+ * billingDetail/kamLookup on the frontend (StageDetailModal.jsx).
+ *
+ * Re-resolves the row itself (not handed the caller's), so this is a
+ * self-contained, independently-callable lookup with its own access gate —
+ * not a trusted extension of a row the caller already fetched.
+ */
+export async function getOffLeaseCardEnrichment(containerNo, user, knownRow) {
+  const { rows } = await getSheetDataFromMongo(OL_SHEET);
+  const rn = _resolveOlRow(rows, containerNo, knownRow);
+  if (rn === -1) throw new AppError(`Not found: ${safeStr(containerNo)}`);
+  const row = rows[rn - 2] || [];
+
+  const gate = await _offLeaseAccessGate(user);
+  if (gate && !gate(safeStr(row[5]))) throw new AppError(`Not found: ${safeStr(containerNo)}`);
+
+  const result = {};
+
+  /* Agreement/PO PDF — explicit request 2026-10-01 ("show agreement pdf
+     and po pdf offlease"). These live on SHEETS.DEPLOYED, not OL_SHEET
+     (this sheet has no such columns), resolved by header text via the
+     same _resolveRenewalColumns the Lease Expiry / Renew & Document pages
+     already use for this exact sheet — see its own doc comment.
+     Best-effort: the card must still show the rest even if this fails, or
+     if the container already left the Deployed sheet. */
+  try {
+    const { values } = await _deployedRawValues();
+    const { agrCol, poPdfCol } = _resolveRenewalColumns(values[0] || []);
+    const want = normKey(containerNo);
+    const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
+    result.agreementUrl = dRow ? safeStr(dRow[agrCol]) : '';
+    result.poPdfUrl = dRow ? safeStr(dRow[poPdfCol]) : '';
+  } catch (e) {
+    result.agreementUrl = '';
+    result.poPdfUrl = '';
+  }
+
+  /* Order No — explicit request 2026-10-01 ("show order no offlease").
+     OL_SHEET has no Order No column either.
+     SOURCE, decided explicitly 2026-10-01 after a direct conflict was found
+     live (CRIU4025493: New Lease/Off-Lease's own lookup resolved "OR443",
+     but the external FMS dispatch sheet (STAGE-9) carries this exact
+     container's REAL transportation order, "OR496") — user chose the FMS
+     sheet over the lease-level one. Primary: _lookupStage9OrderNos (STAGE-9,
+     matched directly by Container Number — the actual dispatch/transport
+     order this container moved under). Falls back to the old lease-level
+     _findLeaseInfoForContainer (New Lease / Operation sheet) only when
+     STAGE-9 has no record at all for this container, so a container not yet
+     in FMS still shows SOMETHING rather than nothing. A container can
+     legitimately carry more than one order across different shipments
+     (confirmed live: CRIU4025493 has both OR443 and OR496 in STAGE-9 itself)
+     — every distinct one found is kept and joined, not just the first.
+     Kept outside the try below so the Transportation lookup (which needs
+     these same order numbers) still runs even if it itself fails. */
+  let leaseOrders = [];
+  try {
+    leaseOrders = await _lookupStage9OrderNos(containerNo, safeStr(row[5]));
+    if (!leaseOrders.length) leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
+    result.orderNos = leaseOrders.join(', ');
+  } catch (e) {
+    result.orderNos = '';
+  }
+
+  /* Explicit request 2026-10-01: "fetch order no wise stage 1 sheet...
+     Transportation One Way, Transportation Return Way", widened the same day
+     to every stage ("all stage fetch the transportation one way and retrun
+     way") — these two columns describe the container's one shipment, not a
+     per-stage fact. SHEETS.STAGE1_ORDER_FORM is the original sales
+     order-intake form (~137 cols) these two columns live on, joined here by
+     Order No (its "Order Received Number" column uses the same OR### numbering
+     resolved above). Header-resolved, not hardcoded indices, same reasoning
+     as every other cross-sheet lookup here. Best-effort/blank on no match. */
+  try {
+    const { headers: s1Headers, rows: s1Rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
+    const orderRecvCol = s1Headers.findIndex((h) => /order received number/i.test(String(h || '')));
+    const oneWayCol = s1Headers.findIndex((h) => /transportation one way/i.test(String(h || '')));
+    const returnWayCol = s1Headers.findIndex((h) => /transportation return way/i.test(String(h || '')));
+    const wantOrders = new Set(leaseOrders.map((o) => safeStr(o).trim().toUpperCase()));
+    const s1Row = orderRecvCol >= 0 && wantOrders.size
+      ? s1Rows.find((r) => wantOrders.has(safeStr(r[orderRecvCol]).trim().toUpperCase()))
+      : null;
+    result.transportOneWay = s1Row && oneWayCol >= 0 ? fmtNumCell(s1Row[oneWayCol]) : '';
+    result.transportReturnWay = s1Row && returnWayCol >= 0 ? fmtNumCell(s1Row[returnWayCol]) : '';
+  } catch (e) {
+    result.transportOneWay = '';
+    result.transportReturnWay = '';
+  }
+
+  return result;
 }
 
 /* =============================================

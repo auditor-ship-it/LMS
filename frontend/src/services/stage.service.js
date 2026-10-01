@@ -1,5 +1,5 @@
 import {
-  getStageData, getStageDetail, saveStage, getNextLeaseId, saveMoveToStage, saveMoveToStageClientToClientPending, saveSendBack, getMoveHistory,
+  getStageData, getStageDetail, getCardEnrichment, saveStage, getNextLeaseId, saveMoveToStage, saveMoveToStageClientToClientPending, saveSendBack, getMoveHistory,
   saveHold, saveSendBackToStage1, saveSendRejectedToStage1, saveSendBackFromBilling
 } from '../api/stage.api.js';
 import { invalidate } from '../shared/dataBus.js';
@@ -9,6 +9,9 @@ export async function fetchStageList(stage, filter) {
 }
 export async function fetchStageDetail(containerNo, stage, rowNum) {
   return getStageDetail(containerNo, stage, rowNum);
+}
+export async function fetchCardEnrichment(containerNo, rowNum) {
+  return getCardEnrichment(containerNo, rowNum);
 }
 /* Every write below invalidates('off-lease') on success — the single choke
    point every stage mutation (form submit, move, hold, send-back) already
