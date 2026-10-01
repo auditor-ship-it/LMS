@@ -30,12 +30,17 @@ function Link({ url }) {
  * first), CEO's tab shows HOD's, Accounts' tab shows both HOD's and CEO's —
  * so a stage's own always-blank columns (nothing decided here yet) aren't
  * shown on its own tab. */
+/* Labels kept in sync with the submission form's own field labels
+   (RefundsPage.jsx) — explicit request 2026-10-01: "table header name hasn't
+   changed". See that file's own TABLE_HEADERS comment for why columns
+   16/17's labels below collide with the renamed 8/12 — same two now-distinct
+   sheet columns sharing a word, not a bug. */
 const BASE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'User', 'Invoice Number', 'Invoice Date',
-  'Bill Received By', 'Name of Vendor', 'Full Amount', 'Amount to Payment',
-  'Payment Due Date', 'Payment Type', 'Payment Terms', 'Invoice with Supporting/Statement',
-  'PI', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
-  'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'Attachments'
+  'Bill Received By', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
+  'Payment Due Date', 'Payment Type', 'Payment Terms', 'SD Calculation',
+  'Quarterly Ledger', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
+  'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];
 const CEO_AUDIT_HEADERS = ['CEO Remarks', 'CEO Timestamp', 'CEO Approver Email'];
@@ -141,8 +146,8 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>Invoice Number</span><span>{reviewRow.invoiceNumber}</span></div>
                       <div className={styles.field}><span className={styles.label}>Invoice Date</span><span>{reviewRow.invoiceDate || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Bill Received By</span><span>{reviewRow.billReceivedBy || '—'}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Full Amount</span><span>{reviewRow.invoiceAmount}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Amount to Payment</span><span>{reviewRow.amountToPay}</span></div>
+                      <div className={styles.field}><span className={styles.label}>SD Amount</span><span>{reviewRow.invoiceAmount}</span></div>
+                      <div className={styles.field}><span className={styles.label}>SD Amount to be Refunded</span><span>{reviewRow.amountToPay}</span></div>
                       <div className={styles.field}><span className={styles.label}>Payment Due Date</span><span>{reviewRow.paymentDueDate || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Payment Type</span><span>{reviewRow.paymentType || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Payment Terms</span><span>{reviewRow.paymentTerms || '—'}</span></div>
@@ -150,12 +155,12 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>Department</span><span>{reviewRow.department}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Amount to be Refunded</span><span>{reviewRow.sdAmountToBeRefunded || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Calculation</span><span>{reviewRow.sdCalculation || '—'}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Invoice File</span><Link url={reviewRow.invoiceFileUrl} /></div>
-                      <div className={styles.field}><span className={styles.label}>PI</span><Link url={reviewRow.piFileUrl} /></div>
+                      <div className={styles.field}><span className={styles.label}>SD Calculation</span><Link url={reviewRow.invoiceFileUrl} /></div>
+                      <div className={styles.field}><span className={styles.label}>Quarterly Ledger</span><Link url={reviewRow.piFileUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Cancelled Cheque</span><Link url={reviewRow.cancelledChequeUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Client Email Confirmation</span><Link url={reviewRow.clientEmailConfirmationUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Client Ledger</span><Link url={reviewRow.clientLedgerUrl} /></div>
-                      <div className={styles.field}><span className={styles.label}>Attachments</span><Link url={reviewRow.attachmentsUrl} /></div>
+                      <div className={styles.field}><span className={styles.label}>SD Amounts to be Refunded</span><Link url={reviewRow.attachmentsUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Submitted By</span><span>{reviewRow.userEmail}</span></div>
                     </div>
 

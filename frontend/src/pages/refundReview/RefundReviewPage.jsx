@@ -117,8 +117,8 @@ export function RefundReviewPage() {
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Invoice Number</span><span>{entry.invoiceNumber}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Invoice Date</span><span>{entry.invoiceDate || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Bill Received By</span><span>{entry.billReceivedBy || '—'}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Full Amount</span><span>{entry.invoiceAmount}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Amount to Payment</span><span>{entry.amountToPay}</span></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount</span><span>{entry.invoiceAmount}</span></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount to be Refunded</span><span>{entry.amountToPay}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Due Date</span><span>{entry.paymentDueDate || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Type</span><span>{entry.paymentType || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Terms</span><span>{entry.paymentTerms || '—'}</span></div>
@@ -126,12 +126,12 @@ export function RefundReviewPage() {
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Department</span><span>{entry.department}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount to be Refunded</span><span>{entry.sdAmountToBeRefunded || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Calculation</span><span>{entry.sdCalculation || '—'}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Invoice File</span><Link url={entry.invoiceFileUrl} /></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>PI</span><Link url={entry.piFileUrl} /></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Calculation</span><Link url={entry.invoiceFileUrl} /></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>Quarterly Ledger</span><Link url={entry.piFileUrl} /></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Cancelled Cheque</span><Link url={entry.cancelledChequeUrl} /></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Client Email Confirmation</span><Link url={entry.clientEmailConfirmationUrl} /></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Client Ledger</span><Link url={entry.clientLedgerUrl} /></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Attachments</span><Link url={entry.attachmentsUrl} /></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amounts to be Refunded</span><Link url={entry.attachmentsUrl} /></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Submitted By</span><span>{entry.userEmail}</span></div>
               </div>
 

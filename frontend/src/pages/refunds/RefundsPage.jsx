@@ -62,16 +62,24 @@ function addDays(dateStr, days) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/* Exact header sequence/names given 2026-09-30 for the base columns — matches
-   the live sheet's own header row (refunds.service.js's REFUNDS_HEADERS)
-   column-for-column, up through Ledger Head; SD/attachment/approval columns
-   follow after, same order the backend appends them in. */
+/* Exact header sequence given 2026-09-30, column-for-column matching the
+   live sheet's own header row (refunds.service.js's REFUNDS_HEADERS) — each
+   position's LABEL is kept in sync with the submission form's own field
+   labels below, even where the two no longer say the same thing as the raw
+   sheet header (e.g. col 7 is still "Full Amount" in the sheet, but the form
+   calls it "SD Amount" — explicit request 2026-10-01: "table header name
+   hasn't changed"). Columns 16/17 ("SD Amount to be Refunded"/"SD
+   Calculation") are the OLD numeric fields removed from the form the same
+   day — left as-is here since they were never renamed, only retired; any
+   label collision with columns 8/12 below (now renamed to the same words)
+   reflects that these are now two different sheet columns sharing a label,
+   not a bug to silently hide. */
 const TABLE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'User', 'Invoice Number', 'Invoice Date',
-  'Bill Received By', 'Name of Vendor', 'Full Amount', 'Amount to Payment',
-  'Payment Due Date', 'Payment Type', 'Payment Terms', 'Invoice with Supporting/Statement',
-  'PI', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
-  'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'Attachments',
+  'Bill Received By', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
+  'Payment Due Date', 'Payment Type', 'Payment Terms', 'SD Calculation',
+  'Quarterly Ledger', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
+  'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded',
   'HOD', 'CEO', 'Accounts'
 ];
 
