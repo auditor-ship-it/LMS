@@ -46,14 +46,24 @@ import { safeStr } from '../utils/format.js';
  * distinction — who currently holds the temporary vs. the permanent
  * assignment). It still means the SAME PERSON for ACCESS purposes only — see
  * matchIdentity()'s own doc comment for why display and matching now use two
- * different notions of "same name" instead of one. */
+ * different notions of "same name" instead of one.
+ *
+ * pushpa.shetty@crystalgroup.in: 'Pushpa' (added 2026-10-01, Sales OS SSO
+ * handoff — empId 9035 was reaching getRenewalStats/getRenewalLog/
+ * getRenewalPipeline as 'unscoped' with no mapped Sale Person). Scoped to
+ * plain 'Pushpa', not the 'Pushpa Shetty' alias group above — 'Pushpa' is the
+ * Sales CRM's own dominant, authoritative assignedTo spelling for her actual
+ * book of business (203 leads, per SALE_PERSON_ALIASES' own comment), so this
+ * is the value that actually surfaces her leads; 'Pushpa Shetty' only covers
+ * the Deployed sheet's stale fallback spellings. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',
   'key.accounts@crystalgroup.in': 'Sagar-A',
   'sales1@crystalgroup.in': 'Sapna',
   'sales@crystalgroup.in': 'Gargi',
-  'contactsales@crystalgroup.in': 'Laveena'
+  'contactsales@crystalgroup.in': 'Laveena',
+  'pushpa.shetty@crystalgroup.in': 'Pushpa'
 };
 
 const norm = (v) => safeStr(v).trim().toLowerCase();

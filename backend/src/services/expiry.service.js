@@ -38,7 +38,8 @@ import {
   batchUpdateValues,
   appendRow,
   insertSheetIfMissing,
-  colLetter
+  colLetter,
+  ensureColumnCount
 } from './googleSheets.service.js';
 import { patchMongoMirrorRow, getSheetDataFromMongo, getMongoRowsWithKeys, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { getCollection } from './mongo.service.js';
@@ -710,10 +711,12 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail, kn
     if (targetRow === -1) throw notFound(`Not found: ${rowId}`);
     if (rows[targetRow - 2][21] && String(rows[targetRow - 2][21]).trim() !== '') return 'ALREADY_PROCESSED';
 
+    await _ensureDeployedEmailIdHeader();
     const dmy = dmyTime(new Date(timestamp));
     const updates = [
       { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[dmy]] },
-      { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [[status || '']] }
+      { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [[status || '']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${targetRow}`, values: [[callerEmail || '']] }
     ];
     await batchUpdateValues(updates);
     // Best-effort backup mirror — a failure here must never fail a write
@@ -744,7 +747,7 @@ export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail
   const dmy = dmyTime(new Date(timestamp));
   await getCollection(SHEETS.DEPLOYED).updateOne(
     { key: found.key },
-    { $set: { 'row.21': dmy, 'row.22': status || '', updatedAt: new Date() } }
+    { $set: { 'row.21': dmy, 'row.22': status || '', [`row.${DEPLOYED_EMAIL_ID_COL}`]: callerEmail || '', updatedAt: new Date() } }
   );
   cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
   cacheRemoveByPrefix('mytasks_v1'); // see completeDocumentStageFast's identical note above — this also changes column W
@@ -788,7 +791,8 @@ export async function sendExpiryToPending(containerNo, callerEmail, knownRow) {
 
     const updates = [
       { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [['']] },
-      { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] }
+      { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${targetRow}`, values: [['']] }
     ];
     await batchUpdateValues(updates);
     await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
@@ -814,7 +818,7 @@ export async function sendExpiryToPendingFast(containerNo, callerEmail, knownRow
 
   await getCollection(SHEETS.DEPLOYED).updateOne(
     { key: found.key },
-    { $set: { 'row.21': '', 'row.22': '', updatedAt: new Date() } }
+    { $set: { 'row.21': '', 'row.22': '', [`row.${DEPLOYED_EMAIL_ID_COL}`]: '', updatedAt: new Date() } }
   );
   cacheRemove(DEPLOYED_RAW_CACHE_KEY);
   cacheRemoveByPrefix('mytasks_v1');
@@ -1163,6 +1167,34 @@ async function _ensureApprovalColumnsHeader(hdrs0) {
     await updateRange(SHEETS.DEPLOYED, `${colLetter(c)}1:${colLetter(c)}1`, [[APPROVAL_COL_HEADERS[c]]]);
     hdrs0[c] = APPROVAL_COL_HEADERS[c];
   }
+}
+
+/** Explicit request 2026-10-01: "whenever a container is marked as Off-Lease
+ *  or Renewed, automatically record... the email ID of the user who
+ *  performed that action" — appended past SUBMITTED_BY_COL (48), the real
+ *  live sheet's actual last column at the time this was added. Written
+ *  alongside V (Update)/W (Status) at every place THIS APP sets them to a
+ *  real value (the Renew/Off-Lease action itself), left untouched when V/W
+ *  clear as part of forward progress (e.g. an Agreement finally gets
+ *  uploaded), and cleared back to blank only at a genuine undo (Send Back /
+ *  Reject-and-cancel) — same "revert what the action wrote" scope as those
+ *  functions already clearing V/W.
+ *
+ *  ensureColumnCount before writing a header past the live grid's current
+ *  width — see refunds.service.js's _ensureRefundsHeaderWidth and
+ *  roles.service.js's _ensureTeamHeaderWidth for the "exceeds grid limits"
+ *  incident this guards against; _ensureApprovalColumnsHeader above predates
+ *  that lesson and only worked because the grid happened to already be wide
+ *  enough. */
+export const DEPLOYED_EMAIL_ID_COL = 49; // AX
+let deployedEmailIdHeaderChecked = false;
+export async function _ensureDeployedEmailIdHeader() {
+  if (deployedEmailIdHeaderChecked) return;
+  deployedEmailIdHeaderChecked = true;
+  const { headers } = await getSheetData(SHEETS.DEPLOYED).catch(() => ({ headers: [] }));
+  if (!headers.length || safeStr(headers[DEPLOYED_EMAIL_ID_COL]).trim()) return;
+  await ensureColumnCount(SHEETS.DEPLOYED, DEPLOYED_EMAIL_ID_COL + 1);
+  await updateRange(SHEETS.DEPLOYED, `${colLetter(DEPLOYED_EMAIL_ID_COL)}1:${colLetter(DEPLOYED_EMAIL_ID_COL)}1`, [['Email ID']]);
 }
 
 /**

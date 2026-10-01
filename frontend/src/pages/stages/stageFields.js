@@ -422,19 +422,28 @@ export const BASE_FIELDS = [
   { key: 'col_6', label: 'Location' },
   { key: 'col_7', label: 'Deployed Date' },
   { key: 'col_8', label: 'Valid Upto' },
-  // Explicit request 2026-10-01 ("show order no offlease") — also a
-  // cross-sheet lookup (_findLeaseInfoForContainer), not a col_N.
-  { key: 'orderNos', label: 'Order No' },
+  // Explicit request 2026-10-01 ("show order no offlease") — a cross-sheet
+  // lookup, not a col_N. `source: 'enrichment'` means StageDetailModal.jsx
+  // reads this from the separate, slower getOffLeaseCardEnrichment fetch
+  // (see that function's doc comment in offlease.service.js) rather than the
+  // fast stage-detail fetch every other BASE_FIELDS key comes from.
+  { key: 'orderNos', label: 'Order No', source: 'enrichment' },
   // Explicit request 2026-10-01 ("show agreement pdf and po pdf offlease") —
-  // not col_N: these come from a cross-sheet lookup (SHEETS.DEPLOYED), see
-  // getOffLeaseStageDetail's own doc comment. `link: true` renders them as a
+  // same enrichment fetch as orderNos above. `link: true` renders them as a
   // "View" link instead of plain text (see StageDetailModal.jsx's BASE_FIELDS block).
-  { key: 'agreementUrl', label: 'Agreement PDF', link: true },
-  { key: 'poPdfUrl', label: 'PO PDF', link: true },
+  { key: 'agreementUrl', label: 'Agreement PDF', link: true, source: 'enrichment' },
+  { key: 'poPdfUrl', label: 'PO PDF', link: true, source: 'enrichment' },
   // Explicit request 2026-10-01 ("fetch order no wise stage 1 sheet...
   // transportation one way, transportation return way"), widened the same
   // day to every stage ("all stage fetch the transportation one way and
-  // retrun way") — getOffLeaseStageDetail resolves these for every stage now.
-  { key: 'transportOneWay', label: 'Transportation One Way' },
-  { key: 'transportReturnWay', label: 'Transportation Return Way' }
+  // retrun way") — same enrichment fetch as orderNos above.
+  { key: 'transportOneWay', label: 'Transportation One Way', source: 'enrichment' },
+  { key: 'transportReturnWay', label: 'Transportation Return Way', source: 'enrichment' },
+  // Explicit request 2026-10-01 ("this email fetch the stage 1") — the
+  // Deployed sheet's own "Email ID" column (captured when this container was
+  // actually marked Off-Lease/Renewed from Lease Expiry), not OL_SHEET's own
+  // Stage 1 User/Timestamp (removed the same day — only set once Stage 1's
+  // form is submitted, a separate later step). Stage 1 only, same enrichment
+  // fetch as orderNos above.
+  { key: 'deployedEmailId', label: 'Email ID', source: 'enrichment', onlyStage: 1 }
 ];

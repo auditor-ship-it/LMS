@@ -104,6 +104,10 @@ router.get('/sales-os/company-match', requirePublicApiKey('salesos'), asyncHandl
 router.get('/sales-os/renewal-stats', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalStats)));
 // ?employeeCode=X&year=&month= — the "Total renewals" scorecard's count + detail rows.
 router.get('/sales-os/renewal-log', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalLog)));
+// ?employeeCode=X or ?employeeCodes=X,Y,Z — draft/rejected/awaiting-approval/
+// approved renewals, sourced from Lease's own live pages (not just the ones
+// submitted via the SSO flow). See salesOsRenewal.service.js#getRenewalPipeline.
+router.get('/sales-os/renewal-pipeline', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalPipeline)));
 
 /* ---------------- refunds (read-only — see WRITE_CAPABLE_DOMAINS) ----------------
    refundsController.list's own doc comment covers why a null (public) caller
