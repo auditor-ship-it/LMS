@@ -2520,6 +2520,18 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result.poPdfUrl = '';
     }
 
+    /* Order No — explicit request 2026-10-01 ("show order no offlease"),
+       same card as Agreement/PO PDF above. OL_SHEET has no Order No column
+       either; getOffLeaseContainerDetail's own lookup (_findLeaseInfoForContainer,
+       scanning OL_ORDER_SHEETS / Operation sheet) already solves this for the
+       same container identity, reused here rather than duplicated. */
+    try {
+      const leaseInfo = await _findLeaseInfoForContainer(normKey(containerNo));
+      result.orderNos = leaseInfo.orders.join(', ');
+    } catch (e) {
+      result.orderNos = '';
+    }
+
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 
     /* Return Transportation PO Required/PO/Amount (col_319/317/318) — Stage

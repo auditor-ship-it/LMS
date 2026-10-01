@@ -422,6 +422,9 @@ export const BASE_FIELDS = [
   { key: 'col_6', label: 'Location' },
   { key: 'col_7', label: 'Deployed Date' },
   { key: 'col_8', label: 'Valid Upto' },
+  // Explicit request 2026-10-01 ("show order no offlease") — also a
+  // cross-sheet lookup (_findLeaseInfoForContainer), not a col_N.
+  { key: 'orderNos', label: 'Order No' },
   // Explicit request 2026-10-01 ("show agreement pdf and po pdf offlease") —
   // not col_N: these come from a cross-sheet lookup (SHEETS.DEPLOYED), see
   // getOffLeaseStageDetail's own doc comment. `link: true` renders them as a
