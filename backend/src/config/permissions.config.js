@@ -104,7 +104,15 @@ export const PERMISSION_KEYS = [
    * renewApproval above. */
   { key: 'refundsApprovalHod', label: 'Refunds: Approval (HOD)' },
   { key: 'refundsApprovalCeo', label: 'Refunds: Approval (CEO)' },
-  { key: 'refundsApprovalAccounts', label: 'Refunds: Approval (Accounts)' }
+  { key: 'refundsApprovalAccounts', label: 'Refunds: Approval (Accounts)' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * SD Refunds, explicit request 2026-10-01 ("add the stage 6 SD refunds") —
+   * internal stage 11, inserted into OL_ACTIVE_STAGE_NUMS before 8 so it
+   * displays as the new "Stage 6" (FMS Closed/offlease8 shifts to display 7).
+   * No form is ever submitted directly against this stage (see
+   * offlease.service.js's OL_STAGE_INFO[11] doc comment) — this permission
+   * only gates viewing/opening Stage 6's tab, same as every other offleaseN. */
+  { key: 'offlease11', label: 'Off-Lease Stage 6: SD Refunds' }
   /* offlease10 (Off-Lease Stage 3: LR & Return Transportation) — added
      2026-09-18, REMOVED 2026-09-22 (explicit request: Stage 3 itself was
      removed from the pipeline entirely, LR & Return Transportation + its

@@ -92,3 +92,10 @@ export const saveSendRejectedToStage1 = (containerNo, rowNum) =>
  *  fixing); `rowNum`: see getStageDetail's doc comment. */
 export const saveSendBackFromBilling = (containerNo, remarks, rowNum) =>
   apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/billing/send-back`, { remarks, rowNum }).then((r) => r.data.message);
+
+/** GET /api/offlease/:containerNo/sd-refunds — Stage 6 (SD Refunds, internal
+ *  11), explicit request 2026-10-01: this container's own SD Refund entries
+ *  (most recent first) + their HOD/CEO/Accounts status. Empty array means
+ *  nothing submitted for this container yet. */
+export const getSdRefundsForContainer = (containerNo) =>
+  apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/sd-refunds`).then((r) => r.data.entries);

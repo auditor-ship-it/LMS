@@ -36,8 +36,9 @@ function addDays(dateStr, days) {
    sending values for them. SD Amount to be Refunded/SD Calculation (the old
    numeric fields) are likewise superseded by the renamed Invoice
    Amount/Invoice(file) fields below. */
-export function makeEmptyForm() {
+export function makeEmptyForm(containerNo = '') {
   return {
+    containerNo,
     vendorName: '',
     invoiceAmount: '', amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
     cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
@@ -53,9 +54,15 @@ export function makeEmptyForm() {
  * approval flow) in a modal, rather than a second, divergent copy of it.
  * `onSubmitted` fires after a successful save (caller decides what to do —
  * RefundsPage.jsx reloads its own list, Stage 6's modal closes).
+ *
+ * `lockedContainerNo` (explicit request 2026-10-01, same change that added
+ * Container No as a required field): when opened from Off-Lease Stage 6, the
+ * container is already known from context — pre-filled and not editable, so
+ * the bill can't accidentally be raised against the wrong one. The standalone
+ * SD Refunds page passes nothing, leaving it a normal free-text field.
  */
-export function RefundSubmitForm({ onSubmitted }) {
-  const [form, setForm] = useState(makeEmptyForm);
+export function RefundSubmitForm({ onSubmitted, lockedContainerNo }) {
+  const [form, setForm] = useState(() => makeEmptyForm(lockedContainerNo || ''));
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitOk, setSubmitOk] = useState(false);
@@ -77,6 +84,7 @@ export function RefundSubmitForm({ onSubmitted }) {
         form.clientLedgerFile ? uploadStageFile(form.clientLedgerFile) : ''
       ]);
       await submitRefund({
+        containerNo: form.containerNo,
         vendorName: form.vendorName,
         invoiceAmount: form.invoiceAmount,
         amountToPay: form.amountToPay,
@@ -86,7 +94,7 @@ export function RefundSubmitForm({ onSubmitted }) {
         invoiceFileUrl, piFileUrl, attachmentsUrl,
         cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl
       });
-      setForm(makeEmptyForm());
+      setForm(makeEmptyForm(lockedContainerNo || ''));
       setSubmitOk(true);
       await onSubmitted?.();
     } catch (e2) {
@@ -99,6 +107,10 @@ export function RefundSubmitForm({ onSubmitted }) {
   return (
     <form onSubmit={handleSubmit} className={styles.form}>
       <div className={styles.grid3}>
+        <label className={styles.field}>
+          <span className={styles.label}>Container No *</span>
+          <input type="text" value={form.containerNo} onChange={set('containerNo')} required disabled={!!lockedContainerNo} />
+        </label>
         <label className={styles.field}>
           <span className={styles.label}>Department</span>
           <input type="text" value={FIXED_DEPARTMENT} disabled />

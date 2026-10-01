@@ -1,14 +1,13 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import { Button } from '../../components/ui/Button.jsx';
-import { Modal } from '../../components/ui/Modal.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchCardEnrichment, fetchNextLeaseId, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { RefundSubmitForm } from '../refunds/RefundSubmitForm.jsx';
@@ -79,14 +78,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
 
-  /* "SD Refund" on Stage 6 (FMS Closed, internal 8 — see constants/stages.js's
-     WORKFLOW array for the internal<->display mapping) — explicit request
-     2026-10-01 ("add the stage 6 SD refunds... same this form and this
-     backend logic... button inside Off-Lease Stage 6"). Reuses
-     RefundSubmitForm (extracted from RefundsPage.jsx the same day) verbatim —
-     same addRefundEntry call, same sheet, same HOD/CEO/Accounts approval
-     flow — not a second, divergent copy of the SD Refunds feature. */
-  const [sdRefundOpen, setSdRefundOpen] = useState(false);
 
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
@@ -120,6 +111,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     [stageNumber, containerNo, data?.col_1]
   );
   const billing = billingDetail?.billing?.records?.length ? billingDetail.billing : null;
+
+  /* Stage 6 (SD Refunds, internal 11) — explicit request 2026-10-01. This
+     container's own SD Refund entries (reloaded via `reload` after a fresh
+     submission, same as the main stage-detail data, so the pipeline status
+     below reflects it immediately rather than waiting for the next poll). */
+  const { data: sdRefunds, reload: reloadSdRefunds } = useAsync(
+    () => (stageNumber === SD_REFUNDS_STAGE && containerNo ? fetchSdRefundsForContainer(containerNo) : Promise.resolve(null)),
+    [stageNumber, containerNo]
+  );
 
   /* Explicit request 2026-09-29: KAM (Stage 6/internal 8, the pipeline's last
      stop) should be able to review the container's ENTIRE Stage 1-5 history
@@ -550,13 +550,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   only" convention the old card had. */}
               {stageNumber === FMS_CLOSURE_STAGE && (
                 <div className={styles.fmsWrap}>
-                  {/* "SD Refund" — explicit request 2026-10-01. Same permission
-                      ('refunds') RefundsPage.jsx itself gates submission on. */}
-                  {canAct('refunds') && (
-                    <div className={styles.actions} style={{ marginBottom: 16 }}>
-                      <Button type="button" variant="primary" onClick={() => setSdRefundOpen(true)}>Submit SD Refund</Button>
-                    </div>
-                  )}
                   <h3 className={styles.sectionTitle}>Full Off-Lease History (Stage 1-5)</h3>
                   {/* This lookup re-reads the Operation sheet and STAGE-8/9/10
                       in full — routinely 20-30s+ each on their own (see
@@ -613,6 +606,40 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     (filled out by gate/depot staff) shows it as "Inward (Gate-In)" — usually
                     within a few minutes. Nothing to fill in here.
                   </p>
+                </div>
+              )}
+
+              {/* Stage 6 (SD Refunds, internal 11) — explicit request
+                  2026-10-01. No fields of its own (see SD_REFUNDS_STAGE's doc
+                  comment): shows the submission form (container pre-filled
+                  and locked) until something's been raised for this
+                  container, then its HOD/CEO/Accounts pipeline status
+                  instead. FMS Closed (Stage 7) won't complete until this
+                  reaches Accounts-approved. */}
+              {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
+                <div className={styles.savedPanel}>
+                  {!sdRefunds ? (
+                    <p className={styles.sectionHint}>Loading…</p>
+                  ) : sdRefunds.length === 0 ? (
+                    <>
+                      <p className={styles.savedTitle}>No SD Refund raised yet for {containerNo}</p>
+                      <RefundSubmitForm lockedContainerNo={containerNo} onSubmitted={reloadSdRefunds} />
+                    </>
+                  ) : (
+                    <>
+                      <p className={styles.savedTitle}>SD Refund — {sdRefunds[0].vendorName || containerNo}</p>
+                      <p className={styles.savedHint}>
+                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · CEO: {sdRefunds[0].ceoStatus || '—'} · Accounts: {sdRefunds[0].accountsStatus || '—'}
+                      </p>
+                      <p className={styles.savedHint}>
+                        {sdRefunds[0].accountsStatus === 'Approved'
+                          ? 'Accounts-approved — FMS Closed (Stage 7) can now be completed.'
+                          : sdRefunds[0].currentStage === 'rejected'
+                            ? 'Rejected — raise a new SD Refund for this container to proceed.'
+                            : 'Still working through HOD → CEO → Accounts — see SD Refunds Approval for full detail.'}
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -736,15 +763,6 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
         variant="secondary"
       />
 
-      {/* "SD Refund" (Stage 6 / FMS Closed only) — see sdRefundOpen's own
-          doc comment above. No onSubmitted handler: RefundSubmitForm already
-          shows its own "Saved." message and resets itself for the next
-          entry — closing the modal out from under that message would hide
-          it before the submitter ever saw it. The Submitted Bills list
-          itself lives on the separate SD Refunds page, not duplicated here. */}
-      <Modal open={sdRefundOpen} onClose={() => setSdRefundOpen(false)} title={`Submit SD Refund — ${containerNo}`} width="760px">
-        <RefundSubmitForm />
-      </Modal>
     </div>
   );
 }
@@ -769,12 +787,21 @@ const REPORT_STAGES = [3, 5];
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
 
-/** KAM (internally stage 8, shown as Stage 6). */
+/** FMS Closed (internally stage 8, shown as Stage 7 since SD Refunds was
+ *  inserted before it 2026-10-01 — see constants/stages.js's WORKFLOW). */
 const FMS_CLOSURE_STAGE = 8;
 
 /** Gate In (internally stage 7, shown as Stage 3) — no form of its own, see
  *  the "Waiting for Gate-In confirmation" panel's own doc comment. */
 const GATE_IN_STAGE = 7;
+
+/** SD Refunds (internally stage 11, shown as Stage 6) — explicit request
+ *  2026-10-01. No form of its own either (see OL_STAGE_INFO[11]'s backend
+ *  doc comment): this stage's content is the SD Refund submission form (if
+ *  nothing submitted yet for this container) or its HOD/CEO/Accounts
+ *  pipeline status (once something has). FMS Closed (internal 8) refuses to
+ *  complete until this reaches Accounts-approved. */
+const SD_REFUNDS_STAGE = 11;
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for
  *  Not Required, nothing while unset. */

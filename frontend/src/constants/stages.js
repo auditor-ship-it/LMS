@@ -24,6 +24,13 @@ export const ALL_STAGES = [
   // 'Sales' owner (shown as the tab strip's "Stage 6 (Sales)") -> 'FMS Closed'
   // too, same request, same day.
   { number: 8, label: 'FMS Closed', owner: 'FMS Closed' },
+  /* ADDED 2026-10-01 (explicit request: "add the stage 6 SD refunds...
+     button inside Off-Lease Stage 6 that opens the SD Refunds form"),
+     inserted into WORKFLOW before 8 — FMS Closed shifts from display 6 to
+     display 7. No form/owner the way other stages have one: this stage's
+     own status is set automatically (see backend's
+     markOffLeaseSdRefundApproved), not submitted by a person here. */
+  { number: 11, label: 'SD Refunds' },
   /* ADDED 2026-09-18 (explicit request) as a genuinely new stage between
      Transportation and Gate In, displaying as "Stage 3" — LR details fetched
      live from FMS plus the Return Transportation PO fields. RETIRED
@@ -70,8 +77,14 @@ export const ALL_STAGES = [
  * Order), and 10 (LR & Return Transportation — real stage 2026-09-18 to
  * 2026-09-22, retired again). Their data is preserved and still shown on the
  * container report.
+ *
+ * SD REFUNDS ADDED 2026-10-01 (explicit request): internal 11 inserted
+ * before 8 — FMS Closed (still internal 8) shifts from display 6 to display
+ * 7, and SD Refunds becomes the new display Stage 6. Confirmed as a hard
+ * block: FMS Closed's own saveOffLeaseStage(Fast) now refuses to complete
+ * until this stage's status is 'Completed'.
  */
-const WORKFLOW = [1, 6, 7, 3, 5, 8];
+const WORKFLOW = [1, 6, 7, 3, 5, 11, 8];
 
 /**
  * Stages that are READ ONLY — the grid is shown (searchable, sortable,

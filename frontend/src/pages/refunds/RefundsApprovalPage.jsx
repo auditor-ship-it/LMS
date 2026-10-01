@@ -50,7 +50,8 @@ function tableHeadersForTab(tab) {
   return [
     ...BASE_HEADERS,
     ...(tab !== 'hod' ? HOD_AUDIT_HEADERS : []),
-    ...(tab === 'accounts' ? CEO_AUDIT_HEADERS : [])
+    ...(tab === 'accounts' ? CEO_AUDIT_HEADERS : []),
+    'Container No'
   ];
 }
 
@@ -142,6 +143,7 @@ export function RefundsApprovalPage() {
                 ) : (
                   <>
                     <div className={styles.grid3}>
+                      <div className={styles.field}><span className={styles.label}>Container No</span><span>{reviewRow.containerNo || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Vendor</span><span>{reviewRow.vendorName}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Amount</span><span>{reviewRow.invoiceAmount}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Amount to be Refunded</span><span>{reviewRow.amountToPay}</span></div>
@@ -236,7 +238,8 @@ export function RefundsApprovalPage() {
                     <td key="cr">{r.ceoRemarks || '—'}</td>,
                     <td key="cd">{r.ceoDate || '—'}</td>,
                     <td key="ca">{r.ceoApprover || '—'}</td>
-                  ] : [])
+                  ] : []),
+                  <td key="cn">{r.containerNo || '—'}</td>
                 ]}
                 renderActions={(r) => (
                   <div className={styles.approvalActions}>

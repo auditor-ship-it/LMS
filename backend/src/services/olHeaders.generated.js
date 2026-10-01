@@ -197,4 +197,12 @@ export const OL_HEADERS = [
   "Client to Client - Pending Remarks", "Client to Client - Pending Lifting Date",
   "Client to Client - Pending Move To Stage Target", "Client to Client - Pending Submitted By",
   "Client to Client - Pending Submitted Timestamp",
+  /* Indices 345-347 — same kind of deliberate, hand-added exception as 289
+     and 290-297 above: added 2026-10-01 for Stage 6 (SD Refunds, internal
+     stage 11 — see OL_STAGE_INFO[11] in offlease.service.js), not captured
+     from an existing live column. _ensureOffLeaseSheet() widens the live
+     sheet to match this array's new length and creates these columns there
+     automatically — no manual sheet edit needed. Keep these 3 entries if
+     this file is ever regenerated from the live header row. */
+  "SD Refunds Timestamp", "SD Refunds User", "SD Refunds Status",
 ];
