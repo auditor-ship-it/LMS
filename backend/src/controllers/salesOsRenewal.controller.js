@@ -42,3 +42,26 @@ export async function renewalStats(req, res) {
 export async function renewalLog(req, res) {
   res.json(await salesOsRenewal.getRenewalLog(req.query.employeeCode, { year: req.query.year, month: req.query.month }));
 }
+
+/** GET /api/public/v1/sales-os/renewal-pipeline?employeeCode=X or
+ *  ?employeeCodes=X,Y,Z — every renewal currently draft/rejected/awaiting
+ *  approval/approved for one or more salespeople, sourced from Lease's own
+ *  live pages rather than the SSO-submission audit log — see
+ *  salesOsRenewal.service.js#getRenewalPipeline for why that distinction
+ *  matters. Same batch shape as renewalStats above. Read-only, same
+ *  "salesos" key scope. */
+export async function renewalPipeline(req, res) {
+  const single = String(req.query.employeeCode || '').trim();
+  const codes = single
+    ? [single]
+    : String(req.query.employeeCodes || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+  const data = await Promise.all(codes.map(async (code) => {
+    try {
+      return await salesOsRenewal.getRenewalPipeline(code);
+    } catch (e) {
+      return { status: 'error', employeeCode: code, message: e?.message || 'Lookup failed' };
+    }
+  }));
+  res.json({ data });
+}

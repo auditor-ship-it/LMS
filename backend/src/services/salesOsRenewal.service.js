@@ -609,3 +609,124 @@ export async function getRenewalLog(employeeCode, { year, month } = {}) {
     rows
   };
 }
+
+/** Column in getExpiryDataByFilter's displayHeaders/item.row holding the
+ *  customer name, found by header text rather than a hardcoded index — that
+ *  array's shape (Order No spliced in at 1, 15 raw columns) is an internal
+ *  detail of expiry.service.js this file has no business hardcoding offsets
+ *  into. Container No is always row[0] (same convention RenewDocumentPage.jsx
+ *  relies on client-side). */
+function _companyNameColIdx(headers) {
+  return (headers || []).findIndex((h) => /customer name|client name/i.test(safeStr(h)));
+}
+
+/**
+ * GET /api/public/v1/sales-os/renewal-pipeline?employeeCode=X — explicit
+ * request 2026-10-01 (Sales OS's "Renewals Done" tab): every renewal
+ * currently in flight or recently decided for one salesperson, each tagged
+ * with its real Lease status — 'draft' | 'rejected' | 'awaiting_approval' |
+ * 'approved' — sourced from the SAME live Deployed-sheet/Renewal-Log data the
+ * in-app Renew & Document / Approval Pending pages read (getExpiryDataByFilter,
+ * getRenewalLogReport), NOT from the _sales_os_renewals audit-receipt
+ * collection. That collection only ever gets a row when a renewal is
+ * SUBMITTED through this SSO flow specifically (saveRenewal) — a renewal
+ * started by an ops user directly inside Lease Management never appears
+ * there, which is exactly the gap Sales OS hit ("isn't losing renewals, Lease
+ * isn't sending them"). This endpoint has no such blind spot: it reflects
+ * whatever Lease's own pages show, regardless of which door a renewal came
+ * in through.
+ *
+ * 'draft' and 'rejected' both come from getExpiryDataByFilter('documents',
+ * ...) — see that function's own comment on why a resubmittable Rejected row
+ * shares the 'documents' bucket with a never-submitted Draft; they're told
+ * apart here by approvalStatus. 'awaiting_approval' comes from the
+ * 'approval' filter. 'approved' comes from the Renewal Log (the only trace
+ * left once decideRenewalApproval's Approve branch clears the Deployed row's
+ * Documents Pending state) — limited to the last 60 days so this doesn't
+ * grow into a full history dump on every poll.
+ */
+export async function getRenewalPipeline(employeeCode) {
+  const emp = await findEmployeeByCode(employeeCode);
+  if (!emp) throw new AppError('employee code not mapped', 401);
+
+  const scope = await salePersonScopeFor({ email: emp.email });
+  if (!scope) {
+    return {
+      status: 'unscoped',
+      employeeCode: emp.empId,
+      email: emp.email,
+      message: `${emp.email} is not yet mapped to a Sale Person in Lease (salePersonAccess.service.js) — ask a Lease admin to add it before this feed can be attributed to this person.`
+    };
+  }
+
+  const user = { email: emp.email };
+  const [documents, approval, renewalLog] = await Promise.all([
+    getExpiryDataByFilter('documents', user),
+    getExpiryDataByFilter('approval', user),
+    getRenewalLogReport(user)
+  ]);
+
+  const items = [];
+
+  const docCustIdx = _companyNameColIdx(documents.headers);
+  for (const it of documents.data || []) {
+    const rejected = safeStr(it.approvalStatus).trim().toLowerCase() === 'rejected';
+    items.push({
+      containerNo: safeStr(it.row?.[0]),
+      companyName: docCustIdx >= 0 ? safeStr(it.row?.[docCustIdx]) : '',
+      status: rejected ? 'rejected' : 'draft',
+      rejectionReason: rejected ? it.approvalRemarks : null,
+      renewedDate: it.draftRenewedDate,
+      validTill: it.draftValidTill,
+      poNo: it.draftPoNo,
+      billingCycle: it.draftBillingCycle,
+      poValidity: it.draftPoValidity,
+      submittedBy: it.submittedBy,
+      updatedAt: it.renewalSubmittedDate
+    });
+  }
+
+  const apprCustIdx = _companyNameColIdx(approval.headers);
+  for (const it of approval.data || []) {
+    items.push({
+      containerNo: safeStr(it.row?.[0]),
+      companyName: apprCustIdx >= 0 ? safeStr(it.row?.[apprCustIdx]) : '',
+      status: 'awaiting_approval',
+      rejectionReason: null,
+      renewedDate: it.draftRenewedDate,
+      validTill: it.draftValidTill,
+      poNo: it.draftPoNo,
+      billingCycle: it.draftBillingCycle,
+      poValidity: it.draftPoValidity,
+      submittedBy: it.submittedBy,
+      updatedAt: it.renewalSubmittedDate
+    });
+  }
+
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+  for (const r of renewalLog.data || []) {
+    const d = new Date(r.timestamp);
+    if (Number.isNaN(d.getTime()) || d < sixtyDaysAgo) continue;
+    items.push({
+      containerNo: safeStr(r.container),
+      companyName: safeStr(r.clientName),
+      status: 'approved',
+      rejectionReason: null,
+      renewedDate: null,
+      validTill: safeStr(r.validTill),
+      poNo: safeStr(r.poNo),
+      billingCycle: null,
+      poValidity: null,
+      submittedBy: safeStr(r.updatedBy),
+      updatedAt: safeStr(r.timestamp)
+    });
+  }
+
+  return {
+    status: 'ok',
+    employeeCode: emp.empId,
+    email: emp.email,
+    salesPerson: scope,
+    items
+  };
+}
