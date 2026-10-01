@@ -1,0 +1,336 @@
+import { useState } from 'react';
+import { PageHeader, Card, Button, FileUpload, DataGrid } from '../../components/ui/index.js';
+import { useAsync } from '../../hooks/useAsync.js';
+import { usePermission } from '../../hooks/usePermission.js';
+import { apiErrorMessage } from '../../shared/auth/index.js';
+import { uploadStageFile } from '../../services/upload.service.js';
+import { fetchRefunds, submitRefund } from '../../services/refunds.service.js';
+import styles from './RefundsPage.module.css';
+
+function StageBadge({ status }) {
+  const s = (status || '').trim();
+  const cls = s === 'Approved' ? styles.stageApproved : s === 'Rejected' ? styles.stageRejected : s === 'Pending' ? styles.stagePending : styles.stageDone;
+  return <span className={`${styles.stageBadge} ${cls}`}>{s || '—'}</span>;
+}
+
+const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
+
+const EMPTY_FORM = {
+  user: '', invoiceNumber: '', invoiceDate: '', billReceivedBy: '', vendorName: '',
+  invoiceAmount: '', amountToPay: '', paymentDueDate: '', paymentType: '', paymentTypeOther: '',
+  paymentTerms: '', ledgerHead: '', sdAmountToBeRefunded: '', sdCalculation: '',
+  cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
+  department: '', invoiceFile: null, piFile: null, attachmentsFile: null
+};
+
+/* Exact header sequence/names given 2026-09-30 for the base columns — matches
+   the live sheet's own header row (refunds.service.js's REFUNDS_HEADERS)
+   column-for-column, up through Ledger Head; SD/attachment/approval columns
+   follow after, same order the backend appends them in. */
+const TABLE_HEADERS = [
+  'Timestamp', 'Submitted By Email', 'User', 'Invoice Number', 'Invoice Date',
+  'Bill Received By', 'Name of Vendor', 'Full Amount', 'Amount to Payment',
+  'Payment Due Date', 'Payment Type', 'Payment Terms', 'Invoice with Supporting/Statement',
+  'PI', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
+  'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'Attachments',
+  'HOD', 'CEO', 'Accounts'
+];
+
+function Link({ url }) {
+  if (!url) return <span>—</span>;
+  return <a href={url} target="_blank" rel="noreferrer">View</a>;
+}
+
+/**
+ * "Refunds" (Off-Lease Bills) — explicit request 2026-09-30. A vendor-bill
+ * submission form saving to the live "Offlease Bills " sheet tab, mirrored
+ * into Mongo (see backend/src/services/refunds.service.js). Timestamp and
+ * the submitting user's email are captured server-side; the "User" field
+ * here is a separate free-text name (who the bill is being raised for/by).
+ *
+ * Gated entirely behind the 'refunds' permission — no dedicated sidebar
+ * toggle exists yet (same "always visible in the menu, view/act gated on
+ * the page itself" convention as Approval Pending), so a caller with no
+ * grant sees this page but not the form or the list.
+ */
+export function RefundsPage() {
+  const { canAct } = usePermission();
+  const canSubmit = canAct('refunds');
+  // Read access is broader than submit access — an HOD/CEO/Accounts approver
+  // clicking their email's deep link may hold only their own stage
+  // permission, not the base 'refunds' (submit) one. Matches the backend's
+  // own _assertCanViewRefunds in refunds.service.js.
+  const canView = canSubmit || canAct('refundsApprovalHod') || canAct('refundsApprovalCeo') || canAct('refundsApprovalAccounts');
+
+  const { data, loading, error, reload } = useAsync(() => (canView ? fetchRefunds() : Promise.resolve({ headers: [], data: [] })), [canView]);
+  const rows = data?.data || [];
+
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [submitOk, setSubmitOk] = useState(false);
+
+  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setSubmitError('');
+    setSubmitOk(false);
+    try {
+      const [invoiceFileUrl, piFileUrl, attachmentsUrl, cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl] = await Promise.all([
+        form.invoiceFile ? uploadStageFile(form.invoiceFile) : '',
+        form.piFile ? uploadStageFile(form.piFile) : '',
+        form.attachmentsFile ? uploadStageFile(form.attachmentsFile) : '',
+        form.cancelledChequeFile ? uploadStageFile(form.cancelledChequeFile) : '',
+        form.clientEmailConfirmationFile ? uploadStageFile(form.clientEmailConfirmationFile) : '',
+        form.clientLedgerFile ? uploadStageFile(form.clientLedgerFile) : ''
+      ]);
+      await submitRefund({
+        user: form.user,
+        invoiceNumber: form.invoiceNumber,
+        invoiceDate: form.invoiceDate,
+        billReceivedBy: form.billReceivedBy,
+        vendorName: form.vendorName,
+        invoiceAmount: form.invoiceAmount,
+        amountToPay: form.amountToPay,
+        paymentDueDate: form.paymentDueDate,
+        paymentType: form.paymentType === 'Other' && form.paymentTypeOther ? form.paymentTypeOther : form.paymentType,
+        paymentTerms: form.paymentTerms,
+        ledgerHead: form.ledgerHead,
+        sdAmountToBeRefunded: form.sdAmountToBeRefunded,
+        sdCalculation: form.sdCalculation,
+        department: form.department,
+        invoiceFileUrl, piFileUrl, attachmentsUrl,
+        cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl
+      });
+      setForm(EMPTY_FORM);
+      setSubmitOk(true);
+      await reload();
+    } catch (e2) {
+      setSubmitError(apiErrorMessage(e2));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader title="Refunds" subtitle="Off-Lease vendor bill submission" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
+
+      {!canView ? (
+        <Card><div className={styles.viewOnly}>You don't have access to Refunds. Ask an admin to grant it via Roles & Access.</div></Card>
+      ) : (
+        <>
+          {canSubmit && (
+          <Card title="Submit a Bill">
+            <form onSubmit={handleSubmit} className={styles.form}>
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>User *</span>
+                  <input type="text" value={form.user} onChange={set('user')} required />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Bill Received Date</span>
+                  <input type="date" value={form.billReceivedBy} onChange={set('billReceivedBy')} />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Department *</span>
+                  <select value={form.department} onChange={set('department')} required>
+                    <option value="">Select…</option>
+                    <option value="Operation">Operation</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Vendor Name *</span>
+                  <input type="text" value={form.vendorName} onChange={set('vendorName')} required />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Invoice Number *</span>
+                  <input type="text" value={form.invoiceNumber} onChange={set('invoiceNumber')} required />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Invoice Date</span>
+                  <input type="date" value={form.invoiceDate} onChange={set('invoiceDate')} />
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Invoice Amount *</span>
+                  <input type="number" step="0.01" value={form.invoiceAmount} onChange={set('invoiceAmount')} onWheel={(e) => e.target.blur()} required />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Amount to Pay *</span>
+                  <input type="number" step="0.01" value={form.amountToPay} onChange={set('amountToPay')} onWheel={(e) => e.target.blur()} required />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Payment Due Date</span>
+                  <input type="date" value={form.paymentDueDate} onChange={set('paymentDueDate')} />
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Payment Type *</span>
+                  <select value={form.paymentType} onChange={set('paymentType')} required>
+                    <option value="">Select…</option>
+                    <option value="Advance">Advance</option>
+                    <option value="Balance">Balance</option>
+                    <option value="Full Payment">Full Payment</option>
+                    <option value="On A/C Payment">On A/C Payment</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </label>
+                {form.paymentType === 'Other' && (
+                  <label className={styles.field}>
+                    <span className={styles.label}>Payment Type — Other *</span>
+                    <input type="text" value={form.paymentTypeOther} onChange={set('paymentTypeOther')} required />
+                  </label>
+                )}
+                <label className={styles.field}>
+                  <span className={styles.label}>Payment Terms *</span>
+                  <select value={form.paymentTerms} onChange={set('paymentTerms')} required>
+                    <option value="">Select…</option>
+                    <option value="Immediate Payment 1-7 Days">Immediate Payment 1-7 Days</option>
+                    <option value="7-15 Days">7-15 Days</option>
+                    <option value="15-21 Days">15-21 Days</option>
+                    <option value="21-30 Days">21-30 Days</option>
+                    <option value="30 & Above">30 & Above</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Ledger Head</span>
+                  <select value={form.ledgerHead} onChange={set('ledgerHead')}>
+                    <option value="">Select…</option>
+                    <option value="Security Deposit Refundable">Security Deposit Refundable</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>SD Amount to be Refunded</span>
+                  <input type="number" step="0.01" value={form.sdAmountToBeRefunded} onChange={set('sdAmountToBeRefunded')} onWheel={(e) => e.target.blur()} />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>SD Calculation</span>
+                  <input type="number" step="0.01" value={form.sdCalculation} onChange={set('sdCalculation')} onWheel={(e) => e.target.blur()} />
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Cancelled Cheque</span>
+                  <FileUpload
+                    label={form.cancelledChequeFile ? `Selected: ${form.cancelledChequeFile.fileName}` : 'Upload cancelled cheque'}
+                    accept={ACCEPT}
+                    onSelected={(file) => setForm((f) => ({ ...f, cancelledChequeFile: file }))}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Client Email Confirmation</span>
+                  <FileUpload
+                    label={form.clientEmailConfirmationFile ? `Selected: ${form.clientEmailConfirmationFile.fileName}` : 'Upload email confirmation'}
+                    accept={ACCEPT}
+                    onSelected={(file) => setForm((f) => ({ ...f, clientEmailConfirmationFile: file }))}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Client Ledger</span>
+                  <FileUpload
+                    label={form.clientLedgerFile ? `Selected: ${form.clientLedgerFile.fileName}` : 'Upload client ledger'}
+                    accept={ACCEPT}
+                    onSelected={(file) => setForm((f) => ({ ...f, clientLedgerFile: file }))}
+                  />
+                </label>
+              </div>
+
+              <div className={styles.grid3}>
+                <label className={styles.field}>
+                  <span className={styles.label}>Invoice</span>
+                  <FileUpload
+                    label={form.invoiceFile ? `Selected: ${form.invoiceFile.fileName}` : 'Choose invoice file'}
+                    accept={ACCEPT}
+                    onSelected={(file) => setForm((f) => ({ ...f, invoiceFile: file }))}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>PI</span>
+                  <FileUpload
+                    label={form.piFile ? `Selected: ${form.piFile.fileName}` : 'Choose PI file'}
+                    accept={ACCEPT}
+                    onSelected={(file) => setForm((f) => ({ ...f, piFile: file }))}
+                  />
+                </label>
+                <label className={styles.field}>
+                  <span className={styles.label}>Attachments</span>
+                  <FileUpload
+                    label={form.attachmentsFile ? `Selected: ${form.attachmentsFile.fileName}` : 'Choose attachment'}
+                    accept={ACCEPT}
+                    onSelected={(file) => setForm((f) => ({ ...f, attachmentsFile: file }))}
+                  />
+                </label>
+              </div>
+
+              {submitError && <p className={styles.error}>{submitError}</p>}
+              {submitOk && <p className={styles.success}>Saved.</p>}
+
+              <div className={styles.footer}>
+                <Button type="submit" variant="primary" loading={submitting}>Submit</Button>
+              </div>
+            </form>
+          </Card>
+          )}
+
+          <div className={styles.section}>
+            <Card title="Submitted Bills">
+              <DataGrid
+                headers={TABLE_HEADERS}
+                rows={rows}
+                loading={loading}
+                error={error}
+                onRetry={reload}
+                emptyMessage="No bills submitted yet"
+                rowKey={(r, i) => `${r.invoiceNumber}-${i}`}
+                renderRow={(_values, r) => [
+                  <td key="ts">{r.timestamp}</td>,
+                  <td key="ue">{r.userEmail}</td>,
+                  <td key="u">{r.user}</td>,
+                  <td key="in">{r.invoiceNumber}</td>,
+                  <td key="id">{r.invoiceDate}</td>,
+                  <td key="br">{r.billReceivedBy}</td>,
+                  <td key="vn">{r.vendorName}</td>,
+                  <td key="ia">{r.invoiceAmount}</td>,
+                  <td key="ap">{r.amountToPay}</td>,
+                  <td key="pd">{r.paymentDueDate}</td>,
+                  <td key="pt">{r.paymentType}</td>,
+                  <td key="pte">{r.paymentTerms}</td>,
+                  <td key="if"><Link url={r.invoiceFileUrl} /></td>,
+                  <td key="pf"><Link url={r.piFileUrl} /></td>,
+                  <td key="dp">{r.department}</td>,
+                  <td key="lh">{r.ledgerHead}</td>,
+                  <td key="sda">{r.sdAmountToBeRefunded}</td>,
+                  <td key="sdc">{r.sdCalculation}</td>,
+                  <td key="cc"><Link url={r.cancelledChequeUrl} /></td>,
+                  <td key="ce"><Link url={r.clientEmailConfirmationUrl} /></td>,
+                  <td key="cl"><Link url={r.clientLedgerUrl} /></td>,
+                  <td key="at"><Link url={r.attachmentsUrl} /></td>,
+                  <td key="hod"><StageBadge status={r.hodStatus} /></td>,
+                  <td key="ceo"><StageBadge status={r.ceoStatus} /></td>,
+                  <td key="acc"><StageBadge status={r.accountsStatus} /></td>
+                ]}
+              />
+            </Card>
+          </div>
+        </>
+      )}
+    </>
+  );
+}

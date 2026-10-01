@@ -487,18 +487,37 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   Lookup page's exact components/export functions rather than
                   a second copy. Nothing here is editable; same "reference
                   only" convention the old card had. */}
-              {stageNumber === FMS_CLOSURE_STAGE && kamLookupResult && (
+              {stageNumber === FMS_CLOSURE_STAGE && (
                 <div className={styles.fmsWrap}>
                   <h3 className={styles.sectionTitle}>Full Off-Lease History (Stage 1-5)</h3>
-                  {kamFilledStages.length > 0 && (
-                    <StageSelector filled={kamFilledStages} selected={kamSelectedStages} onToggle={kamToggleStage} />
+                  {/* This lookup re-reads the Operation sheet and STAGE-8/9/10
+                      in full — routinely 20-30s+ each on their own (see
+                      kamLookup's own doc comment above) — so this section can
+                      take up to a minute. Says so explicitly rather than
+                      rendering nothing, which is indistinguishable from
+                      broken. */}
+                  {kamLoading && <LoadingState label="Loading full history — this can take up to a minute…" />}
+                  {!kamLoading && kamLookupError && <ErrorState message={kamLookupError} />}
+                  {!kamLoading && !kamLookupError && kamLookup && !kamLookupResult && (
+                    <p className={styles.sectionHint}>
+                      {kamLookup.multiple
+                        ? `${containerNo} has ${kamLookup.matches?.length ?? 'multiple'} off-lease records — open it from Container Lookup to pick the right one.`
+                        : (kamLookup.message || 'Could not load this container’s history.')}
+                    </p>
                   )}
-                  <div className={styles.actions}>
-                    <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToExcel)}>Download Excel</Button>
-                    <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToPdf, kamSelectedStages)}>Download PDF</Button>
-                  </div>
-                  {kamDownloadError && <div className={styles.error}>{kamDownloadError}</div>}
-                  <LookupResult result={kamLookupResult} />
+                  {kamLookupResult && (
+                    <>
+                      {kamFilledStages.length > 0 && (
+                        <StageSelector filled={kamFilledStages} selected={kamSelectedStages} onToggle={kamToggleStage} />
+                      )}
+                      <div className={styles.actions}>
+                        <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToExcel)}>Download Excel</Button>
+                        <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToPdf, kamSelectedStages)}>Download PDF</Button>
+                      </div>
+                      {kamDownloadError && <div className={styles.error}>{kamDownloadError}</div>}
+                      <LookupResult result={kamLookupResult} />
+                    </>
+                  )}
                 </div>
               )}
 

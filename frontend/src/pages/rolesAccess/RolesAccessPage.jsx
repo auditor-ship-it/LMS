@@ -84,7 +84,18 @@ export function RolesAccessPage() {
     }
   };
 
-  const handleAdd = async (email, name) => {
+  const handleAdd = async ({ email, name, empId, password }) => {
+    // Employee ID + Password (optional) create real login credentials first
+    // — explicit request 2026-09-30 — so a brand-new hire's account exists
+    // in the USER sheet before their Team Accounts/Sidebar Access rows do.
+    // If this step fails (e.g. the Employee ID is already taken), stop
+    // before touching permissions rather than leaving a half-created account.
+    if (empId && password) {
+      const result = await rolesService.addLogin({ name, empId, password, email });
+      if (typeof result?.message === 'string' && result.message.startsWith('Already exists')) {
+        throw new Error(result.message);
+      }
+    }
     await rolesService.addAccount(email, name);
     load();
   };
@@ -147,6 +158,8 @@ export function RolesAccessPage() {
                 <AddAccountForm onAdd={handleAdd} />
                 <p className={styles.addHint}>
                   New email starts with everything unchecked — go to the <b>Access Grid</b> tab to tick what it can see/do.
+                  Fill in Employee ID + Password too if this person needs to log in with that ID — leave both blank for an
+                  account that logs in another way.
                 </p>
               </Card>
               <Card>

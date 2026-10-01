@@ -89,6 +89,14 @@ export async function saveRemark(req, res) {
   res.json(await expiryService.saveExpiryRemarkFast(containerNo, remark, req.user.email, rowNum));
 }
 
+/** POST /api/expiry/renewal/send-back-to-pending — "Send Back" from Renew &
+ *  Document's own Pending list to Lease Expiry, explicit request 2026-09-30.
+ *  See sendExpiryToPendingFast's own doc comment. */
+export async function sendBackToPending(req, res) {
+  const { containerNo, rowNum } = req.body;
+  res.json({ result: await expiryService.sendExpiryToPendingFast(containerNo, req.user.email, rowNum) });
+}
+
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
 export async function completeRenewalDocStage(req, res) {
   const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum } = req.body;

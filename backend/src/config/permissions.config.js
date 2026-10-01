@@ -53,7 +53,7 @@ export const PERMISSION_KEYS = [
   { key: 'offlease5', label: 'Off-Lease Stage 6: Final Billing (Shivani)' },
   { key: 'offlease6', label: 'Off-Lease Stage 2: Transportation (Kshirod Khatua)' },
   { key: 'offlease7', label: 'Off-Lease Stage 4: Gate In (Pritam)' },
-  { key: 'offlease8', label: 'Off-Lease Stage 7: KAM (Sales)' },
+  { key: 'offlease8', label: 'Off-Lease Stage 7: FMS Closed (Sales)' },
   { key: 'billing', label: 'Billing' },
   { key: 'receivables', label: 'Receivables' },
   /* APPENDED, never inserted — exactly like SIDEBAR_KEYS below. This array is
@@ -88,7 +88,23 @@ export const PERMISSION_KEYS = [
    * rolesAdmin/apiAdmin above — so this key must be explicitly granted to
    * pushpa.shetty@crystalgroup.in (and anyone else meant to approve) via
    * Roles & Access after this ships, or nobody can approve anything yet. */
-  { key: 'renewApproval', label: 'Renew & Document: Approval (Pushpa)' }
+  { key: 'renewApproval', label: 'Renew & Document: Approval (Pushpa)' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * New "Refunds" (Off-Lease Bills) submission form, explicit request
+   * 2026-09-30 — writes to the live "Offlease Bills " tab (gid 1778430415),
+   * a brand new, previously-empty tab. Defaults to false for everyone; must
+   * be explicitly granted via Roles & Access before anyone can view or
+   * submit entries. */
+  { key: 'refunds', label: 'Refunds (Off-Lease Bills)' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * Refunds' own sequential HOD -> CEO -> Accounts approval workflow,
+   * explicit request 2026-09-30 (see refunds.service.js's decideRefundApproval).
+   * Each defaults to false for everyone — must be explicitly granted to
+   * whoever holds that role via Roles & Access, same "no baseline" rule as
+   * renewApproval above. */
+  { key: 'refundsApprovalHod', label: 'Refunds: Approval (HOD)' },
+  { key: 'refundsApprovalCeo', label: 'Refunds: Approval (CEO)' },
+  { key: 'refundsApprovalAccounts', label: 'Refunds: Approval (Accounts)' }
   /* offlease10 (Off-Lease Stage 3: LR & Return Transportation) — added
      2026-09-18, REMOVED 2026-09-22 (explicit request: Stage 3 itself was
      removed from the pipeline entirely, LR & Return Transportation + its
@@ -149,5 +165,24 @@ export const SIDEBAR_KEYS = [
   // directly above — Reports had no sidebar column at all (nav.js left it
   // unkeyed/always-visible), backfilled true for every existing row by
   // _ensureSidebarHeaderWidth so nobody loses it the moment this ships.
-  { key: 'reports', label: 'Reports' }
+  { key: 'reports', label: 'Reports' },
+  /* Appended 2026-09-30, explicit request — "Roles & Access"/"API Access"
+   * previously had no sidebarKey at all (nav.js gated them purely on the
+   * rolesAdmin/apiAdmin PERMISSION keys instead — see nav.js's own comment).
+   * This adds a SEPARATE, independent visibility toggle on top of that: both
+   * this column AND the matching permission must allow it for the menu item
+   * to show (Sidebar.jsx ANDs sidebarKey + permKey together). Same
+   * backfilled-to-true-for-existing-rows mechanism as offLeaseEfficiency/
+   * reports above, so nobody currently able to see these items loses them
+   * the moment this ships. */
+  { key: 'rolesAccess', label: 'Roles & Access' },
+  { key: 'apiAccess', label: 'API Access' },
+  /* Appended 2026-10-01, explicit request — Refunds/Refunds Approval/Renew
+   * Approval Pending previously had no sidebarKey at all (nav.js left them
+   * unkeyed/always-visible, same "no column exists yet" reasoning as Reports
+   * originally had). Same backfilled-to-true-for-existing-rows mechanism as
+   * every other entry above, so nobody loses access the moment this ships. */
+  { key: 'refunds', label: 'Refunds' },
+  { key: 'refundsApproval', label: 'Refunds Approval' },
+  { key: 'approvalPending', label: 'Renew Approval Pending' }
 ];

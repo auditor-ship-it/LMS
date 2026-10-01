@@ -191,7 +191,15 @@ export async function getApproveData(doWrite) {
 }
 
 async function _getApproveDataCore(doWrite) {
-  const { headers: rawHeaders, rows: rawRows } = await getSheetData(SHEETS.OPERATION);
+  /* doWrite=true (the auto-approval cron) must see the current live sheet —
+   * it's about to decide what to write from this read. doWrite=false (the
+   * Approve Lease page, My Task) is display-only and, as of 2026-09-30, reads
+   * the Mongo mirror instead of live Sheets — SHEETS.OPERATION is already
+   * fullRefresh-mirrored (mongoSheetMapping.js) and this was a confirmed live
+   * quota contributor on a page-load-triggered path. */
+  const { headers: rawHeaders, rows: rawRows } = doWrite
+    ? await getSheetData(SHEETS.OPERATION)
+    : await getSheetDataFromMongo(SHEETS.OPERATION);
   if (!rawRows.length) return { headers: [], data: [], catColIdx: -1 };
 
   const hdr = padWidth(rawHeaders, 31);

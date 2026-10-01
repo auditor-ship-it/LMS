@@ -16,11 +16,16 @@
  * retired and shows to nobody. See MOVEMENT_SOURCE_STAGE below; that constant
  * is the only place to change if the source stage moves.
  *
- * Reads go straight to Sheets rather than the Mongo mirror: this tab is not
- * registered with the reconcile job, and a movement must be visible in the app
- * the instant it lands in the sheet rather than up to 5 minutes later.
+ * Reads went straight to Sheets until 2026-09-30 (this tab wasn't registered
+ * with the reconcile job, and a movement had to be visible instantly, not up
+ * to 5 minutes later) — that live read was a real quota contributor, since
+ * getStage9Movements() had no cache at all. Now registered in
+ * mongoSheetMapping.js, and saveStage9Movement patches the mirror instantly
+ * via appendMongoMirrorRow, so reads go through the mirror without losing
+ * the "shows up right away" requirement.
  */
-import { getSheetData, appendRow, insertSheetIfMissing } from './googleSheets.service.js';
+import { appendRow, insertSheetIfMissing } from './googleSheets.service.js';
+import { getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { AppError, notFound } from '../utils/AppError.js';
@@ -133,7 +138,7 @@ const isMissingSheet = (e) => String(e?.message || '').includes('Unable to parse
 export async function getStage9Movements() {
   let rows = [];
   try {
-    ({ rows } = await getSheetData(S9_SHEET));
+    ({ rows } = await getSheetDataFromMongo(S9_SHEET));
   } catch (e) {
     if (isMissingSheet(e)) return { headers: S9_HEADERS, data: [] };
     throw e;
@@ -243,11 +248,13 @@ export async function saveStage9Movement(payload = {}, userEmail) {
        read quota during testing. */
     try {
       const { rowNum } = await appendRow(S9_SHEET, row);
+      await appendMongoMirrorRow(S9_SHEET, row);
       return { message: 'SAVED', rowNum, movement: row };
     } catch (e) {
       if (!isMissingSheet(e)) throw e;
       await insertSheetIfMissing(S9_SHEET, S9_HEADERS);
       const { rowNum } = await appendRow(S9_SHEET, row);
+      await appendMongoMirrorRow(S9_SHEET, row);
       return { message: 'SAVED', rowNum, movement: row };
     }
   });

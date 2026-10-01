@@ -26,6 +26,9 @@ router.post('/documents/upload', requirePermission('document'), asyncHandler(exp
 router.post('/documents/complete', requirePermission('document'), asyncHandler(expiryController.completeDocumentStage));
 
 router.post('/action', requirePermission('expiry'), asyncHandler(expiryController.saveAction));
+/* Reverses saveAction — explicit request 2026-09-30, see
+   sendExpiryToPendingFast's own doc comment on the backend. */
+router.post('/renewal/send-back-to-pending', requirePermission('expiry'), asyncHandler(expiryController.sendBackToPending));
 
 router.post('/remark', requirePermission('expiry'), asyncHandler(expiryController.saveRemark));
 

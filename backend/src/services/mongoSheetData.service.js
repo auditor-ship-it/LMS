@@ -191,3 +191,32 @@ export async function patchMongoMirrorRow(sheetName, targetRow, updates, opts = 
     logger.error(`[MIRROR-PATCH] ${sheetName} row ${targetRow} patch failed (non-fatal — scheduled reconcile will catch up within 5 min):`, e?.message || e);
   }
 }
+
+/**
+ * Append-only counterpart to patchMongoMirrorRow, for the position-keyed
+ * (`row_N`, fullRefresh) append-only log sheets — Off-Lease Remarks, Off-Lease
+ * Move History, Stage 9 Movement, Renewal Log, Login Time Log. Those sheets
+ * are never upserted by a natural key (none exists), so a just-appended row
+ * has no existing mirror doc for patchMongoMirrorRow to match — it needs a
+ * brand new doc instead, keyed one past whatever `row_N` already exists.
+ *
+ * Best-effort, same as patchMongoMirrorRow: the live Sheets append already
+ * succeeded by the time this runs, so a failure here just means the
+ * scheduled reconciliation (up to 5 min later) is what makes the new row
+ * visible to Mongo-mirror reads instead of this call doing it instantly.
+ */
+export async function appendMongoMirrorRow(sheetName, row) {
+  try {
+    const col = getCollection(sheetName);
+    const existing = await col.find({ _id: { $ne: META_ID }, key: { $exists: true } }, { projection: { key: 1 } }).toArray();
+    const maxN = existing.reduce((max, d) => {
+      const n = parseInt(String(d.key).replace(/^row_/, ''), 10);
+      return Number.isFinite(n) && n > max ? n : max;
+    }, -1);
+    const now = new Date();
+    await col.insertOne({ key: `row_${maxN + 1}`, row, deletedAt: null, createdAt: now, updatedAt: now });
+    cacheRemove(`mongo_raw_v1:${sheetName}`);
+  } catch (e) {
+    logger.error(`[MIRROR-APPEND] ${sheetName} append failed (non-fatal — scheduled reconcile will catch up within 5 min):`, e?.message || e);
+  }
+}

@@ -12,6 +12,8 @@ export const ROUTES = {
   ROLES_ACCESS: '/roles-access',
   API_ACCESS: '/api-access',
   REPORTS: '/reports',
+  REFUNDS: '/refunds',
+  REFUNDS_APPROVAL: '/refunds-approval',
   STAGES: '/stages',
   stage: (n) => `/stages/stage-${n}`
 };

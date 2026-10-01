@@ -60,7 +60,7 @@ const MY_TASK_KEY_META = {
   olStage5: ['Off-Lease Stage 6: Final Billing', 'olStage5'],
   olStage6: ['Off-Lease Stage 2: Transportation', 'olStage6'],
   olStage7: ['Off-Lease Stage 4: Gate In', 'olStage7'],
-  olStage8: ['Off-Lease Stage 7: KAM', 'olStage8']
+  olStage8: ['Off-Lease Stage 7: FMS Closed', 'olStage8']
 };
 
 /**

@@ -40,7 +40,7 @@ import {
   insertSheetIfMissing,
   colLetter
 } from './googleSheets.service.js';
-import { patchMongoMirrorRow, getSheetDataFromMongo, getMongoRowsWithKeys } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow, getSheetDataFromMongo, getMongoRowsWithKeys, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { getCollection } from './mongo.service.js';
 import { enqueueSheetReplay } from './outbox.service.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
@@ -756,6 +756,74 @@ export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail
 }
 
 /**
+ * "Send Back" from Renew & Document's own Pending list to Lease Expiry —
+ * explicit request 2026-09-30. Reverses exactly what saveExpiryAction wrote
+ * (Action Date, column V; Status, column W — 'Documents Pending') back to
+ * blank, which is what actually moves the record: getExpiryDataByFilter's
+ * 'documents' branch requires W === 'documents pending' to include a row,
+ * while its 'pending' branch includes every row unconditionally (see that
+ * function's own doc comment) — so clearing these two cells is the same
+ * "un-click Renew" action, same row, nothing duplicated or deleted. Guarded
+ * against a row that's already moved on to Approval Pending (Approval Status
+ * = 'Pending', set by completeDocStage) — that one needs Pushpa's own
+ * Approve/Reject decision instead, not a plain send-back.
+ *
+ * Deliberately does NOT touch the AA-AD / DRAFT_ / Approval Status columns —
+ * whatever was drafted stays in place, so if this container is Renewed
+ * again later, re-opening "Update Agreement" still pre-fills it.
+ */
+export async function sendExpiryToPending(containerNo, callerEmail, knownRow) {
+  await checkActionPermission('expiry', callerEmail);
+  return withSheetLock(SHEETS.DEPLOYED, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+    const { rows } = await getSheetData(SHEETS.DEPLOYED);
+    if (!rows.length) throw new AppError('No data rows');
+
+    const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
+    if (targetRow === -1) throw notFound(`Not found: ${containerNo}`);
+    const row = rows[targetRow - 2] || [];
+    if (String(row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+    if (String(row[APPROVAL_STATUS_COL] || '').trim().toLowerCase() === 'pending') return 'AWAITING_APPROVAL';
+
+    const updates = [
+      { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [['']] },
+      { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] }
+    ];
+    await batchUpdateValues(updates);
+    await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
+    cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+    cacheRemoveByPrefix('mytasks_v1');
+    return 'OK';
+  });
+}
+
+/**
+ * Mongo-first fast path for sendExpiryToPending — same design as
+ * saveExpiryActionFast above.
+ */
+export async function sendExpiryToPendingFast(containerNo, callerEmail, knownRow) {
+  await checkActionPermission('expiry', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+  if (String(found.row[APPROVAL_STATUS_COL] || '').trim().toLowerCase() === 'pending') return 'AWAITING_APPROVAL';
+
+  await getCollection(SHEETS.DEPLOYED).updateOne(
+    { key: found.key },
+    { $set: { 'row.21': '', 'row.22': '', updatedAt: new Date() } }
+  );
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+  cacheRemoveByPrefix('mytasks_v1');
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.sendExpiryToPending', [containerNo, callerEmail, resolvedRow], { actor: callerEmail });
+  return 'OK';
+}
+
+/**
  * Live-Sheets write for Lease Expiry remarks (column AI). Used by the outbox
  * worker to replay what saveExpiryRemarkFast already applied to Mongo.
  *
@@ -885,7 +953,7 @@ function _deployedClientName(headers, row) {
 export async function getRenewalLogReport(user) {
   let rows = [];
   try {
-    ({ rows } = await getSheetData(RENEWAL_LOG_SHEET));
+    ({ rows } = await getSheetDataFromMongo(RENEWAL_LOG_SHEET));
   } catch (e) {
     return { headers: RENEWAL_LOG_HEADERS, data: [], error: e?.message || 'Could not read Renewal Log' };
   }
@@ -1135,15 +1203,15 @@ export async function saveRenewalDraft(containerNo, renewedDate, validTill, sign
     await _ensureApprovalColumnsHeader(hdrs0);
 
     const updates = [];
-    if (renewedDate) updates.push({ range: `'${SHEETS.DEPLOYED}'!AA${targetRow}`, values: [[new Date(renewedDate).toISOString()]] });
-    if (validTill) updates.push({ range: `'${SHEETS.DEPLOYED}'!AB${targetRow}`, values: [[new Date(validTill).toISOString()]] });
+    if (renewedDate) updates.push({ range: `'${SHEETS.DEPLOYED}'!AA${targetRow}`, values: [[fmtCellDate(renewedDate)]] });
+    if (validTill) updates.push({ range: `'${SHEETS.DEPLOYED}'!AB${targetRow}`, values: [[fmtCellDate(validTill)]] });
     if (signedCopyUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!AC${targetRow}`, values: [[signedCopyUrl]] });
     if (remarks) updates.push({ range: `'${SHEETS.DEPLOYED}'!AD${targetRow}`, values: [[remarks]] });
     if (poNo) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_NO_COL)}${targetRow}`, values: [[poNo]] });
     if (poFileUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_FILE_COL)}${targetRow}`, values: [[poFileUrl]] });
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_BILLING_CYCLE_COL)}${targetRow}`, values: [[billingCycle]] });
-    if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[new Date(poValidity).toISOString()]] });
-    updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[new Date().toISOString()]] });
+    if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[fmtCellDate(poValidity)]] });
+    updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[dmyTime(new Date())]] });
 
     await batchUpdateValues(updates);
     await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
@@ -1194,17 +1262,17 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     await _ensureRenewalSubmittedDateHeader(hdrs0);
     await _ensureApprovalColumnsHeader(hdrs0);
 
-    const stamp = new Date().toISOString();
+    const stamp = dmyTime(new Date());
     const submittedBy = userEmail || callerEmail || '';
     const updates = [
-      { range: `'${SHEETS.DEPLOYED}'!AA${targetRow}`, values: [[new Date(renewedDate).toISOString()]] },
-      { range: `'${SHEETS.DEPLOYED}'!AB${targetRow}`, values: [[new Date(validTill).toISOString()]] },
+      { range: `'${SHEETS.DEPLOYED}'!AA${targetRow}`, values: [[fmtCellDate(renewedDate)]] },
+      { range: `'${SHEETS.DEPLOYED}'!AB${targetRow}`, values: [[fmtCellDate(validTill)]] },
       { range: `'${SHEETS.DEPLOYED}'!AC${targetRow}`, values: [[signedCopyUrl || '']] },
       { range: `'${SHEETS.DEPLOYED}'!AD${targetRow}`, values: [[remarks || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_NO_COL)}${targetRow}`, values: [[poNo || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_FILE_COL)}${targetRow}`, values: [[poFileUrl || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_BILLING_CYCLE_COL)}${targetRow}`, values: [[billingCycle || '']] },
-      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[poValidity ? new Date(poValidity).toISOString() : '']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[poValidity ? fmtCellDate(poValidity) : '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[stamp]] },
       // A resubmission after a prior Rejection clears that old decision out —
       // it no longer describes the request now being made.
@@ -1275,7 +1343,7 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     const matchedRow = rows[targetRow - 2];
     if (String(matchedRow[APPROVAL_STATUS_COL] || '').trim().toLowerCase() !== 'pending') return 'INVALID_STATE';
 
-    const stamp = new Date().toISOString();
+    const stamp = dmyTime(new Date());
     const updates = [
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_STATUS_COL)}${targetRow}`, values: [[decision === 'approved' ? 'Approved' : 'Rejected']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_REMARKS_COL)}${targetRow}`, values: [[remarks || '']] },
@@ -1364,12 +1432,14 @@ export async function _logRenewal(info) {
       const missing = RENEWAL_LOG_HEADERS.slice(curHeaders.length);
       await updateRange(RENEWAL_LOG_SHEET, `${colLetter(curHeaders.length)}1:${colLetter(RENEWAL_LOG_HEADERS.length - 1)}1`, [missing]);
     }
-    const stamp = new Date().toISOString();
-    await appendRow(RENEWAL_LOG_SHEET, [
+    const stamp = dmyTime(new Date());
+    const logRow = [
       stamp, info.container || '', info.clientName || '', info.poNo || '',
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
       info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
-    ]);
+    ];
+    await appendRow(RENEWAL_LOG_SHEET, logRow);
+    await appendMongoMirrorRow(RENEWAL_LOG_SHEET, logRow);
     // Same try/catch as the log write above — a mail failure must not be
     // mistaken for the renewal itself failing, and this only ever fires
     // once the append has actually succeeded.

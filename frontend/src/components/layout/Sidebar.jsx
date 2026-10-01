@@ -57,11 +57,22 @@ function Branch({ item, visibleChildren, onNavigate }) {
  * Menu visibility: the Roles & Access "Sidebar" grid checkbox is the sole
  * source of truth for every item with a `sidebarKey` — checked there means
  * visible, independent of the separate Permissions grid. An item with no
- * sidebarKey (Roles & Access) is always visible. A branch is hidden entirely
- * once none of its children are visible to this user.
+ * sidebarKey is always visible. A branch is hidden entirely once none of its
+ * children are visible to this user.
+ *
+ * EXCEPTION (explicit request 2026-09-30): an item may ALSO carry `permKey`,
+ * additionally gating its visibility on the Permissions grid — used only for
+ * Roles & Access ('rolesAdmin') and API Access ('apiAdmin'), so these two
+ * admin-only entries disappear from the menu entirely for non-admins instead
+ * of just rendering an "Access Restricted" page after the click. Both these
+ * items ALSO carry their own `sidebarKey` (added the same day, as a second,
+ * independent toggle) — for them specifically, sidebarKey AND permKey must
+ * both allow it. Not a general-purpose mechanism: do not add `permKey` to
+ * Renew & Document/Off-Lease or any other item without the user asking
+ * again, per this file's 2026-08-05 decision above.
  */
 export function Sidebar({ open, onNavigate }) {
-  const { canView } = usePermission();
+  const { canView, canAct } = usePermission();
   const { data: counts, reload: reloadCounts } = useAsync(fetchMyTasks, []);
   // BUG FOUND AND FIXED 2026-09-03: unlike every other page, Sidebar never
   // refetched after its initial mount — it's part of the persistent app
@@ -76,7 +87,9 @@ export function Sidebar({ open, onNavigate }) {
   // (approve, complete a stage, move, hold) never touches the Deployed
   // sheet, so it wouldn't otherwise reach this badge until the next poll.
   useAutoRefresh(['deployed-sheet', 'off-lease'], reloadCounts);
-  const visible = (item) => (item.sidebarKey ? canView(item.sidebarKey) : true);
+  const visible = (item) =>
+    (item.sidebarKey ? canView(item.sidebarKey) : true) &&
+    (item.permKey ? canAct(item.permKey) : true);
 
   const visibleItems = NAV_TREE.items.filter((item) => item.children || visible(item));
   const sections = [];

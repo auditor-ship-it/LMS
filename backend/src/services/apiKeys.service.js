@@ -40,14 +40,23 @@ const KEY_PREFIX = 'lms_pub_';
  *  Lowercase only: normalizeScopes() below lowercases every incoming scope
  *  token before checking it against this list, so a mixed-case key here
  *  could never actually be granted. */
-export const API_DOMAINS = ['leases', 'offlease', 'accounts', 'offleaseefficiency', 'salesos'];
+export const API_DOMAINS = [
+  'leases', 'offlease', 'accounts', 'offleaseefficiency', 'salesos',
+  // Added 2026-10-01, explicit request — read-only domains, same posture as
+  // accounts/offleaseefficiency below: no write endpoint exists in
+  // public.routes.js for any of these, by deliberate choice (Refunds'
+  // approval workflow, Renew & Document's approval workflow, and the
+  // reporting aggregates below all stay app-only for writes).
+  'refunds', 'renewdocument', 'deployedsummary', 'reports'
+];
 
 /** Domains with an actual write endpoint wired in public.routes.js. `accounts`
  *  and `offleaseefficiency` are read-only everywhere in this app — the
  *  former is a proxy to the external Accounts & Collection API (LMS never
  *  writes ledger data, see sales-crm-read-only.md for the same posture on a
  *  different domain), the latter is a pure reporting aggregate
- *  (offleaseEfficiency.service.js writes nothing at all). */
+ *  (offleaseEfficiency.service.js writes nothing at all). Same reasoning for
+ *  refunds/renewdocument/deployedsummary/reports above — read-only by design. */
 export const WRITE_CAPABLE_DOMAINS = ['leases', 'offlease'];
 
 let indexEnsured = false;
@@ -81,7 +90,7 @@ function normalizeScopes(scopes) {
     'all:write'
   ];
   const bad = requested.filter((s) => !allowedValues.includes(s));
-  if (bad.length) throw new AppError(`Unknown scope(s): ${bad.join(', ')}. "accounts" has no write endpoint — it stays read-only.`, 400);
+  if (bad.length) throw new AppError(`Unknown scope(s): ${bad.join(', ')}. Some domains (accounts, offleaseefficiency, refunds, renewdocument, deployedsummary, reports) have no write endpoint — they stay read-only.`, 400);
 
   // Write implies read, so a bare domain token is redundant once that
   // domain's :write token is also requested — drop it rather than store

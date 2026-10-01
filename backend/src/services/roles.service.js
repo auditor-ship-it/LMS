@@ -19,7 +19,8 @@ import {
   updateCell,
   updateRange,
   deleteRows,
-  colLetter
+  colLetter,
+  ensureColumnCount
 } from './googleSheets.service.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { SHEETS } from '../config/sheets.config.js';
@@ -96,6 +97,45 @@ function accessSeedData() {
 
 let seeded = false;
 let sidebarHeaderChecked = false;
+let teamHeaderChecked = false;
+
+/**
+ * BUG FOUND AND FIXED 2026-09-30: PERMISSION_KEYS grew repeatedly this
+ * session (renewApproval, refunds, refundsApprovalHod/Ceo/Accounts) with no
+ * equivalent of _ensureSidebarHeaderWidth below to widen the live "Team
+ * Accounts" sheet to match — insertSheetIfMissing only writes a header row
+ * when the sheet doesn't exist yet, so a config-only change never reached
+ * the already-seeded live sheet. The live sheet was still 26 columns wide
+ * (through Z) while TEAM_HEADER had grown past it, so any write targeting
+ * a PERMISSION_KEYS column beyond Z (e.g. 'Team Accounts'!AC2) failed with
+ * "Range ... exceeds grid limits" — confirmed live in the Roles & Access UI.
+ *
+ * Backfills existing rows with FALSE for the new column(s), not TRUE — the
+ * opposite of _ensureSidebarHeaderWidth's backfill, because PERMISSION_KEYS'
+ * own established convention (rolesAdmin/apiAdmin/renewApproval/refunds*)
+ * is "no hardcoded baseline, defaults to false for everyone until explicitly
+ * granted" — unlike SIDEBAR_KEYS' "visible until explicitly hidden".
+ */
+async function _ensureTeamHeaderWidth() {
+  if (teamHeaderChecked) return;
+  teamHeaderChecked = true;
+  const { headers, rows } = await getSheetData(TEAM_SHEET).catch(() => ({ headers: [], rows: [] }));
+  if (!headers.length) return; // sheet doesn't exist yet — insertSheetIfMissing elsewhere handles that case
+  if (headers.length >= TEAM_HEADER.length) return;
+  const startCol = headers.length;
+  const missing = TEAM_HEADER.slice(startCol);
+  // The values API cannot write outside the sheet's actual grid dimensions —
+  // it fails with this exact "exceeds grid limits" error rather than growing
+  // the sheet, regardless of read vs write. Must widen the grid itself first.
+  await ensureColumnCount(TEAM_SHEET, TEAM_HEADER.length);
+  await updateRange(TEAM_SHEET, `${colLetter(startCol)}1:${colLetter(TEAM_HEADER.length - 1)}1`, [missing]);
+
+  if (rows.length) {
+    const fillRow = new Array(missing.length).fill(false);
+    const values = rows.map(() => fillRow);
+    await updateRange(TEAM_SHEET, `${colLetter(startCol)}2:${colLetter(TEAM_HEADER.length - 1)}${rows.length + 1}`, values);
+  }
+}
 
 /**
  * SIDEBAR_KEYS grew (renewDocument/offLease appended) after the live
@@ -122,6 +162,11 @@ async function _ensureSidebarHeaderWidth() {
   if (headers.length >= SIDEBAR_HEADER.length) return;
   const startCol = headers.length;
   const missing = SIDEBAR_HEADER.slice(startCol);
+  // Same latent bug _ensureTeamHeaderWidth below was just found to have —
+  // not yet hit here since SIDEBAR_KEYS hasn't crossed 26 columns, but the
+  // values API would fail identically ("exceeds grid limits") the moment it
+  // does. Defensive, no-op when the grid is already wide enough.
+  await ensureColumnCount(SIDEBAR_SHEET, SIDEBAR_HEADER.length);
   await updateRange(SIDEBAR_SHEET, `${colLetter(startCol)}1:${colLetter(SIDEBAR_HEADER.length - 1)}1`, [missing]);
 
   if (rows.length) {
@@ -131,37 +176,57 @@ async function _ensureSidebarHeaderWidth() {
   }
 }
 
-/** Seeds the two sheets once (only if Team Accounts has no data rows yet). */
+/**
+ * Seeds the two sheets once (only if Team Accounts has no data rows yet).
+ *
+ * BUG FOUND AND FIXED 2026-09-30: this whole check-then-seed sequence ran
+ * with no lock at all — unlike every other write path in this file/codebase.
+ * Two calls landing close together (e.g. right after a server restart, when
+ * several concurrent requests each call this before any of them has
+ * finished seeding) both read `team.rows.length === 0`, both fell through
+ * the "already seeded" guard, and both appended the full seed list —
+ * confirmed live: Team Accounts and Sidebar Access ended up with every
+ * account duplicated (30 rows for 15 real accounts) after a restart raced
+ * a second process's own read of the same empty sheet. withSheetLock is
+ * single-process only (see its own header comment) so this only closes the
+ * "multiple requests within one server process" version of the race, but
+ * that's the realistic one — the old code had no protection against even that.
+ */
 export async function ensureRolesSeeded() {
   await _ensureSidebarHeaderWidth();
+  await _ensureTeamHeaderWidth();
   if (seeded) return;
 
-  // Migration guard: an old ROLE-based schema (Email | Name | Role) may exist.
-  // Detect by 3rd header ("Role" vs "All Access") and wipe + reseed fresh.
-  const existing = await getSheetData(TEAM_SHEET).catch(() => null);
-  if (existing && existing.headers.length) {
-    const hdr3 = safeStr(existing.headers[2]).trim().toLowerCase();
-    if (hdr3 === 'role') {
-      await deleteSheetIfExists(TEAM_SHEET);
-      await deleteSheetIfExists(SIDEBAR_SHEET);
-      await deleteSheetIfExists(SHEETS.ROLE_PERMISSIONS_LEGACY);
+  await withSheetLock(TEAM_SHEET, async () => {
+    if (seeded) return; // a concurrent call already finished while we waited for the lock
+
+    // Migration guard: an old ROLE-based schema (Email | Name | Role) may exist.
+    // Detect by 3rd header ("Role" vs "All Access") and wipe + reseed fresh.
+    const existing = await getSheetData(TEAM_SHEET).catch(() => null);
+    if (existing && existing.headers.length) {
+      const hdr3 = safeStr(existing.headers[2]).trim().toLowerCase();
+      if (hdr3 === 'role') {
+        await deleteSheetIfExists(TEAM_SHEET);
+        await deleteSheetIfExists(SIDEBAR_SHEET);
+        await deleteSheetIfExists(SHEETS.ROLE_PERMISSIONS_LEGACY);
+      }
     }
-  }
 
-  await insertSheetIfMissing(TEAM_SHEET, TEAM_HEADER);
-  const team = await getSheetData(TEAM_SHEET);
-  if (team.rows.length >= 1) { seeded = true; return; } // already seeded
+    await insertSheetIfMissing(TEAM_SHEET, TEAM_HEADER);
+    const team = await getSheetData(TEAM_SHEET);
+    if (team.rows.length >= 1) { seeded = true; return; } // already seeded
 
-  await insertSheetIfMissing(SIDEBAR_SHEET, SIDEBAR_HEADER);
+    await insertSheetIfMissing(SIDEBAR_SHEET, SIDEBAR_HEADER);
 
-  const seed = accessSeedData();
-  const teamRows = seed.map((r) => [r.email, '', r.allAccess, ...PERMISSION_KEYS.map((p) => !!r.perms[p.key])]);
-  const sidebarRows = seed.map((r) => [r.email, ...SIDEBAR_KEYS.map(() => true)]);
+    const seed = accessSeedData();
+    const teamRows = seed.map((r) => [r.email, '', r.allAccess, ...PERMISSION_KEYS.map((p) => !!r.perms[p.key])]);
+    const sidebarRows = seed.map((r) => [r.email, ...SIDEBAR_KEYS.map(() => true)]);
 
-  for (const row of teamRows) await appendRow(TEAM_SHEET, row);
-  for (const row of sidebarRows) await appendRow(SIDEBAR_SHEET, row);
+    for (const row of teamRows) await appendRow(TEAM_SHEET, row);
+    for (const row of sidebarRows) await appendRow(SIDEBAR_SHEET, row);
 
-  seeded = true;
+    seeded = true;
+  });
 }
 
 const TEAM_CACHE_KEY = 'access_team_v2';
@@ -331,8 +396,16 @@ export async function dynamicSidebarVisible(email, tabId) {
 // avoid (see this const's own doc comment above). The sidebarKey column
 // itself is left in SIDEBAR_KEYS/the live sheet untouched — only what the
 // admin UI displays changed.
-const RELEVANT_SIDEBAR_KEYS = new Set(['myTask', 'verify', 'expiry', 'renewDocument', 'offLease', 'deployedSummary', 'offLeaseEfficiency']);
-const IRRELEVANT_PERMISSION_KEYS = new Set(['billing', 'receivables', 'offlease2', 'offlease4', 'offlease9']);
+// rolesAccess/apiAccess added 2026-09-30 — see their own SIDEBAR_KEYS entry
+// comment (permissions.config.js) for why these now have a real toggle here,
+// unlike 'approve' above which deliberately never got one.
+// reports/refunds/refundsApproval/approvalPending added 2026-10-01, same
+// reasoning — explicit request to make these admin-toggleable too.
+const RELEVANT_SIDEBAR_KEYS = new Set([
+  'myTask', 'verify', 'expiry', 'renewDocument', 'offLease', 'deployedSummary', 'offLeaseEfficiency',
+  'rolesAccess', 'apiAccess', 'reports', 'refunds', 'refundsApproval', 'approvalPending'
+]);
+const IRRELEVANT_PERMISSION_KEYS = new Set(['approve', 'billing', 'receivables', 'offlease2', 'offlease4', 'offlease9']);
 
 export async function getRolesAndAccessData(callerEmail) {
   await assertRolesAdmin(callerEmail);
