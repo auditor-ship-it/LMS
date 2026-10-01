@@ -116,12 +116,8 @@ export function RefundReviewPage() {
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount</span><span>{entry.invoiceAmount}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount to be Refunded</span><span>{entry.amountToPay}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Due Date</span><span>{entry.paymentDueDate || '—'}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Type</span><span>{entry.paymentType || '—'}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Terms</span><span>{entry.paymentTerms || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Ledger Head</span><span>{entry.ledgerHead || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Department</span><span>{entry.department}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount to be Refunded</span><span>{entry.sdAmountToBeRefunded || '—'}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Calculation</span><span>{entry.sdCalculation || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Calculation</span><Link url={entry.invoiceFileUrl} /></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Quarterly Ledger</span><Link url={entry.piFileUrl} /></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Cancelled Cheque</span><Link url={entry.cancelledChequeUrl} /></div>

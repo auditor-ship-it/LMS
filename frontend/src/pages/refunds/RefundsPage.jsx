@@ -79,11 +79,16 @@ function addDays(dateStr, days) {
    frontend"): these are the same fields removed from the submission form
    earlier today, so every row is permanently blank for them going forward;
    showing empty columns forever is just clutter. Old rows' data in those
-   sheet columns is untouched, just no longer displayed here. */
+   sheet columns is untouched, just no longer displayed here.
+   Payment Type/Payment Terms (also removed from the form) and the OLD
+   retired "SD Amount to be Refunded"/"SD Calculation" numeric columns
+   (superseded by the renamed Amount to Pay/Invoice-file fields, which keep
+   their columns below) dropped the same way, same day ("this hidden the
+   table frontend"). */
 const TABLE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
-  'Payment Due Date', 'Payment Type', 'Payment Terms', 'SD Calculation',
-  'Quarterly Ledger', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
+  'Payment Due Date', 'SD Calculation',
+  'Quarterly Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded',
   'HOD', 'CEO', 'Accounts'
 ];
@@ -284,14 +289,10 @@ export function RefundsPage() {
                   <td key="ia">{r.invoiceAmount}</td>,
                   <td key="ap">{r.amountToPay}</td>,
                   <td key="pd">{r.paymentDueDate}</td>,
-                  <td key="pt">{r.paymentType}</td>,
-                  <td key="pte">{r.paymentTerms}</td>,
                   <td key="if"><Link url={r.invoiceFileUrl} /></td>,
                   <td key="pf"><Link url={r.piFileUrl} /></td>,
                   <td key="dp">{r.department}</td>,
                   <td key="lh">{r.ledgerHead}</td>,
-                  <td key="sda">{r.sdAmountToBeRefunded}</td>,
-                  <td key="sdc">{r.sdCalculation}</td>,
                   <td key="cc"><Link url={r.cancelledChequeUrl} /></td>,
                   <td key="ce"><Link url={r.clientEmailConfirmationUrl} /></td>,
                   <td key="cl"><Link url={r.clientLedgerUrl} /></td>,

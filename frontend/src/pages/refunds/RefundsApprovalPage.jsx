@@ -32,16 +32,15 @@ function Link({ url }) {
  * shown on its own tab. */
 /* Labels kept in sync with the submission form's own field labels
    (RefundsPage.jsx) — explicit request 2026-10-01: "table header name hasn't
-   changed". See that file's own TABLE_HEADERS comment for why columns
-   16/17's labels below collide with the renamed 8/12 — same two now-distinct
-   sheet columns sharing a word, not a bug. User/Invoice Number/Invoice
-   Date/Bill Received By dropped entirely (not renamed) the same day ("not
-   show frontend") — removed from the submission form, so permanently blank
-   going forward; see that file's identical TABLE_HEADERS change. */
+   changed". User/Invoice Number/Invoice Date/Bill Received By, Payment
+   Type/Terms, and the OLD retired "SD Amount to be Refunded"/"SD
+   Calculation" numeric columns dropped entirely (not renamed) — all removed
+   from the submission form, so permanently blank going forward; see
+   RefundsPage.jsx's identical TABLE_HEADERS change for the full history. */
 const BASE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
-  'Payment Due Date', 'Payment Type', 'Payment Terms', 'SD Calculation',
-  'Quarterly Ledger', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
+  'Payment Due Date', 'SD Calculation',
+  'Quarterly Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];
@@ -147,12 +146,8 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>SD Amount</span><span>{reviewRow.invoiceAmount}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Amount to be Refunded</span><span>{reviewRow.amountToPay}</span></div>
                       <div className={styles.field}><span className={styles.label}>Payment Due Date</span><span>{reviewRow.paymentDueDate || '—'}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Payment Type</span><span>{reviewRow.paymentType || '—'}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Payment Terms</span><span>{reviewRow.paymentTerms || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Ledger Head</span><span>{reviewRow.ledgerHead || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Department</span><span>{reviewRow.department}</span></div>
-                      <div className={styles.field}><span className={styles.label}>SD Amount to be Refunded</span><span>{reviewRow.sdAmountToBeRefunded || '—'}</span></div>
-                      <div className={styles.field}><span className={styles.label}>SD Calculation</span><span>{reviewRow.sdCalculation || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Calculation</span><Link url={reviewRow.invoiceFileUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Quarterly Ledger</span><Link url={reviewRow.piFileUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Cancelled Cheque</span><Link url={reviewRow.cancelledChequeUrl} /></div>
@@ -224,14 +219,10 @@ export function RefundsApprovalPage() {
                   <td key="ia">{r.invoiceAmount}</td>,
                   <td key="ap">{r.amountToPay}</td>,
                   <td key="pd">{r.paymentDueDate}</td>,
-                  <td key="pt">{r.paymentType}</td>,
-                  <td key="pte">{r.paymentTerms}</td>,
                   <td key="if"><Link url={r.invoiceFileUrl} /></td>,
                   <td key="pf"><Link url={r.piFileUrl} /></td>,
                   <td key="dp">{r.department}</td>,
                   <td key="lh">{r.ledgerHead}</td>,
-                  <td key="sda">{r.sdAmountToBeRefunded}</td>,
-                  <td key="sdc">{r.sdCalculation}</td>,
                   <td key="cc"><Link url={r.cancelledChequeUrl} /></td>,
                   <td key="ce"><Link url={r.clientEmailConfirmationUrl} /></td>,
                   <td key="cl"><Link url={r.clientLedgerUrl} /></td>,
