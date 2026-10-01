@@ -529,7 +529,7 @@ export async function deleteRemark(req, res) {
 
 export async function addToTracking(req, res) {
   const { containerNo, deployedRow, remarks, personName } = req.body;
-  const message = await offLeaseService.addToOffLeaseTracking(containerNo, deployedRow, remarks, personName);
+  const message = await offLeaseService.addToOffLeaseTracking(containerNo, deployedRow, remarks, personName, req.user?.email);
   res.json({ message });
 }
 

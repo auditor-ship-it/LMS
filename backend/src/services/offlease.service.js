@@ -87,7 +87,7 @@ import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
-import { _deployedRawValues, _resolveRenewalColumns } from './expiry.service.js';
+import { _deployedRawValues, _resolveRenewalColumns, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
 import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
@@ -1385,8 +1385,11 @@ const OL_TRACKING_PERSON_NAME_COL = 304;
  *  off-lease — see _lookupDeployedForOffLease's doc comment for why this
  *  matters whenever a container has more than one row there. `remarks` and
  *  `personName` (OffLeaseModal, frontend): personName is who requested/
- *  handled this off-lease; remarks is optional free text. */
-export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = '', personName = '') {
+ *  handled this off-lease; remarks is optional free text. `userEmail`:
+ *  the authenticated caller (req.user.email), recorded on the Deployed
+ *  sheet's Email ID column — explicit request 2026-10-01, distinct from
+ *  `personName` above (free text, not necessarily this caller at all). */
+export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = '', personName = '', userEmail = '') {
   return withSheetLock(OL_SHEET, async () => {
     await _ensureOffLeaseSheet();
 
@@ -1452,10 +1455,12 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
     }
 
     // Also mark the Deployed sheet — removes it from Pending
+    await _ensureDeployedEmailIdHeader();
     const stamp = dmyTime(new Date());
     await batchUpdateValues([
       { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[stamp]] },
-      { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] }
+      { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${deployedTargetRow}`, values: [[userEmail || '']] }
     ]);
 
     /* MIRROR BOTH WRITES INTO MONGO IMMEDIATELY.
@@ -1486,7 +1491,7 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
          list and seed Stage 1's SLA clock. */
       await getCollection(SHEETS.DEPLOYED).updateOne(
         { key: `row_${deployedTargetRow - 2}` },
-        { $set: { 'row.21': stamp, 'row.22': 'Off-Lease' } }
+        { $set: { 'row.21': stamp, 'row.22': 'Off-Lease', [`row.${DEPLOYED_EMAIL_ID_COL}`]: userEmail || '' } }
       );
     } catch (e) {
       console.error('[OL-ADD] mirror update failed (reconcile will correct):', e?.message || e);
@@ -1781,10 +1786,15 @@ async function _createOffLeaseRecordFromFmsRow(containerNo, doRaw, clientNameHin
 
     const { rowNum } = await appendRow(OL_SHEET, newRow);
 
+    // 'Auto — FMS Stage 8', same non-human value as "Stage 1 User" above —
+    // this record was created by the FMS reconciliation job, not a person,
+    // so the Email ID column says so rather than attributing it to nobody.
+    await _ensureDeployedEmailIdHeader();
     const dStamp = dmyTime(new Date());
     await batchUpdateValues([
       { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[dStamp]] },
-      { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] }
+      { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${deployedTargetRow}`, values: [['Auto — FMS Stage 8']] }
     ]);
 
     try {
@@ -1797,7 +1807,7 @@ async function _createOffLeaseRecordFromFmsRow(containerNo, doRaw, clientNameHin
       }
       await getCollection(SHEETS.DEPLOYED).updateOne(
         { key: `row_${deployedTargetRow - 2}` },
-        { $set: { 'row.21': dStamp, 'row.22': 'Off-Lease' } }
+        { $set: { 'row.21': dStamp, 'row.22': 'Off-Lease', [`row.${DEPLOYED_EMAIL_ID_COL}`]: 'Auto — FMS Stage 8' } }
       );
     } catch (e) {
       console.error('[OL-AUTO-FMS] mirror update failed (reconcile will correct):', e?.message || e);
@@ -5819,12 +5829,14 @@ export async function saveOffLeaseRejectAndCancel(containerNo, userEmail, remark
     try {
       const { found: deployedRow, targetRow: deployedTargetRow } = await _lookupDeployedForOffLease(containerNo, undefined, undefined, clientName);
       if (deployedRow) {
+        await _ensureDeployedEmailIdHeader();
         await batchUpdateValues([
           { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [['']] },
-          { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['']] }
+          { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['']] },
+          { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${deployedTargetRow}`, values: [['']] }
         ]);
         try {
-          await getCollection(SHEETS.DEPLOYED).updateOne({ key: `row_${deployedTargetRow - 2}` }, { $set: { 'row.21': '', 'row.22': '' } });
+          await getCollection(SHEETS.DEPLOYED).updateOne({ key: `row_${deployedTargetRow - 2}` }, { $set: { 'row.21': '', 'row.22': '', [`row.${DEPLOYED_EMAIL_ID_COL}`]: '' } });
         } catch (e) { console.error('[OL-REJECT-CANCEL] Deployed mirror patch failed (reconcile will correct):', e?.message || e); }
       } else {
         console.error(`[OL-REJECT-CANCEL] Could not find a matching Deployed row for ${containerNo} / ${clientName} — Off-Lease Tracking row still cleared, but Lease Expiry may not show it again until this is fixed by hand.`);

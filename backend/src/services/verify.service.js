@@ -43,7 +43,7 @@ import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.ser
 import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
 import { sendMail } from './email.service.js';
-import { DEPLOYED_RAW_CACHE_KEY } from './expiry.service.js';
+import { DEPLOYED_RAW_CACHE_KEY, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
 
 /* getVerifyData cache — added 2026-08-26. Verify Lease was previously live
    on every call (an explicit, deliberate choice: manual spreadsheet edits
@@ -132,6 +132,7 @@ export async function updateLeasePeriod(containerNo, newDateString, userEmail, k
     const targetRow = _resolveDeployedRow(containerNo, rows, knownRow);
     if (targetRow === -1) throw new AppError(`Not found: ${containerNo}`);
 
+    await _ensureDeployedEmailIdHeader();
     const parts = String(newDateString).split('-');
     const newDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
     const newDateStr = safeStr(newDate);
@@ -143,7 +144,8 @@ export async function updateLeasePeriod(containerNo, newDateString, userEmail, k
       { range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[dmyTime(new Date())]] },
       { range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['Documents Pending']] },
       { range: `'${SHEETS.DEPLOYED}'!Y${targetRow}`, values: [['']] },
-      { range: `'${SHEETS.DEPLOYED}'!Z${targetRow}`, values: [['']] }
+      { range: `'${SHEETS.DEPLOYED}'!Z${targetRow}`, values: [['']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${targetRow}`, values: [[userEmail || '']] }
     ];
     await batchUpdateValues(updates);
     // Keep the Mongo mirror in step immediately — see patchMongoMirrorRow's
@@ -237,7 +239,11 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
     if (agreementUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(agrCol)}${targetRow}`, values: [[agreementUrl]] });
 
     if (agreementUrl) {
-      /* agreement uploaded -> fully renewed -> back to Pending for tracking */
+      /* agreement uploaded -> fully renewed -> back to Pending for tracking.
+         Email ID deliberately left untouched here — this is forward
+         progress (the renewal this column pair tracked is now complete),
+         not an undo, so whoever triggered the original Renew stays on
+         record. */
       updates.push({ range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [['']] });
       updates.push({ range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['']] });
     } else {
@@ -245,9 +251,12 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
          which hands this container from Renew & Document's "Renewed" tab
          into its "Documents" tab (comment corrected 2026-09-03 — this used
          to say "shows in Renew Pending", which was stale/wrong: the code
-         has always written 'Documents Pending' here, not 'Renewed'). */
+         has always written 'Documents Pending' here, not 'Renewed'). Email
+         ID recorded alongside it — explicit request 2026-10-01. */
+      await _ensureDeployedEmailIdHeader();
       updates.push({ range: `'${SHEETS.DEPLOYED}'!V${targetRow}`, values: [[dmyTime(new Date())]] });
       updates.push({ range: `'${SHEETS.DEPLOYED}'!W${targetRow}`, values: [['Documents Pending']] });
+      updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${targetRow}`, values: [[userEmail || '']] });
     }
 
     await batchUpdateValues(updates);
