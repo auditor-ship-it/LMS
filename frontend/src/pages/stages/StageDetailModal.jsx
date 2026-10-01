@@ -385,7 +385,20 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     <span className={styles.baseLabel}>{f.label}</span>
                     <span className={styles.baseValue}>
                       {f.link
-                        ? (data?.[f.key] ? <a href={data[f.key]} target="_blank" rel="noreferrer">View</a> : '—')
+                        ? (data?.[f.key]
+                          ? (
+                            <a
+                              className={styles.invFileBtn}
+                              href={data[f.key]}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={`Open ${f.label}`}
+                              aria-label={`Open ${f.label}`}
+                            >
+                              <Icon name="external" />
+                            </a>
+                          )
+                          : '—')
                         : f.key === 'col_1' && !data?.[f.key] && leaseIdPreview
                           ? `${leaseIdPreview} (auto)`
                           : (data?.[f.key] || '—')}
