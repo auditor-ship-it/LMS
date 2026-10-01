@@ -217,18 +217,18 @@ export async function getRefundEntries(userEmail) {
 export async function addRefundEntry(payload, userEmail) {
   await checkActionPermission('refunds', userEmail);
 
+  // User and Invoice Number no longer have required checks — explicit
+  // request 2026-10-01 removed both from the submission form entirely (this
+  // is an SD refund, not a vendor invoice tied to a named requester), so
+  // they're always blank from here on. Still read below (stays blank via
+  // safeStr) so old rows' data is untouched and neither column is going
+  // anywhere.
   const user = safeStr(payload.user).trim();
-  // Invoice Number no longer has a required check — explicit request
-  // 2026-10-01 removed it from the submission form entirely (this is an SD
-  // refund, not a vendor invoice), so it's always blank from here on. Still
-  // read below (stays blank via safeStr) so old rows' data is untouched and
-  // the column itself isn't going anywhere.
   const vendorName = safeStr(payload.vendorName).trim();
   const invoiceAmount = safeStr(payload.invoiceAmount).trim();
   const amountToPay = safeStr(payload.amountToPay).trim();
   const department = safeStr(payload.department).trim();
 
-  if (!user) throw new AppError('User is required');
   if (!vendorName) throw new AppError('Vendor Name is required');
   if (!invoiceAmount) throw new AppError('Invoice Amount is required');
   if (!amountToPay) throw new AppError('Amount to Pay is required');

@@ -19,26 +19,35 @@ const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
    form is Security Deposit refunds only now, so there's nothing to pick. */
 const FIXED_LEDGER_HEAD = 'Security Deposit Refundable';
 
-/* Explicit request 2026-10-01: Invoice Number/Date, Payment Type/Terms are no
-   longer collected from this form (SD refunds don't have a vendor invoice in
-   the traditional sense) — removed from EMPTY_FORM along with them. The sheet
-   still HAS these columns (REFUNDS_HEADERS unchanged, see refunds.service.js)
-   so old rows keep their data and nothing shifts column-wise; this form just
-   stops sending values for them (addRefundEntry already treats a missing
-   field as blank via safeStr). SD Amount to be Refunded/SD Calculation (the
-   old numeric fields) are removed the same way — superseded by the renamed
-   Invoice Amount/Invoice(file) fields below. */
-const EMPTY_FORM = {
-  user: '', billReceivedBy: '', vendorName: '',
-  invoiceAmount: '', amountToPay: '', paymentDueDate: '',
-  cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
-  department: '', invoiceFile: null, piFile: null, attachmentsFile: null
-};
+/* Explicit request 2026-10-01: Invoice Number/Date, Payment Type/Terms, User
+   and Bill Received Date are no longer collected from this form (SD refunds
+   don't have a vendor invoice in the traditional sense) — removed from
+   EMPTY_FORM along with them. The sheet still HAS these columns
+   (REFUNDS_HEADERS unchanged, see refunds.service.js) so old rows keep their
+   data and nothing shifts column-wise; this form just stops sending values
+   for them (addRefundEntry already treats a missing field as blank via
+   safeStr, and no longer requires User/Invoice Number either). SD Amount to
+   be Refunded/SD Calculation (the old numeric fields) are removed the same
+   way — superseded by the renamed Invoice Amount/Invoice(file) fields below. */
+function makeEmptyForm() {
+  return {
+    vendorName: '',
+    invoiceAmount: '', amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
+    cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
+    department: '', invoiceFile: null, piFile: null, attachmentsFile: null
+  };
+}
 
-/** Bill Received Date + 7 days, in <input type="date">'s "yyyy-MM-dd" shape —
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** `dateStr` + `days`, in <input type="date">'s "yyyy-MM-dd" shape —
  *  explicit request 2026-10-01 ("auto matically 7 days"): Payment Due Date no
- *  longer has Payment Terms to derive from (that field is gone from this
- *  form), so it's auto-filled from this fixed rule instead. Still a normal
+ *  longer has Payment Terms (or, since Bill Received Date was also hidden
+ *  from the form, a received date) to derive from, so it's auto-filled from
+ *  today + 7 at the moment the form is opened instead. Still a normal
  *  editable date input afterward, in case it needs correcting. */
 function addDays(dateStr, days) {
   if (!dateStr) return '';
@@ -90,20 +99,12 @@ export function RefundsPage() {
   const { data, loading, error, reload } = useAsync(() => (canView ? fetchRefunds() : Promise.resolve({ headers: [], data: [] })), [canView]);
   const rows = data?.data || [];
 
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(makeEmptyForm);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitOk, setSubmitOk] = useState(false);
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
-
-  /* Bill Received Date drives Payment Due Date's auto-fill (see addDays'
-     own doc comment) — still lets the date be edited afterward, same as a
-     normal field, this just seeds it instead of leaving it blank. */
-  const setBillReceivedBy = (e) => {
-    const billReceivedBy = e.target.value;
-    setForm((f) => ({ ...f, billReceivedBy, paymentDueDate: addDays(billReceivedBy, 7) }));
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -120,8 +121,6 @@ export function RefundsPage() {
         form.clientLedgerFile ? uploadStageFile(form.clientLedgerFile) : ''
       ]);
       await submitRefund({
-        user: form.user,
-        billReceivedBy: form.billReceivedBy,
         vendorName: form.vendorName,
         invoiceAmount: form.invoiceAmount,
         amountToPay: form.amountToPay,
@@ -131,7 +130,7 @@ export function RefundsPage() {
         invoiceFileUrl, piFileUrl, attachmentsUrl,
         cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl
       });
-      setForm(EMPTY_FORM);
+      setForm(makeEmptyForm());
       setSubmitOk(true);
       await reload();
     } catch (e2) {
@@ -153,14 +152,6 @@ export function RefundsPage() {
           <Card title="Submit a Bill">
             <form onSubmit={handleSubmit} className={styles.form}>
               <div className={styles.grid3}>
-                <label className={styles.field}>
-                  <span className={styles.label}>User *</span>
-                  <input type="text" value={form.user} onChange={set('user')} required />
-                </label>
-                <label className={styles.field}>
-                  <span className={styles.label}>Bill Received Date</span>
-                  <input type="date" value={form.billReceivedBy} onChange={setBillReceivedBy} />
-                </label>
                 <label className={styles.field}>
                   <span className={styles.label}>Department *</span>
                   <select value={form.department} onChange={set('department')} required>
