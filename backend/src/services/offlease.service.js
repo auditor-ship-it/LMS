@@ -2566,16 +2566,6 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       // upload field in this file.
       result[`col_${OL_CONTAINER_PHOTOS_COL}`] = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
 
-      /* Who created this Off-Lease request — explicit request 2026-10-01.
-         OL_TRACKING_PERSON_NAME_COL (304, "Off-Lease Requested By") is
-         already captured once, at creation time, by OffLeaseModal
-         (addToOffLeaseTracking) — the same column getOffLeaseContainerDetail
-         already surfaces on the "all stage data" report, just never shown
-         here on Stage 1's own form. Whatever was typed there (usually an
-         email, since that's how staff identify themselves elsewhere in this
-         app, but a free-text field, not a validated email column). */
-      result.createdBy = safeStr(row[OL_TRACKING_PERSON_NAME_COL]);
-
       /* "Sent back from Stage 1A" banner — explicit request 2026-10-01. See
          saveOffLeaseSendBackFromApproval's doc comment: Send Back writes
          'Sent Back' into the Intimation Approval Status column (a new VALUE
