@@ -143,10 +143,10 @@ export function RefundsPage() {
 
   return (
     <>
-      <PageHeader title="Refunds" subtitle="Off-Lease vendor bill submission" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
+      <PageHeader title="SD Refunds" subtitle="Security Deposit refund submission" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
 
       {!canView ? (
-        <Card><div className={styles.viewOnly}>You don't have access to Refunds. Ask an admin to grant it via Roles & Access.</div></Card>
+        <Card><div className={styles.viewOnly}>You don't have access to SD Refunds. Ask an admin to grant it via Roles & Access.</div></Card>
       ) : (
         <>
           {canSubmit && (

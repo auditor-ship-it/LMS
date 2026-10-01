@@ -65,7 +65,7 @@ export const NAV_TREE = {
     // sidebarKey added 2026-10-01 (explicit request). Real access is still
     // separately gated by the 'refunds' PERMISSION key (page renders
     // view-only without it) — this just controls menu visibility.
-    { key: 'refunds', label: 'Refunds', path: ROUTES.REFUNDS, icon: 'inbox', section: 'Reports', sidebarKey: 'refunds' },
+    { key: 'refunds', label: 'SD Refunds', path: ROUTES.REFUNDS, icon: 'inbox', section: 'Reports', sidebarKey: 'refunds' },
     // Own sidebar page, not inline actions on the Refunds page — explicit
     // request 2026-09-30, same "separate approval page" pattern as Renew
     // Approval Pending above. sidebarKey added 2026-10-01; real access to
