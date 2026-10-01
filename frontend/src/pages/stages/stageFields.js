@@ -438,18 +438,5 @@ export const BASE_FIELDS = [
   // day to every stage ("all stage fetch the transportation one way and
   // retrun way") — same enrichment fetch as orderNos above.
   { key: 'transportOneWay', label: 'Transportation One Way', source: 'enrichment' },
-  { key: 'transportReturnWay', label: 'Transportation Return Way', source: 'enrichment' },
-  // Explicit request 2026-10-01 ("the email ID that was used to create the
-  // Off-Lease request must always be visible"): col_15/col_16 are already
-  // fetched by the generic startCol..endCol loop (Stage 1's own range is
-  // 10-17) but never displayed — excluded from STAGE_FIELDS[1] by that
-  // file's own "no Timestamp/User/Status triplet" rule since they're not
-  // submittable, not because they're not worth showing. col_16 is the
-  // AUTHENTICATED user's email, stamped server-side the moment Stage 1 is
-  // actually submitted (saveOffLeaseStage) — reliable, unlike the free-text
-  // "Created By" (OL_TRACKING_PERSON_NAME_COL) field this replaced, which
-  // showed values like "Customer"/"tetsing" instead of a real email and was
-  // removed the same day for exactly that reason.
-  { key: 'col_15', label: 'Stage 1 Timestamp', onlyStage: 1 },
-  { key: 'col_16', label: 'Stage 1 User', onlyStage: 1 }
+  { key: 'transportReturnWay', label: 'Transportation Return Way', source: 'enrichment' }
 ];
