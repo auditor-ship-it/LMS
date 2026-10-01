@@ -19,6 +19,10 @@
 .field select:focus,
 .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
+/* Fixed Ledger Head — explicit request 2026-10-01: this form is Security
+   Deposit refunds only now, so the value is locked, not user-editable. */
+.field input:disabled { background: var(--surface-2); color: var(--text-2); cursor: not-allowed; }
+
 /* Hide the native up/down spinner on amount fields — explicit request
    2026-09-30 (also paired with an onWheel blur in the component, since the
    scroll-to-change-value behavior on a number input persists even with the
