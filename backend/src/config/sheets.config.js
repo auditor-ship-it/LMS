@@ -71,12 +71,14 @@ export const SHEETS = {
   INVOICE_PO: ' Invoice PO',
 
   /* "Refunds" / off-lease bill submission form — added 2026-09-30 (explicit
-     request). A brand new, previously-empty tab (gid 1778430415); trailing
-     space in the tab name is real, not a typo — confirmed via spreadsheets.get,
-     same quirk as INVOICE_PO's leading space above. Created on first save by
-     refunds.service.js, same "append first, create sheet only on failure"
-     pattern as every other append-only log in this file. */
-  REFUNDS: 'Offlease Bills ',
+     request), gid 1778430415. Fixed 2026-10-01: this was 'Offlease Bills '
+     (trailing space) — re-checked live via spreadsheets.get while wiring the
+     no-login review links and the actual tab at this gid is 'Offlease Bills'
+     with no trailing space, so every live read/write against this constant
+     was failing to resolve the range. Whatever a prior spreadsheets.get
+     check saw no longer holds; trust a fresh check over this comment if it
+     ever looks wrong again. */
+  REFUNDS: 'Offlease Bills',
 
   /* Sales order-intake form responses (Google Form-linked, ~137 columns,
      Quotation No/Customer/container/PO/billing detail) — added 2026-09-30

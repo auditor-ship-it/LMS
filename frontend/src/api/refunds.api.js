@@ -16,3 +16,18 @@ export const createRefund = (payload) => apiClient.post('/refunds', payload).the
  *  'hod' | 'ceo' | 'accounts', `decision` is 'approved' | 'rejected'. */
 export const decideRefundApproval = ({ rowNum, stage, decision, remarks }) =>
   apiClient.post('/refunds/decide-approval', { rowNum, stage, decision, remarks }).then((r) => r.data.result);
+
+/* -- No-login review link (explicit request 2026-10-01) ------------------
+   Reached only via the signed ?rowNum=&stage=&token= link written into the
+   sheet's HOD/CEO/Accounts "Review Link" columns — apiClient sends no
+   Authorization header here since no token is stored in this tab, same as
+   any other anonymous visitor; the link's own token is the real credential,
+   carried in the query/body instead. */
+
+/** GET /api/refund-review — fetch the one entry this link points at. */
+export const getRefundReviewEntry = ({ rowNum, stage, token }) =>
+  apiClient.get('/refund-review', { params: { rowNum, stage, token } }).then((r) => r.data);
+
+/** POST /api/refund-review/decide — approve/reject via the signed link. */
+export const decideRefundReview = ({ rowNum, stage, token, decision, remarks }) =>
+  apiClient.post('/refund-review/decide', { rowNum, stage, token, decision, remarks }).then((r) => r.data.result);

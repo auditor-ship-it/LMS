@@ -291,7 +291,7 @@ export async function addRefundEntry(payload, userEmail) {
     await appendMongoMirrorRow(REFUNDS_SHEET, row);
 
     try {
-      await _sendRefundStageEmail('pending', 'hod', row, rowNum);
+      await _sendRefundStageEmail('pending', 'hod', row, rowNum, { reviewLink: hodLink });
     } catch (e) { console.error('[REFUND-APPROVAL-EMAIL]', e.message); }
 
     return { message: 'SAVED', entry: _mapRow(row, rowNum ?? null) };
@@ -342,8 +342,18 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     // Approving hands it to the next stage by marking THAT stage 'Pending' —
     // this is the only place that ever happens, so "which stage is
     // actionable" always falls out of reading the Status columns themselves.
+    // Mint the next stage's no-login review link now, same moment it becomes
+    // actionable — explicit request 2026-10-01 ("as soon as a entry comes in
+    // the CO approval there should be a link... in the same manner how is it
+    // working right now like if the HOD approval is done only then it will
+    // be added in the C approval").
+    let nextLink = null;
     if (decision === 'approved' && cfg.next) {
       updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[cfg.next].statusCol)}${rowNum}`, values: [['Pending']] });
+      nextLink = _mintRefundReviewLink(rowNum, cfg.next);
+      if (nextLink) {
+        updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[cfg.next].reviewLinkCol)}${rowNum}`, values: [[nextLink]] });
+      }
     }
 
     await batchUpdateValues(updates);
@@ -358,13 +368,16 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     updatedRow[cfg.remarksCol] = remarks || '';
     updatedRow[cfg.dateCol] = stamp;
     updatedRow[cfg.approverCol] = callerEmail || '';
-    if (decision === 'approved' && cfg.next) updatedRow[STAGES[cfg.next].statusCol] = 'Pending';
+    if (decision === 'approved' && cfg.next) {
+      updatedRow[STAGES[cfg.next].statusCol] = 'Pending';
+      if (nextLink) updatedRow[STAGES[cfg.next].reviewLinkCol] = nextLink;
+    }
 
     try {
       if (decision === 'rejected') {
         await _sendRefundStageEmail('rejected', stage, updatedRow, rowNum, { remarks });
       } else if (cfg.next) {
-        await _sendRefundStageEmail('pending', cfg.next, updatedRow, rowNum);
+        await _sendRefundStageEmail('pending', cfg.next, updatedRow, rowNum, { reviewLink: nextLink });
       } else {
         await _sendRefundStageEmail('completed', stage, updatedRow, rowNum);
       }
@@ -372,6 +385,35 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
 
     return 'OK';
   });
+}
+
+/**
+ * No-login read for the review page (RefundReviewPage.jsx) — verifies the
+ * signed token, then live-reads the row exactly like the session-authenticated
+ * path above (same write-path convention: fresh read, not the Mongo mirror,
+ * since a decision may follow immediately after).
+ */
+export async function getRefundEntryForReview(rowNum, stage, token) {
+  const cfg = STAGES[stage];
+  if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
+  _verifyRefundReviewToken(token, rowNum, stage);
+
+  const { rows } = await getSheetData(REFUNDS_SHEET);
+  const row = rows[rowNum - 2];
+  if (!row) throw notFound(`Refund entry row ${rowNum} not found`);
+  return _mapRow(row, rowNum);
+}
+
+/**
+ * No-login decision for the review page — the verified token IS the
+ * authorization (see decideRefundApproval's opts.skipPermissionCheck doc
+ * comment above), so this never calls checkActionPermission.
+ */
+export async function decideRefundApprovalViaLink(rowNum, stage, decision, remarks, token) {
+  const cfg = STAGES[stage];
+  if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
+  _verifyRefundReviewToken(token, rowNum, stage);
+  return decideRefundApproval(rowNum, stage, decision, remarks, `${cfg.label} (via review link)`, { skipPermissionCheck: true });
 }
 
 // Points at the dedicated approval page (RefundsApprovalPage.jsx), not the
@@ -406,10 +448,17 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
    * stage that actually needs to act — explicit request 2026-09-30 ("click
    * the link then... open only all data and remarks and approval and
    * reject"). Only meaningful for 'pending' (an action is actually waiting);
-   * rejected/completed link to the plain page, nothing left to decide. */
-  const actionUrl = kind === 'pending' && rowNum
-    ? `${REFUND_EMAIL_APP_URL}?rowNum=${rowNum}&stage=${stage}`
-    : REFUND_EMAIL_APP_URL;
+   * rejected/completed link to the plain page, nothing left to decide.
+   *
+   * Prefers extra.reviewLink (the no-login signed link minted alongside this
+   * stage going Pending — explicit request 2026-10-01) and only falls back
+   * to the old session-required deep link when REFUND_REVIEW_SECRET is unset
+   * (see env.js's comment on that var's graceful-degradation convention). */
+  const actionUrl = extra.reviewLink
+    ? extra.reviewLink
+    : kind === 'pending' && rowNum
+      ? `${REFUND_EMAIL_APP_URL}?rowNum=${rowNum}&stage=${stage}`
+      : REFUND_EMAIL_APP_URL;
   const fields = [
     ['User', entry.user],
     ['Invoice Number', entry.invoiceNumber],
