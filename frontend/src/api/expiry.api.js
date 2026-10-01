@@ -25,6 +25,14 @@ export const refreshSalePersons = () =>
 export const saveExpiryAction = (rowId, timestamp, status, rowNum) =>
   apiClient.post('/expiry/action', { rowId, timestamp, status, rowNum }).then((r) => r.data.result);
 
+/** POST /api/expiry/action-sync — same as saveExpiryAction above, but waits
+ *  for the real Google Sheets write (not the Mongo-first Fast path) before
+ *  resolving. Use ONLY when the very next call needs a live Sheets read to
+ *  already see this result (see LeaseExpiryPage.jsx's buildRenewPayload) —
+ *  everywhere else, the plain saveExpiryAction above is faster and correct. */
+export const saveExpiryActionSync = (rowId, timestamp, status, rowNum) =>
+  apiClient.post('/expiry/action-sync', { rowId, timestamp, status, rowNum }).then((r) => r.data.result);
+
 /** POST /api/expiry/remark — save / clear the Lease Expiry comment for one
  *  Deployed row. Resolves to { result, remark }. Always pass `rowNum`
  *  (item._rowNum) — same exact-row rule as saveExpiryAction. */
