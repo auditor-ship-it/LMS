@@ -2598,32 +2598,33 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result.orderNos = '';
     }
 
-    /* Stage 1 (Off-Lease Intimation) only — explicit request 2026-10-01:
-       "fetch order no wise stage 1 sheet... Transportation One Way,
-       Transportation Return Way". SHEETS.STAGE1_ORDER_FORM is the original
-       sales order-intake form (~137 cols) these two columns live on, joined
-       here by Order No (its "Order Received Number" column uses the same
-       OR### numbering _findLeaseInfoForContainer resolves above, once an
-       order has converted from a quotation — confirmed live: New Lease's
-       OR458 matches Stage 1 row with Order Received Number "OR458").
-       Header-resolved, not hardcoded indices, same reasoning as every other
-       cross-sheet lookup here. Best-effort/blank on no match, same as above. */
-    if (Number(stage) === 1) {
-      try {
-        const { headers: s1Headers, rows: s1Rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
-        const orderRecvCol = s1Headers.findIndex((h) => /order received number/i.test(String(h || '')));
-        const oneWayCol = s1Headers.findIndex((h) => /transportation one way/i.test(String(h || '')));
-        const returnWayCol = s1Headers.findIndex((h) => /transportation return way/i.test(String(h || '')));
-        const wantOrders = new Set(leaseOrders.map((o) => safeStr(o).trim().toUpperCase()));
-        const s1Row = orderRecvCol >= 0 && wantOrders.size
-          ? s1Rows.find((r) => wantOrders.has(safeStr(r[orderRecvCol]).trim().toUpperCase()))
-          : null;
-        result.transportOneWay = s1Row && oneWayCol >= 0 ? fmtNumCell(s1Row[oneWayCol]) : '';
-        result.transportReturnWay = s1Row && returnWayCol >= 0 ? fmtNumCell(s1Row[returnWayCol]) : '';
-      } catch (e) {
-        result.transportOneWay = '';
-        result.transportReturnWay = '';
-      }
+    /* Explicit request 2026-10-01: "fetch order no wise stage 1 sheet...
+       Transportation One Way, Transportation Return Way" — originally Stage
+       1 only, widened the same day ("all stage fetch the transportation one
+       way and retrun way") to every stage's card, not just Stage 1's. These
+       two columns don't change per stage (they describe the container's one
+       shipment, not a per-stage fact), so the lookup itself is unchanged —
+       only the `if (Number(stage) === 1)` gate that used to wrap it is gone.
+       SHEETS.STAGE1_ORDER_FORM is the original sales order-intake form
+       (~137 cols) these two columns live on, joined here by Order No (its
+       "Order Received Number" column uses the same OR### numbering resolved
+       above). Header-resolved, not hardcoded indices, same reasoning as
+       every other cross-sheet lookup here. Best-effort/blank on no match,
+       same as above. */
+    try {
+      const { headers: s1Headers, rows: s1Rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
+      const orderRecvCol = s1Headers.findIndex((h) => /order received number/i.test(String(h || '')));
+      const oneWayCol = s1Headers.findIndex((h) => /transportation one way/i.test(String(h || '')));
+      const returnWayCol = s1Headers.findIndex((h) => /transportation return way/i.test(String(h || '')));
+      const wantOrders = new Set(leaseOrders.map((o) => safeStr(o).trim().toUpperCase()));
+      const s1Row = orderRecvCol >= 0 && wantOrders.size
+        ? s1Rows.find((r) => wantOrders.has(safeStr(r[orderRecvCol]).trim().toUpperCase()))
+        : null;
+      result.transportOneWay = s1Row && oneWayCol >= 0 ? fmtNumCell(s1Row[oneWayCol]) : '';
+      result.transportReturnWay = s1Row && returnWayCol >= 0 ? fmtNumCell(s1Row[returnWayCol]) : '';
+    } catch (e) {
+      result.transportOneWay = '';
+      result.transportReturnWay = '';
     }
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);

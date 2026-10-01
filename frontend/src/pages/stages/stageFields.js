@@ -432,9 +432,9 @@ export const BASE_FIELDS = [
   { key: 'agreementUrl', label: 'Agreement PDF', link: true },
   { key: 'poPdfUrl', label: 'PO PDF', link: true },
   // Explicit request 2026-10-01 ("fetch order no wise stage 1 sheet...
-  // transportation one way, transportation return way") — only resolved by
-  // getOffLeaseStageDetail for Stage 1 (Off-Lease Intimation), so only shown
-  // there; `onlyStage` is filtered in StageDetailModal.jsx's BASE_FIELDS block.
-  { key: 'transportOneWay', label: 'Transportation One Way', onlyStage: 1 },
-  { key: 'transportReturnWay', label: 'Transportation Return Way', onlyStage: 1 }
+  // transportation one way, transportation return way"), widened the same
+  // day to every stage ("all stage fetch the transportation one way and
+  // retrun way") — getOffLeaseStageDetail resolves these for every stage now.
+  { key: 'transportOneWay', label: 'Transportation One Way' },
+  { key: 'transportReturnWay', label: 'Transportation Return Way' }
 ];
