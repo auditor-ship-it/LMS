@@ -1077,18 +1077,32 @@ async function _findOrderNosForContainer(want) {
  *  cell, not a strict split: that column's real data mixes commas, dashes
  *  and stray spaces as separators inconsistently (confirmed live), so an
  *  exact tokenizer would miss real matches more often than a loose
- *  containment check would false-positive on fixed-format container codes. */
-async function _lookupStage9OrderNos(containerNo) {
+ *  containment check would false-positive on fixed-format container codes.
+ *
+ *  `clientName` disambiguates a reused container number — explicit request
+ *  2026-10-01 ("match the Customer Name"), found live: SZLU9181535 has 3
+ *  STAGE-9 rows, and without a client filter an unrelated customer's order
+ *  on the same container number could get mixed in with Chemplast Sanmar
+ *  Limited's own OR443. Reuses clientMatches (stage8.service.js) — the same
+ *  tolerant-but-not-alias-fooled comparison every other FMS lookup in this
+ *  file already uses, same "prefer client-matched, fall back to
+ *  container-only if that filters out everything" rescue as matchByContainer. */
+async function _lookupStage9OrderNos(containerNo, clientName) {
   const want = normKey(containerNo);
   if (!want) return [];
   const { headers, rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
   const contCol = headers.findIndex((h) => /container number/i.test(String(h || '')));
   const ordCol = headers.findIndex((h) => /order received number/i.test(String(h || '')));
+  const custCol = headers.findIndex((h) => /customer name/i.test(String(h || '')));
   if (contCol < 0 || ordCol < 0) return [];
+  const hits = rows.filter((r) => normKey(r[contCol]).includes(want));
+  const picked = clientName && custCol >= 0
+    ? hits.filter((r) => clientMatches(safeStr(r[custCol]), clientName))
+    : [];
+  const chosen = picked.length ? picked : hits;
   const seen = new Set();
   const orders = [];
-  for (const r of rows) {
-    if (!normKey(r[contCol]).includes(want)) continue;
+  for (const r of chosen) {
     const o = safeStr(r[ordCol]).trim();
     if (o && !seen.has(o)) { seen.add(o); orders.push(o); }
   }
@@ -2577,7 +2591,7 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
        needs these same order numbers) still runs even if it itself fails. */
     let leaseOrders = [];
     try {
-      leaseOrders = await _lookupStage9OrderNos(containerNo);
+      leaseOrders = await _lookupStage9OrderNos(containerNo, safeStr(row[5]));
       if (!leaseOrders.length) leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
       result.orderNos = leaseOrders.join(', ');
     } catch (e) {
