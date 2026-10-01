@@ -180,7 +180,7 @@ export function RefundsPage() {
                   <input type="number" step="0.01" value={form.invoiceAmount} onChange={set('invoiceAmount')} onWheel={(e) => e.target.blur()} required />
                 </label>
                 <label className={styles.field}>
-                  <span className={styles.label}>Amount to Pay *</span>
+                  <span className={styles.label}>SD Amount to be Refunded *</span>
                   <input type="number" step="0.01" value={form.amountToPay} onChange={set('amountToPay')} onWheel={(e) => e.target.blur()} required />
                 </label>
               </div>
