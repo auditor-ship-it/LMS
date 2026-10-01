@@ -2532,7 +2532,7 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
        silently pre-fill a DIFFERENT lease's data for the same container.
        knownRow (item._rowNum from whichever list the caller opened this
        from) is now required to land on the exact row that was clicked. */
-    const { rows } = await getSheetDataFromMongo(OL_SHEET);
+    const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
     const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${safeStr(containerNo)}`);
     const info = OL_STAGE_INFO[stage];
@@ -2565,6 +2565,36 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       // safeStr, not fmtCell — a Drive URL, same reasoning as every other
       // upload field in this file.
       result[`col_${OL_CONTAINER_PHOTOS_COL}`] = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
+
+      /* Who created this Off-Lease request — explicit request 2026-10-01.
+         OL_TRACKING_PERSON_NAME_COL (304, "Off-Lease Requested By") is
+         already captured once, at creation time, by OffLeaseModal
+         (addToOffLeaseTracking) — the same column getOffLeaseContainerDetail
+         already surfaces on the "all stage data" report, just never shown
+         here on Stage 1's own form. Whatever was typed there (usually an
+         email, since that's how staff identify themselves elsewhere in this
+         app, but a free-text field, not a validated email column). */
+      result.createdBy = safeStr(row[OL_TRACKING_PERSON_NAME_COL]);
+
+      /* "Sent back from Stage 1A" banner — explicit request 2026-10-01. See
+         saveOffLeaseSendBackFromApproval's doc comment: Send Back writes
+         'Sent Back' into the Intimation Approval Status column (a new VALUE
+         there, not a new column), cleared back to blank once Stage 1 is
+         resubmitted (saveOffLeaseStage's stage-1 branch) — so this is only
+         ever true for a send-back that hasn't been addressed yet. */
+      const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+      const apTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+      const apUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+      const apRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+      const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim() : '';
+      if (apStatus.toLowerCase() === 'sent back') {
+        result._sentBackFrom1A = {
+          active: true,
+          remark: apRemarkCol >= 0 ? safeStr(row[apRemarkCol]) : '',
+          timestamp: apTimestampCol >= 0 ? safeStr(row[apTimestampCol]) : '',
+          by: apUserCol >= 0 ? safeStr(row[apUserCol]) : ''
+        };
+      }
     }
 
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
@@ -2956,7 +2986,7 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
-    const { rows } = await getSheetData(OL_SHEET);
+    const { headers, rows } = await getSheetData(OL_SHEET);
     const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
     const info = OL_STAGE_INFO[stage];
@@ -3015,6 +3045,25 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
     cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol)}${rn}`, values: [['Completed']] });
     cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [[stamp]] });
     cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(info.statusCol - 1)}${rn}`, values: [[userEmail || '']] });
+
+    /* Clear any "Sent Back" marker left on the Intimation Approval columns —
+       see saveOffLeaseSendBackFromApproval's doc comment: resubmitting Stage
+       1 is exactly what it means to have "addressed" a send-back, so the
+       banner stops showing and Pushpa's queue can decide on this fresh
+       submission again (the ALREADY_PROCESSED guard in
+       saveOffLeaseApprovalAction(Fast) needs this column blank to allow
+       that). A no-op for a brand-new intimation, where these are already
+       blank. */
+    let apStatusCol = -1, apTimestampCol = -1, apUserCol = -1, apRemarkCol = -1;
+    if (stageNum === 1) {
+      apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+      apTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+      apUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+      apRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+      for (const c of [apStatusCol, apTimestampCol, apUserCol, apRemarkCol]) {
+        if (c >= 0) cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] });
+      }
+    }
     await batchUpdateValues(cellUpdates);
 
     /* Mirror the same cells into Mongo immediately.
@@ -3040,6 +3089,9 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
       mirrored[`row.${info.statusCol - 2}`] = stamp;
       mirrored[`row.${info.statusCol - 1}`] = userEmail || '';
       if (assignedLeaseId) mirrored['row.1'] = assignedLeaseId;
+      for (const c of [apStatusCol, apTimestampCol, apUserCol, apRemarkCol]) {
+        if (c >= 0) mirrored[`row.${c}`] = '';
+      }
 
       /* Keyed by POSITION, not container number. This sheet's mirror is
          configured naturalKeyColumn:null / fullRefresh:true precisely because
@@ -5834,7 +5886,7 @@ export async function saveOffLeaseSendBackFromApproval(containerNo, userEmail, r
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     await _ensureOffLeaseSheet();
-    const { rows } = await getSheetData(OL_SHEET);
+    const { headers, rows } = await getSheetData(OL_SHEET);
     const rn = _resolveOlRow(rows, containerNo, knownRow);
     if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
 
@@ -5850,12 +5902,36 @@ export async function saveOffLeaseSendBackFromApproval(containerNo, userEmail, r
       { range: `'${OL_SHEET}'!${colLetter(stage1StatusCol)}${rn}`, values: [['']] },
       { range: `'${OL_SHEET}'!${colLetter(14)}${rn}`, values: [[rmk]] }
     ];
+    const mirrorPatch = { [`row.${stage1StatusCol}`]: '', 'row.14': rmk };
+
+    /* Mark it on the Intimation Approval columns too — explicit request
+       2026-10-01 ("show the send-back remark and clearly indicate that the
+       request was sent back from Stage 1A"), reusing the SAME real sheet
+       columns the Approve/Reject decision already writes (no new columns —
+       see getOffLeaseStageDetail's Stage 1 doc comment for the read side).
+       'Sent Back' is a new value alongside the existing Approved/Rejected,
+       not a new column. Cleared back to blank the moment Stage 1 is
+       resubmitted (see saveOffLeaseStage's stage-1 branch) so the banner
+       disappears once addressed and Pushpa's queue can decide on it again —
+       the "ALREADY_PROCESSED" guard in saveOffLeaseApprovalAction(Fast)
+       depends on this column going back to blank, same as it would after a
+       brand-new, never-yet-decided Stage 1 submission. */
+    const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+    const apTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+    const apUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+    const apRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+    const apStamp = dmyTime(new Date());
+    if (apStatusCol >= 0) { cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(apStatusCol)}${rn}`, values: [['Sent Back']] }); mirrorPatch[`row.${apStatusCol}`] = 'Sent Back'; }
+    if (apTimestampCol >= 0) { cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(apTimestampCol)}${rn}`, values: [[apStamp]] }); mirrorPatch[`row.${apTimestampCol}`] = apStamp; }
+    if (apUserCol >= 0) { cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(apUserCol)}${rn}`, values: [[userEmail || '']] }); mirrorPatch[`row.${apUserCol}`] = userEmail || ''; }
+    if (apRemarkCol >= 0) { cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(apRemarkCol)}${rn}`, values: [[rmk]] }); mirrorPatch[`row.${apRemarkCol}`] = rmk; }
+
     await batchUpdateValues(cellUpdates);
 
     try {
       await getCollection(OL_SHEET).updateOne(
         { key: `row_${rn - 2}` },
-        { $set: { [`row.${stage1StatusCol}`]: '', 'row.14': rmk, updatedAt: new Date() } }
+        { $set: { ...mirrorPatch, updatedAt: new Date() } }
       );
     } catch (e) {
       console.error('[OL-SEND-BACK] mirror patch failed (reconcile will correct):', e?.message || e);

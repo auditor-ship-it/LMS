@@ -388,13 +388,12 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
           {!loading && !error && !justSaved && (
             <form onSubmit={handleSubmit}>
               <div className={styles.baseGrid}>
-                {BASE_FIELDS.map((f) => {
-                  // Order No/Agreement PDF/PO PDF/Transportation One Way &
-                  // Return Way come from the separate, slower enrichment
-                  // fetch (see the useAsync call above) rather than `data` —
-                  // every other BASE_FIELDS key is a plain col_N from the
-                  // fast stage-detail fetch.
-                  const fromEnrichment = !f.key.startsWith('col_');
+                {BASE_FIELDS.filter((f) => !f.onlyStage || f.onlyStage === stageNumber).map((f) => {
+                  // source: 'enrichment' fields come from the separate,
+                  // slower enrichment fetch (see the useAsync call above)
+                  // rather than `data` — everything else (including col_N
+                  // and createdBy) comes from the fast stage-detail fetch.
+                  const fromEnrichment = f.source === 'enrichment';
                   const val = fromEnrichment ? enrichment?.[f.key] : data?.[f.key];
                   return (
                   <div key={f.key} className={styles.baseItem}>
@@ -423,6 +422,25 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   );
                 })}
               </div>
+
+              {/* Explicit request 2026-10-01: "if a request is sent back from
+                  Stage 1A, show the send-back remark and clearly indicate
+                  that the request was sent back from Stage 1A". Set by
+                  getOffLeaseStageDetail (Stage 1 only) from the Intimation
+                  Approval columns' 'Sent Back' marker — see that function's
+                  own doc comment. Purely informational (unlike SendBackPanel
+                  below, there's nothing to undo here — fixing and
+                  resubmitting Stage 1 itself is what clears this). */}
+              {!!data?._sentBackFrom1A?.active && (
+                <div className={styles.savedPanel}>
+                  <p className={styles.savedTitle}>Sent back from Stage 1A (Intimation Approval)</p>
+                  <p className={styles.savedHint}>
+                    {data._sentBackFrom1A.remark || 'No remark given.'}
+                    {data._sentBackFrom1A.by ? ` — by ${data._sentBackFrom1A.by}` : ''}
+                    {data._sentBackFrom1A.timestamp ? ` on ${data._sentBackFrom1A.timestamp}` : ''}
+                  </p>
+                </div>
+              )}
 
               {/* This record was placed here directly by a Stage 2 "Move To
                   Stage" jump (either reason), not by working through the
