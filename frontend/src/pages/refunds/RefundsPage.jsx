@@ -74,9 +74,14 @@ function addDays(dateStr, days) {
    label collision with columns 8/12 below (now renamed to the same words)
    reflects that these are now two different sheet columns sharing a label,
    not a bug to silently hide. */
+/* User/Invoice Number/Invoice Date/Bill Received By dropped from this list
+   entirely (not just renamed) — explicit request 2026-10-01 ("not show
+   frontend"): these are the same fields removed from the submission form
+   earlier today, so every row is permanently blank for them going forward;
+   showing empty columns forever is just clutter. Old rows' data in those
+   sheet columns is untouched, just no longer displayed here. */
 const TABLE_HEADERS = [
-  'Timestamp', 'Submitted By Email', 'User', 'Invoice Number', 'Invoice Date',
-  'Bill Received By', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
+  'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
   'Payment Due Date', 'Payment Type', 'Payment Terms', 'SD Calculation',
   'Quarterly Ledger', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded',
@@ -275,10 +280,6 @@ export function RefundsPage() {
                 renderRow={(_values, r) => [
                   <td key="ts">{r.timestamp}</td>,
                   <td key="ue">{r.userEmail}</td>,
-                  <td key="u">{r.user}</td>,
-                  <td key="in">{r.invoiceNumber}</td>,
-                  <td key="id">{r.invoiceDate}</td>,
-                  <td key="br">{r.billReceivedBy}</td>,
                   <td key="vn">{r.vendorName}</td>,
                   <td key="ia">{r.invoiceAmount}</td>,
                   <td key="ap">{r.amountToPay}</td>,

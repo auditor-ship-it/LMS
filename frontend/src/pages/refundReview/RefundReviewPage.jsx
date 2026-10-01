@@ -112,11 +112,7 @@ export function RefundReviewPage() {
           ) : (
             <>
               <div className={refundsStyles.grid3}>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>User</span><span>{entry.user}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Vendor</span><span>{entry.vendorName}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Invoice Number</span><span>{entry.invoiceNumber}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Invoice Date</span><span>{entry.invoiceDate || '—'}</span></div>
-                <div className={refundsStyles.field}><span className={refundsStyles.label}>Bill Received By</span><span>{entry.billReceivedBy || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount</span><span>{entry.invoiceAmount}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount to be Refunded</span><span>{entry.amountToPay}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Payment Due Date</span><span>{entry.paymentDueDate || '—'}</span></div>

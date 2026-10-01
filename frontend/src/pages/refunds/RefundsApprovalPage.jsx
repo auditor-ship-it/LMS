@@ -34,10 +34,12 @@ function Link({ url }) {
    (RefundsPage.jsx) — explicit request 2026-10-01: "table header name hasn't
    changed". See that file's own TABLE_HEADERS comment for why columns
    16/17's labels below collide with the renamed 8/12 — same two now-distinct
-   sheet columns sharing a word, not a bug. */
+   sheet columns sharing a word, not a bug. User/Invoice Number/Invoice
+   Date/Bill Received By dropped entirely (not renamed) the same day ("not
+   show frontend") — removed from the submission form, so permanently blank
+   going forward; see that file's identical TABLE_HEADERS change. */
 const BASE_HEADERS = [
-  'Timestamp', 'Submitted By Email', 'User', 'Invoice Number', 'Invoice Date',
-  'Bill Received By', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
+  'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
   'Payment Due Date', 'Payment Type', 'Payment Terms', 'SD Calculation',
   'Quarterly Ledger', 'Department', 'Ledger Head', 'SD Amount to be Refunded', 'SD Calculation',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
@@ -141,11 +143,7 @@ export function RefundsApprovalPage() {
                 ) : (
                   <>
                     <div className={styles.grid3}>
-                      <div className={styles.field}><span className={styles.label}>User</span><span>{reviewRow.user}</span></div>
                       <div className={styles.field}><span className={styles.label}>Vendor</span><span>{reviewRow.vendorName}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Invoice Number</span><span>{reviewRow.invoiceNumber}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Invoice Date</span><span>{reviewRow.invoiceDate || '—'}</span></div>
-                      <div className={styles.field}><span className={styles.label}>Bill Received By</span><span>{reviewRow.billReceivedBy || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Amount</span><span>{reviewRow.invoiceAmount}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Amount to be Refunded</span><span>{reviewRow.amountToPay}</span></div>
                       <div className={styles.field}><span className={styles.label}>Payment Due Date</span><span>{reviewRow.paymentDueDate || '—'}</span></div>
@@ -222,10 +220,6 @@ export function RefundsApprovalPage() {
                 renderRow={(_values, r) => [
                   <td key="ts">{r.timestamp}</td>,
                   <td key="ue">{r.userEmail}</td>,
-                  <td key="u">{r.user}</td>,
-                  <td key="in">{r.invoiceNumber}</td>,
-                  <td key="id">{r.invoiceDate}</td>,
-                  <td key="br">{r.billReceivedBy}</td>,
                   <td key="vn">{r.vendorName}</td>,
                   <td key="ia">{r.invoiceAmount}</td>,
                   <td key="ap">{r.amountToPay}</td>,
