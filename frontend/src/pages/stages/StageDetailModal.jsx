@@ -388,7 +388,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
           {!loading && !error && !justSaved && (
             <form onSubmit={handleSubmit}>
               <div className={styles.baseGrid}>
-                {BASE_FIELDS.map((f) => {
+                {BASE_FIELDS.filter((f) => !f.onlyStage || f.onlyStage === stageNumber).map((f) => {
                   // source: 'enrichment' fields come from the separate,
                   // slower enrichment fetch (see the useAsync call above)
                   // rather than `data` — everything else (including col_N

@@ -2858,9 +2858,18 @@ export async function getOffLeaseCardEnrichment(containerNo, user, knownRow) {
     const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
     result.agreementUrl = dRow ? safeStr(dRow[agrCol]) : '';
     result.poPdfUrl = dRow ? safeStr(dRow[poPdfCol]) : '';
+    // Explicit request 2026-10-01 ("this email fetch the stage 1") — the
+    // Deployed sheet's own Email ID column (49, see expiry.service.js's
+    // DEPLOYED_EMAIL_ID_COL), captured at the moment this container was
+    // actually marked Off-Lease/Renewed from Lease Expiry. More reliable
+    // than OL_SHEET's own "Stage 1 User" (only set once Stage 1's FORM is
+    // submitted, a separate later step) for "who created this request".
+    // Same dRow already resolved above, no extra lookup.
+    result.deployedEmailId = dRow ? safeStr(dRow[DEPLOYED_EMAIL_ID_COL]) : '';
   } catch (e) {
     result.agreementUrl = '';
     result.poPdfUrl = '';
+    result.deployedEmailId = '';
   }
 
   /* Order No — explicit request 2026-10-01 ("show order no offlease").

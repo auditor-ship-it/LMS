@@ -438,5 +438,12 @@ export const BASE_FIELDS = [
   // day to every stage ("all stage fetch the transportation one way and
   // retrun way") — same enrichment fetch as orderNos above.
   { key: 'transportOneWay', label: 'Transportation One Way', source: 'enrichment' },
-  { key: 'transportReturnWay', label: 'Transportation Return Way', source: 'enrichment' }
+  { key: 'transportReturnWay', label: 'Transportation Return Way', source: 'enrichment' },
+  // Explicit request 2026-10-01 ("this email fetch the stage 1") — the
+  // Deployed sheet's own "Email ID" column (captured when this container was
+  // actually marked Off-Lease/Renewed from Lease Expiry), not OL_SHEET's own
+  // Stage 1 User/Timestamp (removed the same day — only set once Stage 1's
+  // form is submitted, a separate later step). Stage 1 only, same enrichment
+  // fetch as orderNos above.
+  { key: 'deployedEmailId', label: 'Email ID', source: 'enrichment', onlyStage: 1 }
 ];
