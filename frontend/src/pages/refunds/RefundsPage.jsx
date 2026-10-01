@@ -19,6 +19,11 @@ const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
    form is Security Deposit refunds only now, so there's nothing to pick. */
 const FIXED_LEDGER_HEAD = 'Security Deposit Refundable';
 
+/* Department, same treatment — explicit request 2026-10-01 ("department auto
+   fetching operation only"): "Operation" was the dropdown's only real choice
+   already, so it's auto-filled instead of making the submitter pick it. */
+const FIXED_DEPARTMENT = 'Operation';
+
 /* Explicit request 2026-10-01: Invoice Number/Date, Payment Type/Terms, User
    and Bill Received Date are no longer collected from this form (SD refunds
    don't have a vendor invoice in the traditional sense) — removed from
@@ -34,7 +39,7 @@ function makeEmptyForm() {
     vendorName: '',
     invoiceAmount: '', amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
     cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
-    department: '', invoiceFile: null, piFile: null, attachmentsFile: null
+    invoiceFile: null, piFile: null, attachmentsFile: null
   };
 }
 
@@ -126,7 +131,7 @@ export function RefundsPage() {
         amountToPay: form.amountToPay,
         paymentDueDate: form.paymentDueDate,
         ledgerHead: FIXED_LEDGER_HEAD,
-        department: form.department,
+        department: FIXED_DEPARTMENT,
         invoiceFileUrl, piFileUrl, attachmentsUrl,
         cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl
       });
@@ -153,11 +158,8 @@ export function RefundsPage() {
             <form onSubmit={handleSubmit} className={styles.form}>
               <div className={styles.grid3}>
                 <label className={styles.field}>
-                  <span className={styles.label}>Department *</span>
-                  <select value={form.department} onChange={set('department')} required>
-                    <option value="">Select…</option>
-                    <option value="Operation">Operation</option>
-                  </select>
+                  <span className={styles.label}>Department</span>
+                  <input type="text" value={FIXED_DEPARTMENT} disabled />
                 </label>
               </div>
 
