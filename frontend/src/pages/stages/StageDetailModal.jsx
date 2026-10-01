@@ -384,9 +384,11 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   <div key={f.key} className={styles.baseItem}>
                     <span className={styles.baseLabel}>{f.label}</span>
                     <span className={styles.baseValue}>
-                      {f.key === 'col_1' && !data?.[f.key] && leaseIdPreview
-                        ? `${leaseIdPreview} (auto)`
-                        : (data?.[f.key] || '—')}
+                      {f.link
+                        ? (data?.[f.key] ? <a href={data[f.key]} target="_blank" rel="noreferrer">View</a> : '—')
+                        : f.key === 'col_1' && !data?.[f.key] && leaseIdPreview
+                          ? `${leaseIdPreview} (auto)`
+                          : (data?.[f.key] || '—')}
                     </span>
                   </div>
                 ))}

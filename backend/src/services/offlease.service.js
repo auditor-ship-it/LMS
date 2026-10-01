@@ -75,7 +75,7 @@ import {
 import { SHEETS, EXTERNAL_SPREADSHEETS } from '../config/sheets.config.js';
 import { env } from '../config/env.js';
 import { safeStr, safeAmt, toNum, formatDateVal, parseDate } from '../utils/format.js';
-import { normKey } from '../utils/normalize.js';
+import { normKey, splitContainers } from '../utils/normalize.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { checkActionPermission, userHasAction } from './permissions.service.js';
@@ -87,6 +87,7 @@ import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
+import { _deployedRawValues, _resolveRenewalColumns } from './expiry.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
 import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
@@ -2497,6 +2498,27 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     const baseCols = { 0: 'Container No', 1: 'Lease ID', 2: 'Size', 3: 'Type', 4: 'Client Code', 5: 'Client Name', 6: 'Location', 7: 'Deployed Date', 8: 'Valid Upto', 9: 'Rate' };
     for (const b of Object.keys(baseCols)) result[`col_${b}`] = fmtCell(row[Number(b)]);
+
+    /* Agreement/PO PDF — explicit request 2026-10-01 ("show agreement pdf
+       and po pdf offlease"). These live on SHEETS.DEPLOYED, not OL_SHEET
+       (this sheet has no such columns), resolved by header text via the
+       same _resolveRenewalColumns the Lease Expiry / Renew & Document pages
+       already use for this exact sheet — see its own doc comment.
+       Best-effort, same convention as every other cross-sheet enrichment in
+       this function (the Stage 3 auto-fetch above): the form must still
+       open with these blank if the lookup fails, or if the container
+       already left the Deployed sheet. */
+    try {
+      const { values } = await _deployedRawValues();
+      const { agrCol, poPdfCol } = _resolveRenewalColumns(values[0] || []);
+      const want = normKey(containerNo);
+      const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
+      result.agreementUrl = dRow ? safeStr(dRow[agrCol]) : '';
+      result.poPdfUrl = dRow ? safeStr(dRow[poPdfCol]) : '';
+    } catch (e) {
+      result.agreementUrl = '';
+      result.poPdfUrl = '';
+    }
 
     for (let c = info.startCol; c <= info.endCol; c++) result[`col_${c}`] = fmtCell(row[c]);
 

@@ -1085,8 +1085,11 @@ function fmtCellDate(v) {
  *  header name (never hard-coded — it shifts). Shared by completeDocStage
  *  (Submit) and saveRenewalDraft (Save) — both write these SAME real fields
  *  (not just the AA-AD history columns), so extracted here rather than
- *  duplicated when Save was added 2026-09-28. */
-function _resolveRenewalColumns(hdrs0) {
+ *  duplicated when Save was added 2026-09-28. Exported 2026-10-01 so
+ *  offlease.service.js's container detail card can resolve the same
+ *  Agreement/PO PDF columns on SHEETS.DEPLOYED (explicit request: "show
+ *  agreement pdf and po pdf offlease"). */
+export function _resolveRenewalColumns(hdrs0) {
   let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1, poValidityCol = -1;
   for (let h = 0; h < hdrs0.length; h++) {
     const hd = String(hdrs0[h] || '').trim().toLowerCase();
