@@ -7,7 +7,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchNextLeaseId, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchNextLeaseId, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { LookupResult } from '../offLease/LookupResult.jsx';
@@ -61,6 +61,14 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     () => (stageNumber === 1 ? fetchNextLeaseId() : Promise.resolve(null)),
     [stageNumber]
   );
+  /* Order No / Agreement PDF / PO PDF / Transportation One Way & Return Way —
+     explicit report 2026-10-01: fetching these inline with the stage detail
+     above made the modal slow to open. Fetched separately so the modal opens
+     immediately on `data` and these fill in a moment later (BASE_FIELDS
+     reads `enrichment?.[f.key] ?? data?.[f.key]` below) — same
+     fetch-alongside-not-blocking pattern as billingDetail/kamLookup further
+     down in this file. */
+  const { data: enrichment } = useAsync(() => fetchCardEnrichment(containerNo, rowNum), [containerNo, rowNum]);
 
   const [values, setValues] = useState({});
   const [pendingFiles, setPendingFiles] = useState({});
@@ -380,16 +388,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
           {!loading && !error && !justSaved && (
             <form onSubmit={handleSubmit}>
               <div className={styles.baseGrid}>
-                {BASE_FIELDS.map((f) => (
+                {BASE_FIELDS.map((f) => {
+                  // Order No/Agreement PDF/PO PDF/Transportation One Way &
+                  // Return Way come from the separate, slower enrichment
+                  // fetch (see the useAsync call above) rather than `data` —
+                  // every other BASE_FIELDS key is a plain col_N from the
+                  // fast stage-detail fetch.
+                  const fromEnrichment = !f.key.startsWith('col_');
+                  const val = fromEnrichment ? enrichment?.[f.key] : data?.[f.key];
+                  return (
                   <div key={f.key} className={styles.baseItem}>
                     <span className={styles.baseLabel}>{f.label}</span>
                     <span className={styles.baseValue}>
                       {f.link
-                        ? (data?.[f.key]
+                        ? (val
                           ? (
                             <a
                               className={styles.invFileBtn}
-                              href={data[f.key]}
+                              href={val}
                               target="_blank"
                               rel="noreferrer"
                               title={`Open ${f.label}`}
@@ -398,13 +414,14 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                               <Icon name="external" />
                             </a>
                           )
-                          : '—')
+                          : (fromEnrichment && !enrichment ? '…' : '—'))
                         : f.key === 'col_1' && !data?.[f.key] && leaseIdPreview
                           ? `${leaseIdPreview} (auto)`
-                          : (data?.[f.key] || '—')}
+                          : (val || (fromEnrichment && !enrichment ? '…' : '—'))}
                     </span>
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* This record was placed here directly by a Stage 2 "Move To

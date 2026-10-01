@@ -31,6 +31,11 @@ router.delete('/:containerNo/remarks/:remarkId', asyncHandler(offLeaseController
 router.get('/:containerNo/stage/:stage', asyncHandler(offLeaseController.getStageDetail));
 router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveStage));
 
+/* Order No / Agreement PDF / PO PDF / Transportation One Way & Return Way —
+ * fetched separately from the stage detail above so the modal isn't slowed
+ * down waiting on these (see getOffLeaseCardEnrichment's doc comment). */
+router.get('/:containerNo/enrichment', asyncHandler(offLeaseController.getCardEnrichment));
+
 /* Stage 2 (Transportation) "Move To Stage" / Send Back — manual alternate-
    disposition move. Declared here, not under /:containerNo/stage/:stage,
    since neither is a normal stage-column save (see saveOffLeaseMoveToStage's
