@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import { Button } from '../../components/ui/Button.jsx';
+import { Modal } from '../../components/ui/Modal.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
@@ -10,6 +11,7 @@ import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchStageDetail, fetchCardEnrichment, fetchNextLeaseId, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
+import { RefundSubmitForm } from '../refunds/RefundSubmitForm.jsx';
 import { LookupResult } from '../offLease/LookupResult.jsx';
 import { useStageSelection, StageSelector } from '../offLease/StageSelector.jsx';
 import { exportLookupToPdf, exportLookupToExcel } from '../offLease/lookupExport.js';
@@ -76,6 +78,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [uploading, setUploading] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
+
+  /* "SD Refund" on Stage 6 (FMS Closed, internal 8 — see constants/stages.js's
+     WORKFLOW array for the internal<->display mapping) — explicit request
+     2026-10-01 ("add the stage 6 SD refunds... same this form and this
+     backend logic... button inside Off-Lease Stage 6"). Reuses
+     RefundSubmitForm (extracted from RefundsPage.jsx the same day) verbatim —
+     same addRefundEntry call, same sheet, same HOD/CEO/Accounts approval
+     flow — not a second, divergent copy of the SD Refunds feature. */
+  const [sdRefundOpen, setSdRefundOpen] = useState(false);
 
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
@@ -539,6 +550,13 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   only" convention the old card had. */}
               {stageNumber === FMS_CLOSURE_STAGE && (
                 <div className={styles.fmsWrap}>
+                  {/* "SD Refund" — explicit request 2026-10-01. Same permission
+                      ('refunds') RefundsPage.jsx itself gates submission on. */}
+                  {canAct('refunds') && (
+                    <div className={styles.actions} style={{ marginBottom: 16 }}>
+                      <Button type="button" variant="primary" onClick={() => setSdRefundOpen(true)}>Submit SD Refund</Button>
+                    </div>
+                  )}
                   <h3 className={styles.sectionTitle}>Full Off-Lease History (Stage 1-5)</h3>
                   {/* This lookup re-reads the Operation sheet and STAGE-8/9/10
                       in full — routinely 20-30s+ each on their own (see
@@ -717,6 +735,16 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
         submitLabel="Send Back"
         variant="secondary"
       />
+
+      {/* "SD Refund" (Stage 6 / FMS Closed only) — see sdRefundOpen's own
+          doc comment above. No onSubmitted handler: RefundSubmitForm already
+          shows its own "Saved." message and resets itself for the next
+          entry — closing the modal out from under that message would hide
+          it before the submitter ever saw it. The Submitted Bills list
+          itself lives on the separate SD Refunds page, not duplicated here. */}
+      <Modal open={sdRefundOpen} onClose={() => setSdRefundOpen(false)} title={`Submit SD Refund — ${containerNo}`} width="760px">
+        <RefundSubmitForm />
+      </Modal>
     </div>
   );
 }
