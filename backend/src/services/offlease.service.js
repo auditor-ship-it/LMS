@@ -1070,6 +1070,31 @@ async function _findOrderNosForContainer(want) {
   return (await _findLeaseInfoForContainer(want)).orders;
 }
 
+/** Every distinct "Order Received Number" the external FMS dispatch sheet
+ *  (STAGE-9) carries for this container — see getOffLeaseStageDetail's doc
+ *  comment on why this is now preferred over the lease-level lookup above.
+ *  Matched by plain substring containment on the raw "Container Number"
+ *  cell, not a strict split: that column's real data mixes commas, dashes
+ *  and stray spaces as separators inconsistently (confirmed live), so an
+ *  exact tokenizer would miss real matches more often than a loose
+ *  containment check would false-positive on fixed-format container codes. */
+async function _lookupStage9OrderNos(containerNo) {
+  const want = normKey(containerNo);
+  if (!want) return [];
+  const { headers, rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
+  const contCol = headers.findIndex((h) => /container number/i.test(String(h || '')));
+  const ordCol = headers.findIndex((h) => /order received number/i.test(String(h || '')));
+  if (contCol < 0 || ordCol < 0) return [];
+  const seen = new Set();
+  const orders = [];
+  for (const r of rows) {
+    if (!normKey(r[contCol]).includes(want)) continue;
+    const o = safeStr(r[ordCol]).trim();
+    if (o && !seen.has(o)) { seen.add(o); orders.push(o); }
+  }
+  return orders;
+}
+
 /* ==================== DIAGNOSTICS (admin-only) ==================== */
 
 export async function debugOrderNosForContainer(containerNo) {
@@ -2534,14 +2559,26 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
     /* Order No — explicit request 2026-10-01 ("show order no offlease"),
        same card as Agreement/PO PDF above. OL_SHEET has no Order No column
-       either; getOffLeaseContainerDetail's own lookup (_findLeaseInfoForContainer,
-       scanning OL_ORDER_SHEETS / Operation sheet) already solves this for the
-       same container identity, reused here rather than duplicated. Kept
-       outside the try below so Stage 1's Transportation lookup (which needs
-       these same order numbers) still runs even if it itself fails. */
+       either.
+       SOURCE, decided explicitly 2026-10-01 after a direct conflict was found
+       live (CRIU4025493: New Lease/Off-Lease's own lookup resolved "OR443",
+       but the external FMS dispatch sheet (STAGE-9) carries this exact
+       container's REAL transportation order, "OR496") — user chose the FMS
+       sheet over the lease-level one. Primary: _lookupStage9OrderNos (STAGE-9,
+       matched directly by Container Number — the actual dispatch/transport
+       order this container moved under). Falls back to the old lease-level
+       _findLeaseInfoForContainer (New Lease / Operation sheet) only when
+       STAGE-9 has no record at all for this container, so a container not yet
+       in FMS still shows SOMETHING rather than nothing. A container can
+       legitimately carry more than one order across different shipments
+       (confirmed live: CRIU4025493 has both OR443 and OR496 in STAGE-9 itself)
+       — every distinct one found is kept and joined, not just the first.
+       Kept outside the try below so Stage 1's Transportation lookup (which
+       needs these same order numbers) still runs even if it itself fails. */
     let leaseOrders = [];
     try {
-      leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
+      leaseOrders = await _lookupStage9OrderNos(containerNo);
+      if (!leaseOrders.length) leaseOrders = (await _findLeaseInfoForContainer(normKey(containerNo))).orders;
       result.orderNos = leaseOrders.join(', ');
     } catch (e) {
       result.orderNos = '';
