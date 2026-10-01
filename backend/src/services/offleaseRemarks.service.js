@@ -14,6 +14,7 @@
  * two leases at once and their commentary must not merge.
  */
 import { getSheetData, appendRow, insertSheetIfMissing, updateRange, deleteRows } from './googleSheets.service.js';
+import { getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { AppError, accessDenied } from '../utils/AppError.js';
@@ -98,37 +99,56 @@ export function remarkToText(html) {
 
 /* ----------------------------------------------------------------- reading */
 
-/** Every remark ever written, oldest first as the sheet holds them.
- *  `_rowNum` is the 1-based sheet row, used only by edit/delete. */
+function _mapRemarkRows(rows) {
+  return rows
+    .map((r, i) => ({
+      id: safeStr(r[0]),
+      containerNo: safeStr(r[1]),
+      leaseId: safeStr(r[2]),
+      html: safeStr(r[3]),
+      text: safeStr(r[4]),
+      timestamp: safeStr(r[5]),
+      enteredBy: safeStr(r[6]),
+      editedOn: safeStr(r[7]),
+      stage: safeStr(r[8]),
+      _rowNum: i + 2
+    }))
+    .filter((r) => r.containerNo.trim() !== '');
+}
+
+/** Every remark ever written, oldest first as the sheet holds them. LIVE —
+ *  `_rowNum` (the 1-based sheet row) is only ever accurate against a fresh
+ *  read, and this is used by findById() to resolve the exact row an edit or
+ *  delete is about to target — the Mongo mirror below can lag a delete's
+ *  row-shift by up to 5 minutes, which would make _rowNum point at the wrong
+ *  row. Only the write path (edit/delete) calls this; the display path
+ *  (readAllCached below) does not need row-accuracy and reads Mongo instead. */
 async function readAll() {
   try {
     const { rows } = await getSheetData(R_SHEET);
-    return rows
-      .map((r, i) => ({
-        id: safeStr(r[0]),
-        containerNo: safeStr(r[1]),
-        leaseId: safeStr(r[2]),
-        html: safeStr(r[3]),
-        text: safeStr(r[4]),
-        timestamp: safeStr(r[5]),
-        enteredBy: safeStr(r[6]),
-        editedOn: safeStr(r[7]),
-        stage: safeStr(r[8]),
-        _rowNum: i + 2
-      }))
-      .filter((r) => r.containerNo.trim() !== '');
+    return _mapRemarkRows(rows);
   } catch (e) {
     if (isMissingSheet(e)) return [];
     throw e;
   }
 }
 
-/* The SHEET READ is cached, not the derived views — the dashboard index and a
-   hover thread both want the same rows, and reading twice meant two live
-   round-trips. On a project that already exhausts the per-minute read quota a
-   miss is not ~0.5s but tens of seconds of retry backoff, which is what left
-   the hover popover stuck on "Loading…". Dropped on every write, so a remark
-   just saved, edited or deleted is reflected at once. */
+/* Mongo-mirror-backed — added 2026-09-30 (explicit request: eliminate live
+ * Sheets reads causing quota errors) so the dashboard index and hover thread
+ * (readAllCached below) never hit live Sheets at all. addOffLeaseRemark
+ * patches the mirror instantly via appendMongoMirrorRow, so a just-added
+ * remark still shows without waiting for the next reconcile cycle; only
+ * edits/deletes (which shift row positions) can lag here by up to 5 min —
+ * acceptable for a display-only read, unlike readAll() above. */
+async function readAllFromMirror() {
+  const { rows } = await getSheetDataFromMongo(R_SHEET);
+  return _mapRemarkRows(rows);
+}
+
+/* The MIRROR READ is cached, not the derived views — the dashboard index and a
+   hover thread both want the same rows, and reading twice meant two round
+   trips. Dropped on every write, so a remark just saved, edited or deleted is
+   reflected at once. */
 const ROWS_CACHE_KEY = 'offlease:remark-rows';
 const ROWS_TTL_SECONDS = 60; // seconds: cachePut multiplies by 1000 itself
 
@@ -137,7 +157,7 @@ function invalidateIndex() { cacheRemove(ROWS_CACHE_KEY); }
 async function readAllCached() {
   const hit = cacheGet(ROWS_CACHE_KEY);
   if (hit) return hit;
-  const rows = await readAll();
+  const rows = await readAllFromMirror();
   cachePut(ROWS_CACHE_KEY, rows, ROWS_TTL_SECONDS);
   return rows;
 }
@@ -222,6 +242,7 @@ export async function addOffLeaseRemark({ containerNo, leaseId, html, stage }, u
       await insertSheetIfMissing(R_SHEET, R_HEADERS);
       await appendRow(R_SHEET, row);
     }
+    await appendMongoMirrorRow(R_SHEET, row);
     invalidateIndex();
     return {
       message: 'SAVED',

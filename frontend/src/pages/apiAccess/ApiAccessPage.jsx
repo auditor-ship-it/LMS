@@ -13,6 +13,13 @@ const DOMAIN_LABELS = {
   offlease: 'Off-Lease Pipeline',
   accounts: 'Accounts / Invoice Ledger',
   offleaseefficiency: 'Off-Lease Efficiency',
+  salesos: 'Sales OS',
+  // Added 2026-10-01, explicit request — read-only domains (see
+  // apiKeys.service.js's WRITE_CAPABLE_DOMAINS).
+  refunds: 'Refunds',
+  renewdocument: 'Renew & Document',
+  deployedsummary: 'Deployed Summary',
+  reports: 'Reports',
   all: 'All domains'
 };
 
@@ -33,7 +40,19 @@ const ENDPOINTS = [
   { domain: 'offlease', method: 'POST', path: '/offlease/:containerNo/stage/:stage', write: true },
   { domain: 'offlease', method: 'POST', path: '/offlease/:containerNo/approval', write: true },
   { domain: 'accounts', method: 'GET', path: '/accounts/:containerNo/outstanding' },
-  { domain: 'offleaseefficiency', method: 'GET', path: '/offlease/efficiency' }
+  { domain: 'offleaseefficiency', method: 'GET', path: '/offlease/efficiency' },
+  { domain: 'salesos', method: 'GET', path: '/sales-os/renewals' },
+  { domain: 'salesos', method: 'GET', path: '/sales-os/company-match?companyNames=...' },
+  { domain: 'salesos', method: 'GET', path: '/sales-os/renewal-stats?employeeCode=...' },
+  { domain: 'salesos', method: 'GET', path: '/sales-os/renewal-log?employeeCode=...' },
+  // Added 2026-10-01, explicit request.
+  { domain: 'refunds', method: 'GET', path: '/refunds' },
+  { domain: 'renewdocument', method: 'GET', path: '/renew-document' },
+  { domain: 'renewdocument', method: 'GET', path: '/renew-document/approval-pending' },
+  { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary' },
+  { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary/detail' },
+  { domain: 'reports', method: 'GET', path: '/reports/renewal-log' },
+  { domain: 'reports', method: 'GET', path: '/reports/new-lease' }
 ];
 
 /** e.g. "leases:write" -> "Leases (Verify / Approve / Expiry) — Write" */

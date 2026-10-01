@@ -25,3 +25,13 @@ export const addTeamAccount = (email, name) =>
 
 export const removeTeamAccount = (email) =>
   apiClient.delete('/roles/accounts', { data: { email } }).then((r) => r.data);
+
+/** POST /api/auth/admin/add-user — creates a real login-capable account
+ *  (Employee ID + Password, USER sheet) rather than just a permissions row.
+ *  Same admin gate as everything else here (isRolesAdmin), enforced by
+ *  auth.controller.js's addUser. Explicit request 2026-09-30: "login
+ *  employee id wise and employee id role and access" — a new team member
+ *  should get both login credentials AND their Team Accounts/Sidebar Access
+ *  permission row from one form, not two separate admin steps. */
+export const createUserLogin = ({ name, empId, password, email }) =>
+  apiClient.post('/auth/admin/add-user', { name, empId, password, email }).then((r) => r.data);

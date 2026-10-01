@@ -92,7 +92,41 @@ export const MONGO_SHEET_MAPPING = {
    * this file's own header comment. No write-through path exists for this
    * sheet (read-only mirror), so fullRefresh costs nothing and cannot lose
    * data the way a wrong key-based upsert could. */
-  [SHEETS.INVOICE_PO]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true }
+  [SHEETS.INVOICE_PO]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true },
+
+  /* Added 2026-09-30 (explicit request — eliminate live-Sheets reads causing
+   * quota errors). These five are pure append-only logs with no reliable
+   * natural key (see this file's header comment on what that means for
+   * reconciliation) and, like FMS_STAGE8/9/10 and INVOICE_PO above, have no
+   * write-through path THROUGH THIS JOB — their own services still write
+   * straight to Sheets (offleaseRemarks/offleaseMoveHistory/stage9/
+   * expiry._logRenewal/auth's login-activity logger) and additionally patch
+   * this mirror instantly via appendMongoMirrorRow (mongoSheetData.service.js)
+   * so a just-added row doesn't wait for this job's next cycle. fullRefresh
+   * here is just "how reconciliation catches up on rows added outside the
+   * app, or if a mirror-patch failed" — cheap and safe for logs of this size. */
+  [SHEETS.OFF_LEASE_REMARKS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+  [SHEETS.OFF_LEASE_MOVE_HISTORY]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+  [SHEETS.STAGE9_MOVEMENT]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+  [SHEETS.RENEWAL_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+  [SHEETS.AUTH_SESSION_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+
+  /* Refunds (Off-Lease Bills) — added 2026-09-30 alongside the new form
+   * itself (refunds.service.js). Same reasoning as the five entries above:
+   * append-only, no reliable natural key (an Invoice Number can legitimately
+   * repeat — a vendor resubmitting, a partial payment against the same
+   * invoice), read-only mirror (writes go straight to Sheets, then
+   * appendMongoMirrorRow patches this instantly). */
+  [SHEETS.REFUNDS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+
+  /* Stage 1 sales order-intake form — added 2026-09-30 (explicit request).
+   * Google Form-linked; no column's uniqueness has been verified against
+   * live data (Quotation No/Order Received Number look like candidates but
+   * are unconfirmed), so fullRefresh errs conservative, same reasoning as
+   * NEW_LEASE/OPERATION/DEPLOYED above. No write-through path exists (this
+   * app doesn't write to it — the external Google Form does), so nothing is
+   * lost by fully replacing the collection each cycle. */
+  [SHEETS.STAGE1_ORDER_FORM]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true }
 };
 
 /** Normalizes a raw natural-key cell value the same way reconciliation and

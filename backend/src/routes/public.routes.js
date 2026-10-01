@@ -6,6 +6,8 @@ import * as approveController from '../controllers/approve.controller.js';
 import * as expiryController from '../controllers/expiry.controller.js';
 import * as offLeaseController from '../controllers/offlease.controller.js';
 import * as salesOsRenewalController from '../controllers/salesOsRenewal.controller.js';
+import * as refundsController from '../controllers/refunds.controller.js';
+import * as dashboardController from '../controllers/dashboard.controller.js';
 
 /**
  * Public, key-gated API (see publicApiAuth.middleware.js — the X-Api-Key
@@ -102,5 +104,37 @@ router.get('/sales-os/company-match', requirePublicApiKey('salesos'), asyncHandl
 router.get('/sales-os/renewal-stats', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalStats)));
 // ?employeeCode=X&year=&month= — the "Total renewals" scorecard's count + detail rows.
 router.get('/sales-os/renewal-log', requirePublicApiKey('salesos'), asyncHandler(reuse(salesOsRenewalController.renewalLog)));
+
+/* ---------------- refunds (read-only — see WRITE_CAPABLE_DOMAINS) ----------------
+   refundsController.list's own doc comment covers why a null (public) caller
+   is safe here — getRefundEntries treats it as already-authorized by the key's
+   domain scope, same as every other read below. */
+router.get('/refunds', requirePublicApiKey('refunds'), asyncHandler(reuse(refundsController.list)));
+
+/* ---------------- renew & document (read-only) ----------------
+   Same underlying expiryController.list the 'leases' domain's own
+   /leases/expiry route reuses (see above) — but the filter is FORCED here,
+   not taken from the caller's query string, so a key scoped to only
+   'renewdocument' can't widen it into 'pending'/'expired' (the 'leases'
+   domain's own concern) just by passing a different ?filter=. */
+router.get('/renew-document', requirePublicApiKey('renewdocument'), asyncHandler((req, res, next) => {
+  req.query = { ...req.query, filter: 'documents' };
+  return reuse(expiryController.list)(req, res, next);
+}));
+router.get('/renew-document/approval-pending', requirePublicApiKey('renewdocument'), asyncHandler((req, res, next) => {
+  req.query = { ...req.query, filter: 'approval' };
+  return reuse(expiryController.list)(req, res, next);
+}));
+
+/* ---------------- deployed summary (read-only) ---------------- */
+router.get('/deployed-summary', requirePublicApiKey('deployedsummary'), asyncHandler(reuse(dashboardController.getDeployedSummary)));
+// ?month=&category=&type=&size= — same query params as the internal endpoint.
+router.get('/deployed-summary/detail', requirePublicApiKey('deployedsummary'), asyncHandler(reuse(dashboardController.getDeployedDetail)));
+
+/* ---------------- reports (read-only) ----------------
+   The Reports page's own Off-Lease section is GET /offlease/dashboard,
+   already covered by the 'offlease' domain above — not duplicated here. */
+router.get('/reports/renewal-log', requirePublicApiKey('reports'), asyncHandler(reuse(expiryController.renewalLog)));
+router.get('/reports/new-lease', requirePublicApiKey('reports'), asyncHandler(reuse(expiryController.newLeaseReport)));
 
 export default router;

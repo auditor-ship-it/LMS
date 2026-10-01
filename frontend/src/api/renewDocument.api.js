@@ -42,3 +42,10 @@ export const getApprovalPendingData = () =>
  *  comment above for why it addresses the exact Deployed row. */
 export const decideRenewalApproval = ({ containerNo, decision, remarks, rowNum }) =>
   apiClient.post('/expiry/renewal/decide-approval', { containerNo, decision, remarks, rowNum }).then((r) => r.data.result);
+
+/** POST /api/expiry/renewal/send-back-to-pending — "Send Back" to Lease
+ *  Expiry, explicit request 2026-09-30. Reverses the Renew click that put
+ *  this container into Documents Pending; see sendExpiryToPendingFast's own
+ *  doc comment on the backend. */
+export const sendBackToPending = (containerNo, rowNum) =>
+  apiClient.post('/expiry/renewal/send-back-to-pending', { containerNo, rowNum }).then((r) => r.data.result);

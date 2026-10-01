@@ -100,7 +100,6 @@ export function PipelineDashboard({ onOpenTab }) {
     if (stageFilter === 'approval') out = out.filter((it) => it.stageClass === 'approval');
     else if (stageFilter === 'done') out = out.filter((it) => it.stageClass === 'done');
     else if (stageFilter === 'hold') out = out.filter((it) => it.onHold);
-    else if (stageFilter === 'outstanding') out = out.filter((it) => it.hasOutstanding);
     /* pendingStages, not currentStageNum: a container can genuinely be
        pending in more than one stage's queue at once (see pendingStages'
        doc comment on the backend), and the KPI card's own count is a real
@@ -134,11 +133,9 @@ export function PipelineDashboard({ onOpenTab }) {
       ? 'Completed'
       : stageFilter === 'hold'
         ? 'On hold'
-        : stageFilter === 'outstanding'
-          ? 'Outstanding payment'
-          : stageFilter != null
-            ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
-            : '';
+        : stageFilter != null
+          ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
+          : '';
 
   return (
     <>
@@ -146,8 +143,8 @@ export function PipelineDashboard({ onOpenTab }) {
         {/* Fixed order per explicit request, 2026-09-04: Lease Expiry, Hold,
             Active, then the live workflow in sequence (Intimation ->
             Approval -> Transportation -> Gate In -> Inspection -> Final
-            Billing -> Outstanding Payment ["Payment Pending" in the user's
-            own sequence, right after Billing]), Completed last. Stage 6
+            Billing), Completed last. Outstanding Payment card removed
+            2026-09-29 (explicit request). Stage 6
             (KAM) is intentionally not in this row — everything else here is
             either a cross-module count or one explicit stage, not the
             generic STAGES.flatMap sweep this row used before. A real
@@ -210,21 +207,16 @@ export function PipelineDashboard({ onOpenTab }) {
           footnote={STAGES.find((s) => s.number === 5)?.owner}
           onClick={() => toggleFilter(5)}
         />
-        {/* Moved to after Billing, 2026-09-04 — "Payment Pending" in the
-            user's own stage sequence sits right after Billing, not before it. */}
-        <StatCard
-          icon="list" label="Outstanding Payment" value={kpis.outstandingCount ?? '—'} loading={loading} tint="warn"
-          footnote={kpis.outstandingWithDamageCount > 0 ? `${kpis.outstandingWithDamageCount} with damage` : undefined}
-          onClick={() => toggleFilter('outstanding')}
-        />
         {/* Explicit request 2026-09-29: replaces "Completed this month" —
-            Stage 6 (KAM, internal 8) was the one active stage with no card
-            of its own on this dashboard at all; same pattern as every other
-            Stage N card above (STAGE_ICONS[8]/byStage[8] already existed and
-            were computed, just never rendered here). */}
+            Stage 6 (FMS Closed, internal 8) was the one active stage with no
+            card of its own on this dashboard at all; same pattern as every
+            other Stage N card above (STAGE_ICONS[8]/byStage[8] already
+            existed and were computed, just never rendered here). No footnote
+            (unlike every other Stage N card): its `owner` (stages.js) was
+            renamed 'Sales' -> 'FMS Closed' the same day, which would just
+            repeat this card's own label. */}
         <StatCard
-          icon={STAGE_ICONS[8]} label="Stage 6 · KAM" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
-          footnote={STAGES.find((s) => s.number === 8)?.owner}
+          icon={STAGE_ICONS[8]} label="Stage 6 · FMS Closed" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
           onClick={() => toggleFilter(8)}
         />
       </div>

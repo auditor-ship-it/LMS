@@ -308,7 +308,14 @@ async function authLogEvent(action, emp) {
 }
 
 export async function getEmpLoginActivity() {
-  const { rows } = await getSheetData(SHEETS.AUTH_SESSION_LOG, undefined, 'A1:F').catch(() => ({ rows: [] }));
+  /* Mongo-mirror-backed — added 2026-09-30 (explicit request: eliminate live
+   * Sheets reads causing quota errors). This is a report view, not a
+   * pending-action list, so the mirror's up-to-5-minute staleness (or
+   * instant, once the next reconcile cycle runs) is an acceptable trade-off;
+   * no mirror-patch-on-write was added for this sheet since its writes
+   * (authLogEvent/empHeartbeat) both append AND update existing rows in
+   * place, unlike the pure append-only logs elsewhere in this pass. */
+  const { rows } = await getSheetDataFromMongo(SHEETS.AUTH_SESSION_LOG).catch(() => ({ rows: [] }));
   if (!rows.length) return { summary: [], recent: [] };
 
   const by = {};

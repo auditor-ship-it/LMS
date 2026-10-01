@@ -99,6 +99,17 @@ export const env = {
   salesCrmHandoffSecret: process.env.SALES_CRM_HANDOFF_SECRET || '',
   salesCrmHandoffTtlSecs: Number(process.env.SALES_CRM_HANDOFF_TTL_SECONDS) || 600,
 
+  /* Refunds' no-login review links (explicit request 2026-10-01) — the HOD/
+     CEO/Accounts "Review Link" columns written into the Offlease Bills
+     sheet/emailed at each stage. Same signed-token mechanism as the Sales
+     CRM handoff above (utils/jwtLite.js), own dedicated secret — a leaked
+     Sales CRM secret must not also unlock these links, and vice versa.
+     Optional on purpose, same "degrades gracefully" convention as
+     salesCrmHandoffSecret: unset, the email link falls back to the old
+     session-required /refunds-approval page instead of minting an unusable
+     token. */
+  refundReviewSecret: process.env.REFUND_REVIEW_SECRET || '',
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
@@ -117,6 +128,10 @@ if (!env.salesCrmUri) {
 
 if (!env.salesCrmRenewalFormUrl || !env.salesCrmHandoffSecret) {
   console.warn('[env] SALES_CRM_RENEWAL_FORM_URL and/or SALES_CRM_HANDOFF_SECRET not set — "Renew via Sales CRM" will show an error until both are configured. See README.md.');
+}
+
+if (!env.refundReviewSecret) {
+  console.warn('[env] REFUND_REVIEW_SECRET not set — Refunds approval emails/sheet links will fall back to the session-required review page instead of a no-login link. Set REFUND_REVIEW_SECRET (any long random string) to enable it.');
 }
 
 if (!env.googleDriveFolderId) {

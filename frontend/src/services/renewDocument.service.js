@@ -1,4 +1,6 @@
-import { getRenewDocumentData, completeRenewalDocStage, saveRenewalDraft, getApprovalPendingData, decideRenewalApproval } from '../api/renewDocument.api.js';
+import {
+  getRenewDocumentData, completeRenewalDocStage, saveRenewalDraft, getApprovalPendingData, decideRenewalApproval, sendBackToPending
+} from '../api/renewDocument.api.js';
 
 export async function fetchDocumentList() {
   return getRenewDocumentData('documents');
@@ -14,4 +16,7 @@ export async function fetchApprovalPendingList() {
 }
 export async function submitApprovalDecision(payload) {
   return decideRenewalApproval(payload);
+}
+export async function submitSendBackToPending(containerNo, rowNum) {
+  return sendBackToPending(containerNo, rowNum);
 }

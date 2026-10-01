@@ -68,7 +68,23 @@ export const SHEETS = {
      Sheets quota. Leading space in the tab name is real, not a typo — the
      live spreadsheet's tab is literally titled " Invoice PO" (gid
      2070071765), confirmed via spreadsheets.get. */
-  INVOICE_PO: ' Invoice PO'
+  INVOICE_PO: ' Invoice PO',
+
+  /* "Refunds" / off-lease bill submission form — added 2026-09-30 (explicit
+     request). A brand new, previously-empty tab (gid 1778430415); trailing
+     space in the tab name is real, not a typo — confirmed via spreadsheets.get,
+     same quirk as INVOICE_PO's leading space above. Created on first save by
+     refunds.service.js, same "append first, create sheet only on failure"
+     pattern as every other append-only log in this file. */
+  REFUNDS: 'Offlease Bills ',
+
+  /* Sales order-intake form responses (Google Form-linked, ~137 columns,
+     Quotation No/Customer/container/PO/billing detail) — added 2026-09-30
+     (explicit request) so it can be mirrored into Mongo like every other
+     hot-read tab instead of read live. Not yet consumed by any page in this
+     app; mirrored so it's available the moment something needs it, with no
+     live-Sheets quota risk when that happens. */
+  STAGE1_ORDER_FORM: 'Stage 1'
 };
 
 // External spreadsheets referenced by hardcoded ID (not the main GOOGLE_SHEET_ID).

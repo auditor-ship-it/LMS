@@ -11,7 +11,8 @@
  * Keyed on container + lease ID, like the remarks thread — a container can
  * be off-leased under two leases at once and their histories must not merge.
  */
-import { getSheetData, appendRow, insertSheetIfMissing } from './googleSheets.service.js';
+import { appendRow, insertSheetIfMissing } from './googleSheets.service.js';
+import { getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
@@ -40,9 +41,16 @@ const ROWS_TTL_SECONDS = 60;
 
 function invalidate() { cacheRemove(ROWS_CACHE_KEY); }
 
+/* Mongo-mirror-backed — added 2026-09-30 (explicit request: eliminate live
+ * Sheets reads causing quota errors). addMoveHistoryEntry patches the mirror
+ * instantly via appendMongoMirrorRow, so a just-logged event still shows
+ * without waiting for the next reconcile cycle. This function has no
+ * edit/delete counterpart (append-only, nothing ever targets a row number
+ * derived from it), so unlike offleaseRemarks.service.js there is no
+ * "must stay live for row-accuracy" call site to preserve here. */
 async function readAll() {
   try {
-    const { rows } = await getSheetData(H_SHEET);
+    const { rows } = await getSheetDataFromMongo(H_SHEET);
     return rows
       .map((r) => ({
         timestamp: safeStr(r[0]),
@@ -104,6 +112,7 @@ export async function addMoveHistoryEntry({ containerNo, leaseId, clientName, ev
       await insertSheetIfMissing(H_SHEET, H_HEADERS);
       await appendRow(H_SHEET, row);
     }
+    await appendMongoMirrorRow(H_SHEET, row);
     invalidate();
   });
 }

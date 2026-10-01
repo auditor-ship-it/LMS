@@ -160,7 +160,7 @@ export const OL_STAGE_INFO = {
   5: { statusCol: 44, startCol: 29, endCol: 44, label: 'Final Billing' },          // AD..AS
   6: { statusCol: 99, startCol: 45, endCol: 99, label: 'Transportation' },         // AT..CV
   7: { statusCol: 135, startCol: 114, endCol: 135, label: 'Gate In' },             // DK..EF
-  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'KAM' },                 // CW..DC
+  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'FMS Closed' },          // CW..DC
   /* RETIRED 2026-09-22 (explicit request) — added 2026-09-18 as "Stage 3"
      between Transportation and Gate In, taken back out entirely 4 days
      later, LR reference + Invoice fields gone (not moved anywhere). Kept
@@ -531,12 +531,13 @@ const stageCaption = (s) => {
 };
 
 // RENAMED 2026-09-18 (explicit request): 5 'Billing Reconciliation' -> 'Final
-// Billing', 8 'FMS Closure' -> 'KAM'. Must stay in step with ALL_STAGES in
+// Billing', 8 'FMS Closure' -> 'KAM'. RENAMED AGAIN 2026-09-29 (explicit
+// request): 8 'KAM' -> 'FMS Closed'. Must stay in step with ALL_STAGES in
 // frontend/src/constants/stages.js.
 const OL_STAGE_LABELS = {
   1: 'Off-Lease Intimation', 2: 'Lifting / Arrival', 3: 'Inspection Checklist',
   4: 'Quotation / Order', 5: 'Final Billing', 6: 'Transportation', 7: 'Gate In',
-  8: 'KAM', 10: 'LR & Return Transportation'
+  8: 'FMS Closed', 10: 'LR & Return Transportation'
 };
 
 /* The real home of Order No and Client Name is "New Lease" only (see LMS.js
@@ -2910,6 +2911,29 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
       catch (e) { console.error('[OL-STAGE4-EMAIL-SEND]', e?.message || e); }
     }
 
+    /* Stage 3 (Inspection Checklist, UI "Stage 4") submission notification —
+       explicit request 2026-09-29, to Pushpa Shetty + Shivani Dhall. Fires
+       once per genuine first completion (the ALREADY_PROCESSED guard above),
+       same shape as the Stage 1 notification below — merge this submission's
+       own payload over the pre-save row so the email reflects what was just
+       saved, not the stale snapshot read before this write. */
+    if (stageNum === 3) {
+      try {
+        const mergedRow = [...row];
+        for (let c = info.startCol; c <= info.endCol; c++) {
+          const key = `col_${c}`;
+          if (Object.prototype.hasOwnProperty.call(payload, key)) mergedRow[c] = safeStr(payload[key]);
+        }
+        for (const c of OL_STAGE3_EXTRA_COLS) {
+          const key = `col_${c}`;
+          if (Object.prototype.hasOwnProperty.call(payload, key)) mergedRow[c] = safeStr(payload[key]);
+        }
+        await _sendOffLeaseInspectionEmail(mergedRow, row);
+      } catch (e) {
+        console.error('[OL-STAGE3-INSPECTION-EMAIL]', e?.message || e);
+      }
+    }
+
     /* Off-Lease notification to support@crystalgroup.in — fires once, right
      * here, the moment Stage 1 (Off-Lease Intimation) is actually filled and
      * saved. Moved here 2026-09-01 (was originally on the "Off-Lease" button
@@ -4008,6 +4032,96 @@ async function _sendOffLeaseQuotationEmail(rn, data, row) {
 
   await sendMail({ to, subject, body: lines.join('\n') });
   console.log(`[OL-STAGE4-EMAIL-SEND] sent to ${to} for ${containerNo}`);
+}
+
+/**
+ * Stage 4 (Inspection Checklist, internal stage 3) submission notification —
+ * explicit request 2026-09-29: send Pushpa Shetty and Shivani Dhall every
+ * checklist answer, the per-point repair estimates, the photo for each
+ * faulted point, and the total estimated repair cost, the moment this form
+ * is saved. `row` = the pre-save row (identity columns never change in a
+ * Stage 3 save); `mergedRow` = that same row with this submission's own
+ * payload overlaid on top of the Stage 3 column range, so the email reflects
+ * exactly what was just saved rather than the stale pre-save snapshot — same
+ * overlay technique the Stage 1 notification block above already uses.
+ *
+ * Photo cells are linked as `<a href>`, not embedded `<img>` — same
+ * convention every other email in this file already uses (Drive URLs are not
+ * publicly reachable, so an inline `<img>` would just show a broken image in
+ * most mail clients).
+ */
+async function _sendOffLeaseInspectionEmail(mergedRow, row) {
+  const containerNo = safeStr(row[0]);
+  const isUrl = (s) => /^https?:\/\//i.test(safeStr(s));
+  const th = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:12.5px;white-space:nowrap;">${s}</td>`;
+  const td = (s, opts = {}) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;${opts.nowrap ? 'white-space:nowrap;' : ''}">${
+    s ? (isUrl(s) ? `<a href="${s}">Photo</a>` : s) : '-'
+  }</td>`;
+
+  const identityFields = [
+    ['Container No', containerNo],
+    ['Lease ID', safeStr(mergedRow[1])],
+    ['Size', safeStr(mergedRow[2])],
+    ['Type', safeStr(mergedRow[3])],
+    ['Client Name', safeStr(mergedRow[5])],
+    ['Location', safeStr(mergedRow[6])],
+    ['Container Received Date', safeStr(mergedRow[24])]
+  ];
+
+  const checklistRows = (points) => points
+    .filter((p) => !p.reeferOnly || String(mergedRow[3] || '').toLowerCase().indexOf('dry') === -1)
+    .map((p) => {
+      const status = safeStr(mergedRow[p.status]);
+      const faulted = _olIsFaultStatus(status);
+      return `<tr>
+        ${th(`${p.n}. ${p.item}`)}
+        ${td(status)}
+        ${td(faulted ? safeStr(mergedRow[p.estimate]) : '-')}
+        ${td(faulted ? safeStr(mergedRow[p.remark]) : '-')}
+        ${td(faulted ? safeStr(mergedRow[p.photo]) : '')}
+      </tr>`;
+    }).join('');
+
+  const checklistHead = `<tr>${th('Point')}${th('Status')}${th('Estimate')}${th('Remark')}${th('Photo')}</tr>`;
+
+  const technicianHours = safeStr(mergedRow[OL_TECHNICIAN_HOURS_COL]);
+  const technicianCost = safeStr(mergedRow[OL_TECHNICIAN_COST_COL]);
+  const estimateTotal = _olInspectionEstimateTotal(mergedRow);
+
+  const subject = `Inspection Checklist Submitted – ${containerNo}`;
+
+  const body = [
+    ...identityFields.map(([label, val]) => `${label}: ${val || '-'}`),
+    '',
+    `Technician Hours: ${technicianHours || '-'}`,
+    `Technician Cost: ${technicianCost || '-'}`,
+    `Total Estimated Repair Cost: ${estimateTotal != null ? estimateTotal : '-'}`,
+    '',
+    'Full checklist (with photos for faulted points) is in the HTML version of this email.'
+  ].join('\n');
+
+  const html = `
+    <p>The Inspection Checklist for <strong>${containerNo}</strong> has just been submitted.</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
+      ${identityFields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+      <tr>${th('Technician Hours')}${td(technicianHours)}</tr>
+      <tr>${th('Technician Cost')}${td(technicianCost)}</tr>
+      <tr>${th('Total Estimated Repair Cost')}${td(estimateTotal != null ? String(estimateTotal) : '')}</tr>
+    </table>
+    <p style="font-family:Arial,sans-serif;font-weight:bold;">Container Inspection Checklist</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
+      ${checklistHead}
+      ${checklistRows(OL_INSPECTION_POINTS)}
+    </table>
+    <p style="font-family:Arial,sans-serif;font-weight:bold;">Machine Check</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${checklistHead}
+      ${checklistRows(OL_MACHINE_POINTS)}
+    </table>
+  `;
+
+  await sendMail({ to: 'pushpa.shetty@crystalgroup.in, shivani.dhall@crystalgroup.in', subject, body, html });
+  console.log(`[OL-STAGE3-INSPECTION-EMAIL] sent for ${containerNo}`);
 }
 
 /* =============================================

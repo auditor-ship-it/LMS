@@ -13,6 +13,8 @@ const DeployedSummaryPage = lazy(() => import('../pages/deployedSummary/Deployed
 const RolesAccessPage = lazy(() => import('../pages/rolesAccess/RolesAccessPage.jsx').then((m) => ({ default: m.RolesAccessPage })));
 const ApiAccessPage = lazy(() => import('../pages/apiAccess/ApiAccessPage.jsx').then((m) => ({ default: m.ApiAccessPage })));
 const ReportsPage = lazy(() => import('../pages/reports/ReportsPage.jsx').then((m) => ({ default: m.ReportsPage })));
+const RefundsPage = lazy(() => import('../pages/refunds/RefundsPage.jsx').then((m) => ({ default: m.RefundsPage })));
+const RefundsApprovalPage = lazy(() => import('../pages/refunds/RefundsApprovalPage.jsx').then((m) => ({ default: m.RefundsApprovalPage })));
 
 const Stage1Page = lazy(() => import('../pages/stages/Stage1Page.jsx').then((m) => ({ default: m.Stage1Page })));
 const Stage2Page = lazy(() => import('../pages/stages/Stage2Page.jsx').then((m) => ({ default: m.Stage2Page })));
@@ -40,6 +42,8 @@ export const APP_ROUTES = [
   { path: ROUTES.ROLES_ACCESS, element: RolesAccessPage },
   { path: ROUTES.API_ACCESS, element: ApiAccessPage },
   { path: ROUTES.REPORTS, element: ReportsPage },
+  { path: ROUTES.REFUNDS, element: RefundsPage },
+  { path: ROUTES.REFUNDS_APPROVAL, element: RefundsApprovalPage },
   { path: ROUTES.stage(1), element: Stage1Page },
   { path: ROUTES.stage(2), element: Stage2Page },
   { path: ROUTES.stage(3), element: Stage3Page },

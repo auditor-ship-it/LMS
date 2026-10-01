@@ -60,7 +60,11 @@ const CARD_DEFS = [
   { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage5', label: 'Off-Lease Stage 5: Final Billing', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage8', label: 'Off-Lease Stage 6: KAM', owner: 'Sales', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
+  // RENAMED 2026-09-29 (explicit request): 'KAM' -> 'FMS Closed', matching
+  // stages.js — and stages.js's own owner field for this stage was renamed
+  // 'Sales' -> 'FMS Closed' the same request, so `owner` is dropped here
+  // entirely rather than rendering the redundant-looking "FMS Closed (FMS Closed)".
+  { key: 'olStage8', label: 'Off-Lease Stage 6: FMS Closed', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' }
 ];
 
 const CATEGORY_OPTIONS = Object.values(GROUPS).map((g) => ({ value: g, label: g }));

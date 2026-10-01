@@ -1,0 +1,71 @@
+.form { display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-3); }
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* Hide the native up/down spinner on amount fields — explicit request
+   2026-09-30 (also paired with an onWheel blur in the component, since the
+   scroll-to-change-value behavior on a number input persists even with the
+   spinner hidden). */
+.field input[type="number"]::-webkit-outer-spin-button,
+.field input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.field input[type="number"] { -moz-appearance: textfield; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+@media (max-width: 640px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+
+.error { color: var(--error); font-size: 12.5px; font-weight: 600; margin: 0; }
+.success { color: var(--success, #16a34a); font-size: 12.5px; font-weight: 600; margin: 0; }
+.hint { color: var(--text-3); font-size: 12px; margin: -6px 0 0; }
+
+.approvalActions { display: flex; gap: 6px; flex-wrap: wrap; }
+.stageBadge { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.stagePending { background: var(--accent-soft, #eef2ff); color: var(--accent, #4f46e5); }
+.stageApproved { background: #dcfce7; color: #16a34a; }
+.stageRejected { background: #fee2e2; color: #dc2626; }
+.stageDone { background: #f1f5f9; color: var(--text-3); }
+
+.footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
+.section { margin-top: 24px; }
+
+/* HOD/CEO/Accounts tabs on RefundsApprovalPage — explicit request
+   2026-09-30, same visual pattern as RolesAccessPage's own tabRow/tab. */
+.tabRow { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab {
+  border: 1.5px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.tab:hover { color: var(--text); border-color: var(--line-strong); }
+.tabActive { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.tabCount { margin-left: 6px; opacity: 0.75; }
+
+.viewOnly { font-size: 12px; color: var(--text-3); padding: 24px; text-align: center; }

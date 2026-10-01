@@ -42,11 +42,14 @@ export const NAV_TREE = {
     { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', sidebarKey: 'renewDocument', section: 'Agreements', taskKey: 'renewPending' },
     // Explicit request 2026-09-29: its own sidebar page, not a tab on Renew &
     // Document (which is how this was first built the same day) — see
-    // ApprovalPendingPage.jsx. No sidebarKey yet, same "always visible until
-    // a matching Sidebar Access column exists" convention as Reports below —
+    // ApprovalPendingPage.jsx. sidebarKey added 2026-10-01 (explicit request) —
     // real access to the Approve/Reject buttons themselves is still gated by
     // the 'renewApproval' PERMISSION key (page renders view-only without it).
-    { key: 'approvalPending', label: 'Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements' },
+    // Label changed to "Renew Approval Pending" 2026-09-30 — Refunds' own
+    // HOD/CEO/Accounts approval workflow (added the same day) introduced a
+    // second, unrelated "approval pending" concept in the app; the plain
+    // "Approval Pending" label became ambiguous between the two.
+    { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
@@ -55,19 +58,31 @@ export const NAV_TREE = {
     // existing user's row to TRUE for it, so this doesn't silently vanish
     // for anyone the moment this ships (see _ensureSidebarHeaderWidth).
     { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency', path: ROUTES.OFF_LEASE_EFFICIENCY, icon: 'grid', sidebarKey: 'offLeaseEfficiency', section: 'Returns' },
-    /* No sidebarKey: the Sidebar Access sheet is read POSITIONALLY against
-       SIDEBAR_KEYS, so a new key needs a matching column added there before it
-       grants anything. Left unkeyed (always visible) until that column exists,
-       rather than shipping a nav item nobody can see. */
-    { key: 'reports', label: 'Reports', path: ROUTES.REPORTS, icon: 'list', section: 'Reports' },
-    // No sidebarKey/permKey — always shown, same as the main app's own nav
-    // (navConfig.js's `adminOnly: true` is decorative there too); real access
-    // control is the server-side 403 (roles.service.js's assertRolesAdmin),
-    // which the page itself turns into an "Access Restricted" state.
-    { key: 'rolesAccess', label: 'Roles & Access', path: ROUTES.ROLES_ACCESS, icon: 'lock', section: 'Admin' },
-    // Same convention as Roles & Access directly above — no sidebarKey,
-    // gated server-side by API_SUPER_ADMIN_EMAILS (apiKeys.controller.js's
-    // assertApiSuperAdmin), page itself renders "Access Restricted" on 403.
-    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin' }
+    // sidebarKey added 2026-10-01 (explicit request) — the matching
+    // SIDEBAR_KEYS column already existed (added 2026-09-16) but was never
+    // wired here or added to RELEVANT_SIDEBAR_KEYS, so it controlled nothing.
+    { key: 'reports', label: 'Reports', path: ROUTES.REPORTS, icon: 'list', section: 'Reports', sidebarKey: 'reports' },
+    // sidebarKey added 2026-10-01 (explicit request). Real access is still
+    // separately gated by the 'refunds' PERMISSION key (page renders
+    // view-only without it) — this just controls menu visibility.
+    { key: 'refunds', label: 'Refunds', path: ROUTES.REFUNDS, icon: 'inbox', section: 'Reports', sidebarKey: 'refunds' },
+    // Own sidebar page, not inline actions on the Refunds page — explicit
+    // request 2026-09-30, same "separate approval page" pattern as Renew
+    // Approval Pending above. sidebarKey added 2026-10-01; real access to
+    // the Approve/Reject buttons is gated by the refundsApprovalHod/Ceo/
+    // Accounts PERMISSION keys (page shows only what this caller can act on).
+    { key: 'refundsApproval', label: 'Refunds Approval', path: ROUTES.REFUNDS_APPROVAL, icon: 'clock', section: 'Reports', sidebarKey: 'refundsApproval' },
+    // permKey added 2026-09-30 (explicit request: "this two access only
+    // employee id 1111") — the menu entry itself now disappears for anyone
+    // without the 'rolesAdmin' permission, not just the page content after
+    // the click. See Sidebar.jsx's own doc comment for why this is a
+    // deliberate, narrow exception rather than the general visibility rule.
+    // sidebarKey ALSO added 2026-09-30 (explicit follow-up request) — an
+    // independent, admin-editable toggle on top of the permission check;
+    // both must allow it for this item to show.
+    { key: 'rolesAccess', label: 'Roles & Access', path: ROUTES.ROLES_ACCESS, icon: 'lock', section: 'Admin', sidebarKey: 'rolesAccess', permKey: 'rolesAdmin' },
+    // Same reasoning/exception as Roles & Access directly above, gated on
+    // 'apiAdmin' + 'apiAccess' instead.
+    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin', sidebarKey: 'apiAccess', permKey: 'apiAdmin' }
   ]
 };

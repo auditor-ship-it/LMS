@@ -79,7 +79,7 @@ export function ApprovalPendingPage() {
   return (
     <>
       <PageHeader
-        title="Approval Pending"
+        title="Renew Approval Pending"
         subtitle="Renewals submitted for approval, awaiting Pushpa Shetty's decision"
         actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}
       />

@@ -7,7 +7,7 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { useAuth, apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchDocumentList, submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
+import { fetchDocumentList, submitDocumentCompletion, saveDocumentDraft, submitSendBackToPending } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { CompleteDocumentModal } from './CompleteDocumentModal.jsx';
@@ -53,6 +53,12 @@ export function RenewDocumentPage() {
   const [docItem, setDocItem] = useState(null);
   const [docBusy, setDocBusy] = useState(false);
   const [docError, setDocError] = useState('');
+
+  /* "Send Back" to Lease Expiry — explicit request 2026-09-30. Keyed by
+     container (not a single boolean) so one row's in-flight request doesn't
+     disable every other row's own button too. */
+  const [sendBackBusyKey, setSendBackBusyKey] = useState('');
+  const [sendBackError, setSendBackError] = useState('');
 
   /* Bulk selection, keyed by container number — same identity
      setSelectedContainer already uses for the single-row detail view, and
@@ -210,6 +216,31 @@ export function RenewDocumentPage() {
     }
   };
 
+  /* "Send Back" — explicit request 2026-09-30: reverses the Renew click that
+     put this container into Documents Pending, returning it to Lease
+     Expiry's own pending list. Reuses `reload`/`invalidate('deployed-sheet')`
+     the same way every other action on this page already does — no separate
+     confirmation dialog, same "direct click" convention as Update Agreement. */
+  const handleSendBack = async (item) => {
+    const containerNo = item.row?.[0];
+    setSendBackBusyKey(containerNo);
+    setSendBackError('');
+    try {
+      const result = await submitSendBackToPending(containerNo, item._rowNum);
+      if (result === 'INVALID_STATE') setSendBackError(`${containerNo} is no longer in Documents Pending.`);
+      else if (result === 'AWAITING_APPROVAL') setSendBackError(`${containerNo} has already been submitted for approval — decide it from Approval Pending instead.`);
+      else {
+        if (selectedContainer === containerNo) setSelectedContainer(null);
+        await reload();
+        invalidate('deployed-sheet');
+      }
+    } catch (e) {
+      setSendBackError(apiErrorMessage(e));
+    } finally {
+      setSendBackBusyKey('');
+    }
+  };
+
   /* Bulk action — one form, same values applied to every selected
      container, run in parallel (not one-after-another) since these are
      independent writes to different rows. A per-container failure is
@@ -330,6 +361,7 @@ export function RenewDocumentPage() {
             <div className={styles.toolbar}>
               <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
             </div>
+            {sendBackError && <p className={styles.actionError}>{sendBackError}</p>}
 
             {/* Only when there's something to act on — a scoped/view-only
                 caller can select rows (harmless) but has no action to run
@@ -382,8 +414,10 @@ export function RenewDocumentPage() {
             visibleColIdx={visibleColIdx}
             total={filtered.length}
             canAct={canActRenew}
+            sendBackBusy={sendBackBusyKey === selected.row?.[0]}
             onBack={() => setSelectedContainer(null)}
             onAction={() => openDoc(selected)}
+            onSendBack={() => handleSendBack(selected)}
           />
         )}
       </Card>
@@ -411,7 +445,7 @@ export function RenewDocumentPage() {
   );
 }
 
-function RenewDocumentDetail({ item, headers, visibleColIdx, total, canAct, onBack, onAction }) {
+function RenewDocumentDetail({ item, headers, visibleColIdx, total, canAct, sendBackBusy, onBack, onAction, onSendBack }) {
   return (
     <div>
       <Button variant="secondary" size="sm" onClick={onBack} className={styles.backBtn}>← Back to List ({total})</Button>
@@ -432,7 +466,10 @@ function RenewDocumentDetail({ item, headers, visibleColIdx, total, canAct, onBa
 
         <div className={styles.detailFooter}>
           {canAct ? (
-            <Button size="lg" variant="primary" onClick={onAction}>Update Agreement</Button>
+            <div className={styles.rowActions}>
+              <Button size="lg" variant="primary" onClick={onAction}>Update Agreement</Button>
+              <Button size="lg" variant="secondary" loading={sendBackBusy} onClick={onSendBack}>Send Back</Button>
+            </div>
           ) : (
             <span className={styles.viewOnly}>View only</span>
           )}

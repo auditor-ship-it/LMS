@@ -20,7 +20,10 @@ export const ALL_STAGES = [
   { number: 6, label: 'Transportation', owner: 'Kshirod Khatua' },
   { number: 7, label: 'Gate In', owner: 'Pritam' },
   // RENAMED 2026-09-18 (explicit request): 'FMS Closure' -> 'KAM', owner added ('Sales').
-  { number: 8, label: 'KAM', owner: 'Sales' },
+  // RENAMED AGAIN 2026-09-29 (explicit request): 'KAM' -> 'FMS Closed', and the
+  // 'Sales' owner (shown as the tab strip's "Stage 6 (Sales)") -> 'FMS Closed'
+  // too, same request, same day.
+  { number: 8, label: 'FMS Closed', owner: 'FMS Closed' },
   /* ADDED 2026-09-18 (explicit request) as a genuinely new stage between
      Transportation and Gate In, displaying as "Stage 3" — LR details fetched
      live from FMS plus the Return Transportation PO fields. RETIRED
