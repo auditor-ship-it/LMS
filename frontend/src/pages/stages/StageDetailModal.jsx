@@ -367,6 +367,10 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   }
 
   const modalTitle = stageCaption(stageNumber);
+  // Stage 6 (SD Refunds) nests RefundSubmitForm, which has its own <form> —
+  // see the doc comment at this tag's use below for why that stage renders
+  // a plain <div> here instead of <form>.
+  const FormTag = stageNumber === SD_REFUNDS_STAGE ? 'div' : 'form';
 
   return (
     <div className={styles.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -396,8 +400,23 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
             </div>
           )}
 
+          {/* BUG FOUND AND FIXED 2026-10-03: Stage 6 (SD Refunds) renders
+              RefundSubmitForm inside this block, which has its OWN <form>
+              (needed on its other host, the standalone SD Refunds page) —
+              nesting it inside THIS form made it an invalid nested <form>,
+              exactly the hazard RejectModal's own form is deliberately kept
+              OUTSIDE this one to avoid (see that comment below). A nested
+              form's submit event bubbles to the outer form's onSubmit too,
+              so clicking Submit on the SD Refund form also fired THIS
+              form's handleSubmit — calling the generic stage-save endpoint
+              for a stage with no fields of its own, racing the real submit
+              and showing as "nothing happened"/an unrelated loading flash.
+              Stage 6 never has fields or a Save Stage button anyway (no
+              STAGE_FIELDS[11] entry), so it loses nothing by using a plain
+              <div> instead of <form> here (FormTag below) — every other
+              stage is unaffected. */}
           {!loading && !error && !justSaved && (
-            <form onSubmit={handleSubmit}>
+            <FormTag onSubmit={stageNumber === SD_REFUNDS_STAGE ? undefined : handleSubmit}>
               <div className={styles.baseGrid}>
                 {BASE_FIELDS.filter((f) => !f.onlyStage || f.onlyStage === stageNumber).map((f) => {
                   // source: 'enrichment' fields come from the separate,
@@ -748,7 +767,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   </Button>
                 )}
               </div>
-            </form>
+            </FormTag>
           )}
         </div>
       </div>
