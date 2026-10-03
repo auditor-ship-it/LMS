@@ -135,7 +135,11 @@ export function OffLeasePage() {
    open the approval". */
 const APPROVAL_DETAIL_ONLY_HEADERS = new Set([
   'ol intimation date', 'ol date', 'email notification', 'final billing date',
-  'stage 1 completed on'
+  'stage 1 completed on',
+  // Added 2026-10-03 (explicit request: "do not show table data this inside
+  // the show only") right after these two were added to the table — moved
+  // into the detail view only, same treatment as the headers above.
+  'return transportation po required', 'return transportation po'
 ]);
 
 function ApprovalQueue() {
