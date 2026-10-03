@@ -516,7 +516,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   canMove={canAct(`offlease${stageNumber}`)}
                   fmsChecked={suppliedFms || !fmsLoading}
                   fmsFound={!!fmsMovement}
-                  doFetched={!!String(data?.col_48 || '').trim()}
+                  doFetched={!!(String(data?.col_48 || '').trim() || _doNumberFromFms(fmsTransport))}
                   alreadyMoved={data?._move}
                   ctcPending={data?._ctcPending}
                   onMoved={() => { onSaved?.(); onClose(); }}
@@ -1343,6 +1343,22 @@ function FormSections({ fields, values, pendingFiles, disabled, onChange, onFile
 const fmsState = (record) => (record === undefined ? 'unread' : record?.fields?.length ? 'found' : 'missing');
 const FMS_STATE_TEXT = { found: 'Fetched', missing: 'No record', unread: 'Unavailable' };
 
+/** DO Number straight off the live STAGE-9 match (fmsTransport), same field
+ *  FMS_GROUPS' "Reference" regex recognizes. BUG FOUND 2026-10-03: doFetched
+ *  below was gated purely on OL_SHEET's own col_48, which only ever gets
+ *  written by the Client-to-Client send-back re-fetch
+ *  (_populateTransportationFromClientToClientLease, offlease.service.js) —
+ *  no route exists that writes it for a normal container, so Move To Stage
+ *  stayed permanently locked for every container that isn't a Client-to-
+ *  Client case, even once STAGE-9 itself was plainly fetched and showing a
+ *  real DO Number right above it. col_48 is still checked too (whichever
+ *  resolves first), so an already-populated Client-to-Client row is
+ *  unaffected. */
+function _doNumberFromFms(record) {
+  const pair = record?.fields?.find(([label]) => /\bdo\s*number\b|delivery order number/i.test(label));
+  return pair ? String(pair[1] || '').trim() : '';
+}
+
 /**
  * STAGE-8 -> 9 -> 10 as clickable steps, with only the selected step's detail
  * shown.
@@ -1466,11 +1482,13 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  *
  * `doFetched` — explicit request 2026-09-25, on top of everything above: the
  * whole section (not just the submit button — the Reason dropdown itself)
- * stays closed for ALL THREE reasons until Transportation's own DO Number
- * (col_48) is already on file, whether that arrived via the "Client to
- * Client" Send Back re-fetch (saveOffLeaseSendBack's
- * _populateTransportationFromClientToClientLease) or any other route. This
- * sits ABOVE the per-reason checks above, not in place of them — Client
+ * stays closed for ALL THREE reasons until a DO Number is on file for this
+ * container — OL_SHEET's own col_48 (set by the "Client to Client" Send Back
+ * re-fetch, saveOffLeaseSendBack's _populateTransportationFromClientToClientLease)
+ * OR, for every other container (col_48 is never written for a non-Client-
+ * to-Client row — see _doNumberFromFms's own doc comment, bug found
+ * 2026-10-03), the live STAGE-9 match shown in the FMS panel just above.
+ * This sits ABOVE the per-reason checks above, not in place of them — Client
  * Scope/Other's own fmsChecked/fmsFound lock is unchanged once this outer
  * gate opens.
  */
