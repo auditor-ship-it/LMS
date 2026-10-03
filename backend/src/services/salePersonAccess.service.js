@@ -48,22 +48,24 @@ import { safeStr } from '../utils/format.js';
  * matchIdentity()'s own doc comment for why display and matching now use two
  * different notions of "same name" instead of one.
  *
- * pushpa.shetty@crystalgroup.in: 'Pushpa' (added 2026-10-01, Sales OS SSO
- * handoff — empId 9035 was reaching getRenewalStats/getRenewalLog/
- * getRenewalPipeline as 'unscoped' with no mapped Sale Person). Scoped to
- * plain 'Pushpa', not the 'Pushpa Shetty' alias group above — 'Pushpa' is the
- * Sales CRM's own dominant, authoritative assignedTo spelling for her actual
- * book of business (203 leads, per SALE_PERSON_ALIASES' own comment), so this
- * is the value that actually surfaces her leads; 'Pushpa Shetty' only covers
- * the Deployed sheet's stale fallback spellings. */
+ * pushpa.shetty@crystalgroup.in: UNSCOPED (reverted 2026-10-03, explicit
+ * request: "Pushpa HOD admin access show all data" — she reviews HOD
+ * approvals across every sale person's leases, not just her own book, so a
+ * single-person restriction was wrong for that role). Briefly scoped to
+ * 'Pushpa' 2026-10-01 to 2026-10-03 for the Sales OS SSO handoff (empId 9035
+ * was reaching getRenewalStats/getRenewalLog/getRenewalPipeline as
+ * 'unscoped' with no mapped Sale Person) — confirmed with the user that her
+ * Sales OS dashboard should ALSO now show everyone's data, not just her own,
+ * so removing her from this map (no entry = unscoped, same fallback every
+ * other unmapped login already gets) is correct everywhere this map is read,
+ * not just Lease Expiry/Renew/Off-Lease. */
 const SALE_PERSON_BY_EMAIL = {
   'gauri.gupta@crystalgroup.in': 'Gauri',
   'enquiry@crystalgroup.in': 'Kedar',
   'key.accounts@crystalgroup.in': 'Sagar-A',
   'sales1@crystalgroup.in': 'Sapna',
   'sales@crystalgroup.in': 'Gargi',
-  'contactsales@crystalgroup.in': 'Laveena',
-  'pushpa.shetty@crystalgroup.in': 'Pushpa'
+  'contactsales@crystalgroup.in': 'Laveena'
 };
 
 const norm = (v) => safeStr(v).trim().toLowerCase();
