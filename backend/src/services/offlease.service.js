@@ -3408,7 +3408,12 @@ const OL_CTC_PENDING_TARGET_COL = 342;
 const OL_CTC_PENDING_BY_COL = 343;
 const OL_CTC_PENDING_TIMESTAMP_COL = 344;
 
-export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other'];
+/* 'Purchased' added 2026-10-03 (explicit request): the container was bought
+ * outright rather than transported onward. No reason-specific field of its
+ * own like Client Scope/Other have — just the fields every reason already
+ * captures (Remarks, Date, Move To Stage). See _prepareMoveToStage's own
+ * branch for the shape this writes. */
+export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other', 'Purchased'];
 
 /** DISPLAY stage number (what the UI and this Move To Stage dropdown show,
  *  e.g. 4/5/6) -> INTERNAL stage number (what selects the sheet column
@@ -3644,6 +3649,13 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
     const arrival = safeStr(arrivalDate).trim();
     return {
       reason: r, newClientName: '', clientScope: scope, arrivalDate: arrival,
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+    };
+  }
+
+  if (r === 'Purchased') {
+    return {
+      reason: r, newClientName: '', clientScope: '', arrivalDate: '',
       remarks: rmk, commentType: '', date: d, jumpTargetInternal
     };
   }

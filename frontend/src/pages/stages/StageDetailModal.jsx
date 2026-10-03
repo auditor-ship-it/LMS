@@ -1423,7 +1423,12 @@ function FmsSteps({ steps }) {
   );
 }
 
-const MOVE_REASON_OPTIONS = ['Client to Client', 'Client Scope', 'Other'];
+/* 'Purchased' added 2026-10-03 (explicit request: "add the one option
+   purchased and remarks") — the container was bought outright rather than
+   transported onward. No field of its own like Client Scope/Other have;
+   Remarks (already generic to every reason below) is the only context it
+   needs. */
+const MOVE_REASON_OPTIONS = ['Client to Client', 'Client Scope', 'Other', 'Purchased'];
 
 /** Display stage number (submitted to the backend) -> friendly label. Only
  *  Gate In / Inspection / Final Billing are valid direct-jump destinations
@@ -1596,6 +1601,8 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
       if (!scope) { setError('Scope is required.'); return; }
       payload.clientScope = scope;
       successLabel = `Client Scope (${scope}) — moved directly to ${destLabel}`;
+    } else if (reason === 'Purchased') {
+      successLabel = `Purchased — moved directly to ${destLabel}`;
     } else {
       const ct = commentType.trim();
       if (!ct) { setError('Comment / Type is required.'); return; }
