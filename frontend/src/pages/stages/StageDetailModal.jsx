@@ -3,17 +3,16 @@ import { jsPDF } from 'jspdf';
 import { Button } from '../../components/ui/Button.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
+import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { RefundSubmitForm } from '../refunds/RefundSubmitForm.jsx';
-import { LookupResult } from '../offLease/LookupResult.jsx';
-import { useStageSelection, StageSelector } from '../offLease/StageSelector.jsx';
-import { exportLookupToPdf, exportLookupToExcel } from '../offLease/lookupExport.js';
+import { exportLookupToPdf } from '../offLease/lookupExport.js';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { uploadStageFile } from '../../services/upload.service.js';
@@ -120,44 +119,36 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   );
   const billing = billingDetail?.billing?.records?.length ? billingDetail.billing : null;
 
-  /* Stage 6 (SD Refunds, internal 11) — explicit request 2026-10-01. This
-     container's own SD Refund entries (reloaded via `reload` after a fresh
-     submission, same as the main stage-detail data, so the pipeline status
-     below reflects it immediately rather than waiting for the next poll). */
+  /* Stage 6 (SD Refunds) AND Stage 7 (Payment Status) both need this
+     container's SD Refund entries — Stage 6 to show the submission form/
+     status, Stage 7 to display that SAME HOD/CEO decision again as the first
+     two steps of its own payment pipeline (explicit request 2026-10-03 —
+     NOT a second approval, just the same one shown here too; see
+     PAYMENT_STATUS_STAGE's own doc comment). Reloaded via `reload` after a
+     fresh VR/UTR submission, same as the main stage-detail data. */
   const { data: sdRefunds, reload: reloadSdRefunds } = useAsync(
-    () => (stageNumber === SD_REFUNDS_STAGE && containerNo ? fetchSdRefundsForContainer(containerNo) : Promise.resolve(null)),
+    () => ((stageNumber === SD_REFUNDS_STAGE || stageNumber === PAYMENT_STATUS_STAGE) && containerNo ? fetchSdRefundsForContainer(containerNo) : Promise.resolve(null)),
     [stageNumber, containerNo]
   );
 
-  /* Explicit request 2026-09-29: KAM (Stage 6/internal 8, the pipeline's last
-     stop) should be able to review the container's ENTIRE Stage 1-5 history
-     in one place, not just Stage 5's own reference note below — and download
-     it as a PDF/Excel, same report the Container Lookup page already builds
-     (lookupExport.js). Reuses that exact same data/components rather than
-     building a second copy: lookupContainer is the same call BILLING_STAGE's
-     own billingDetail fetch above already makes, just also fired for KAM. */
-  // BUG FOUND AND FIXED 2026-09-29: this call re-reads the Operation sheet
-  // and STAGE-8/9/10 in full (the same ones the Off-Lease/FMS lookups
-  // elsewhere in this app document as routinely taking 20-30s+ EACH — see
-  // stage8.service.js's own cache-warming doc comments) — confirmed live,
-  // ~60s end to end for a single container. `loading`/`error` were never
-  // read here, so for that entire minute this section rendered nothing at
-  // all: indistinguishable from "not fetching" (reported exactly that way).
-  const { data: kamLookup, loading: kamLoading, error: kamLookupError } = useAsync(
-    () => (stageNumber === FMS_CLOSURE_STAGE && containerNo
-      ? lookupContainer(containerNo, data?.col_1 || '')
-      : Promise.resolve(null)),
-    [stageNumber, containerNo, data?.col_1]
-  );
-  const kamLookupResult = kamLookup?.found && !kamLookup?.multiple ? kamLookup : null;
-  const { filled: kamFilledStages, selected: kamSelectedStages, toggle: kamToggleStage } = useStageSelection(kamLookupResult);
-  const [kamDownloadError, setKamDownloadError] = useState('');
-  const downloadKam = (fn, ...args) => () => {
-    setKamDownloadError('');
+  /* Stage 7 (Payment Status)'s "Voucher Raised" — explicit request
+     2026-10-03. No field of its own (see PAYMENT_STATUS_STAGE's doc
+     comment): a plain button that stamps VR done, same
+     busy/error-handling shape as the Hold/Send Back actions elsewhere in
+     this file. `reload` (not reloadSdRefunds) because VR lives on OL_SHEET's
+     own row (`data`), not the Refunds sheet. */
+  const [vrBusy, setVrBusy] = useState(false);
+  const [vrError, setVrError] = useState('');
+  const handleVoucherRaised = async () => {
+    setVrBusy(true);
+    setVrError('');
     try {
-      fn(kamLookupResult, ...args);
+      await submitVoucherRaised(containerNo, rowNum);
+      await reload();
     } catch (err) {
-      setKamDownloadError(err?.message || 'Could not build the download file.');
+      setVrError(apiErrorMessage(err));
+    } finally {
+      setVrBusy(false);
     }
   };
 
@@ -569,46 +560,71 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 </>
               )}
 
-              {/* Explicit request 2026-09-29: replaces the old
-                  Stage5ReferenceNote card here (a single, confusingly
-                  "Final Billing (Stage 6)"-labelled reference to Stage 5's
-                  own billing answers) — the full history view below already
-                  includes that same data as part of every completed stage,
-                  so the narrower card was redundant. KAM's own full Stage 1-5
-                  history view + PDF/Excel download — see kamLookupResult's
-                  own doc comment above for why this reuses the Container
-                  Lookup page's exact components/export functions rather than
-                  a second copy. Nothing here is editable; same "reference
-                  only" convention the old card had. */}
-              {stageNumber === FMS_CLOSURE_STAGE && (
+              {/* Stage 7 (Payment Status, internal 8) — explicit request
+                  2026-10-03, replacing the old read-only "Full Off-Lease
+                  History" reference card entirely. A 4-step pipeline:
+                  HOD/CEO are NOT a new approval — they're Stage 6 (SD
+                  Refunds)'s own already-recorded decision, read from
+                  `sdRefunds` and just displayed again here. VR (Voucher
+                  Raised) is a custom action with no field of its own
+                  (handleVoucherRaised above). UTR Number is a real
+                  STAGE_FIELDS[8] field, shown below (showIf: vrDoneShown,
+                  stageFields.js) once VR is done — submitting it through the
+                  normal Save Stage flow is what completes this stage. */}
+              {stageNumber === PAYMENT_STATUS_STAGE && (
                 <div className={styles.fmsWrap}>
-                  <h3 className={styles.sectionTitle}>Full Off-Lease History (Stage 1-5)</h3>
-                  {/* This lookup re-reads the Operation sheet and STAGE-8/9/10
-                      in full — routinely 20-30s+ each on their own (see
-                      kamLookup's own doc comment above) — so this section can
-                      take up to a minute. Says so explicitly rather than
-                      rendering nothing, which is indistinguishable from
-                      broken. */}
-                  {kamLoading && <LoadingState label="Loading full history — this can take up to a minute…" />}
-                  {!kamLoading && kamLookupError && <ErrorState message={kamLookupError} />}
-                  {!kamLoading && !kamLookupError && kamLookup && !kamLookupResult && (
-                    <p className={styles.sectionHint}>
-                      {kamLookup.multiple
-                        ? `${containerNo} has ${kamLookup.matches?.length ?? 'multiple'} off-lease records — open it from Container Lookup to pick the right one.`
-                        : (kamLookup.message || 'Could not load this container’s history.')}
-                    </p>
-                  )}
-                  {kamLookupResult && (
+                  <h3 className={styles.sectionTitle}>Payment Pipeline</h3>
+                  {!sdRefunds ? (
+                    <p className={styles.sectionHint}>Loading…</p>
+                  ) : (
                     <>
-                      {kamFilledStages.length > 0 && (
-                        <StageSelector filled={kamFilledStages} selected={kamSelectedStages} onToggle={kamToggleStage} />
-                      )}
-                      <div className={styles.actions}>
-                        <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToExcel)}>Download Excel</Button>
-                        <Button type="button" variant="secondary" onClick={downloadKam(exportLookupToPdf, kamSelectedStages)}>Download PDF</Button>
+                      {/* Colour-coded pipeline — explicit request 2026-10-03
+                          ("HOD approval Green reject red... VR then UTR this
+                          is fetch and green the move to completed"): reuses
+                          StatusBadge's existing semantic colours (green for
+                          Approved/Completed, red for Rejected, amber for
+                          Pending) rather than plain text, so a rejection or a
+                          completed step is visible at a glance. HOD/CEO pass
+                          their real status straight through (StatusBadge
+                          already understands 'Approved'/'Rejected'/'Pending');
+                          VR/UTR have no "Rejected" state of their own, so they
+                          only ever show Completed (green) or Pending (amber). */}
+                      <div className={styles.pipelineRow}>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>HOD</span>
+                          <StatusBadge status={sdRefunds[0]?.hodStatus || 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>CEO</span>
+                          <StatusBadge status={sdRefunds[0]?.ceoStatus || 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>VR</span>
+                          <StatusBadge status={data?.col_348 === 'Completed' ? 'Completed' : 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>UTR</span>
+                          <StatusBadge status={data?.col_351 ? 'Completed' : 'Pending'} />
+                        </span>
                       </div>
-                      {kamDownloadError && <div className={styles.error}>{kamDownloadError}</div>}
-                      <LookupResult result={kamLookupResult} />
+                      {sdRefunds[0]?.ceoStatus !== 'Approved' ? (
+                        <p className={styles.sectionHint}>
+                          Waiting for Stage 6 (SD Refunds) to be CEO-approved before payment can proceed — see SD Refunds Approval for full detail.
+                        </p>
+                      ) : data?.col_348 !== 'Completed' ? (
+                        <>
+                          <div className={styles.actions}>
+                            <Button type="button" variant="primary" loading={vrBusy} onClick={handleVoucherRaised}>
+                              Mark Voucher Raised
+                            </Button>
+                          </div>
+                          {vrError && <div className={styles.error}>{vrError}</div>}
+                        </>
+                      ) : data?.col_106 === 'Completed' ? (
+                        <p className={styles.sectionHint}>Payment completed — UTR Number: {data?.col_351}.</p>
+                      ) : (
+                        <p className={styles.sectionHint}>Voucher raised — enter the UTR Number below once the transfer is confirmed.</p>
+                      )}
                     </>
                   )}
                 </div>
@@ -774,7 +790,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     Send Back to Stage 1
                   </Button>
                 )}
-                {!readOnly && fields.length > 0 && !data?._skipped && (
+                {/* visibleFields, not the raw fields array — explicit case
+                    2026-10-03: Stage 7 (Payment Status)'s only field (UTR
+                    Number) stays showIf-hidden until VR is done, and a Save
+                    Stage button with nothing visible to fill in just invited
+                    a confusing "Voucher must be raised" error on an empty
+                    submit instead of no button at all. Every other stage's
+                    fields are either always visible or has at least one
+                    unconditional field, so this is unaffected there. */}
+                {!readOnly && visibleFields.length > 0 && !data?._skipped && (
                   <Button type="submit" variant="primary" loading={busy}>
                     {uploading ? 'Uploading files…' : saving ? 'Saving…' : 'Save Stage'}
                   </Button>
@@ -825,9 +849,11 @@ const REPORT_STAGES = [3, 5];
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
 
-/** FMS Closed (internally stage 8, shown as Stage 7 since SD Refunds was
- *  inserted before it 2026-10-01 — see constants/stages.js's WORKFLOW). */
-const FMS_CLOSURE_STAGE = 8;
+/** Payment Status (internally stage 8, shown as Stage 7 since SD Refunds was
+ *  inserted before it 2026-10-01 — see constants/stages.js's WORKFLOW).
+ *  RENAMED 2026-10-03 (explicit request) from "FMS Closed" — see
+ *  OL_STAGE_INFO[8]'s own doc comment on the backend for the full history. */
+const PAYMENT_STATUS_STAGE = 8;
 
 /** Gate In (internally stage 7, shown as Stage 3) — no form of its own, see
  *  the "Waiting for Gate-In confirmation" panel's own doc comment. */

@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { registerCronJobs, registerSheetsSync } from './jobs/index.js';
 import { startOutboxWorker } from './jobs/outboxWorker.js';
 import { connectMongo } from './config/db.js';
+import { loadRuntimeSecretsFromMongo } from './config/runtimeSecrets.js';
 import { logger } from './utils/logger.js';
 
 logger.info('[SERVER] Starting Lease Management backend...');
@@ -25,6 +26,10 @@ process.on('uncaughtException', (err) => {
 // design — see the split-into-three-apps plan) — connect before serving,
 // since routes call getCollection() synchronously off the shared connection.
 await connectMongo();
+// See runtimeSecrets.js's own doc comment — fills in optional secrets (like
+// REFUND_REVIEW_SECRET) from Mongo when the server's own .env doesn't have
+// them, so a feature doesn't stay disabled purely for lack of server access.
+await loadRuntimeSecretsFromMongo();
 
 const app = createApp();
 

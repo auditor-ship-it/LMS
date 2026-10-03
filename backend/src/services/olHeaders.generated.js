@@ -205,4 +205,9 @@ export const OL_HEADERS = [
      automatically — no manual sheet edit needed. Keep these 3 entries if
      this file is ever regenerated from the live header row. */
   "SD Refunds Timestamp", "SD Refunds User", "SD Refunds Status",
+  /* Indices 348-351 — same deliberate, hand-added exception as 345-347
+     above: added 2026-10-03 for Stage 7's own VR/UTR payment pipeline (see
+     OL_VR_STATUS_COL/OL_UTR_NUMBER_COL in offlease.service.js). Keep these
+     4 entries if this file is ever regenerated from the live header row. */
+  "VR Status", "VR Timestamp", "VR User", "UTR Number",
 ];

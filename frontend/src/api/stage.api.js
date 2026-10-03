@@ -107,3 +107,9 @@ export const saveSendBackFromBilling = (containerNo, remarks, rowNum) =>
  *  nothing submitted for this container yet. */
 export const getSdRefundsForContainer = (containerNo) =>
   apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/sd-refunds`).then((r) => r.data.entries);
+
+/** POST /api/offlease/:containerNo/voucher-raised — Stage 7 (Payment
+ *  Status)'s own "Voucher Raised" step, explicit request 2026-10-03. `rowNum`:
+ *  see getStageDetail's doc comment. */
+export const saveVoucherRaised = (containerNo, rowNum) =>
+  apiClient.post(`/offlease/${encodeURIComponent(containerNo)}/voucher-raised`, { rowNum }).then((r) => r.data.message);

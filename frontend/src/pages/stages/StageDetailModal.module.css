@@ -504,6 +504,12 @@
   color: var(--text-2);
 }
 
+/* Stage 7 (Payment Status)'s colour-coded HOD/CEO/VR/UTR pipeline — explicit
+   request 2026-10-03. */
+.pipelineRow { display: flex; flex-wrap: wrap; gap: 18px; margin: 4px 0 14px; }
+.pipelineStep { display: flex; align-items: center; gap: 8px; }
+.pipelineLabel { font-size: 12px; font-weight: 800; color: var(--text-2); }
+
 .inspWrap { margin-top: 12px; }
 
 .inspTable {

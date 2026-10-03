@@ -161,7 +161,18 @@ export const OL_STAGE_INFO = {
   5: { statusCol: 44, startCol: 29, endCol: 44, label: 'Final Billing' },          // AD..AS
   6: { statusCol: 99, startCol: 45, endCol: 99, label: 'Transportation' },         // AT..CV
   7: { statusCol: 135, startCol: 114, endCol: 135, label: 'Gate In' },             // DK..EF
-  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'FMS Closed' },          // CW..DC
+  /* RENAMED 2026-10-03 (explicit request): 'FMS Closed' -> 'Payment Status'.
+     Content replaced the same day with a payment pipeline (HOD/CEO — the
+     SAME Stage 6/SD Refunds decision, just displayed here, not re-approved —
+     then VR/UTR, new steps of its own): see OL_VR_STATUS_COL/
+     OL_UTR_NUMBER_COL below and StageDetailModal.jsx's PAYMENT_STATUS_STAGE
+     block. The old read-only "Full Off-Lease History" reference view is
+     gone. statusCol (106) still means the same thing it always did — this
+     stage is "Completed" once UTR Number (351, a STAGE_FIELDS[8] field) is
+     submitted via the normal saveOffLeaseStage(Fast) path, same generic
+     completion write every other stage uses; VR is a separate, custom
+     pre-step (saveOffLeaseVoucherRaised below) gating that submission. */
+  8: { statusCol: 106, startCol: 100, endCol: 106, label: 'Payment Status' },      // CW..DC
   /* RETIRED 2026-09-22 (explicit request) — added 2026-09-18 as "Stage 3"
      between Transportation and Gate In, taken back out entirely 4 days
      later, LR reference + Invoice fields gone (not moved anywhere). Kept
@@ -387,6 +398,31 @@ const OL_STAGE4_EXTRA_COLS = [164, 165, 166, 167];
  * never removed — just never read again. */
 const OL_RETURN_PO_COLS = [317, 318, 319];
 
+/** Stage 7/Payment Status's own pipeline — explicit request 2026-10-03
+ *  ("Stage 7 (Payment status)... hod --- ceo --- and vr --- utr ---
+ *  completed"). HOD/CEO are NOT new columns — they're the SAME Stage 6 (SD
+ *  Refunds) decision, read from refunds.service.js and just displayed again
+ *  here (see StageDetailModal.jsx's PAYMENT_STATUS_STAGE block); no new
+ *  approval happens. VR ("Voucher Raised") and UTR (the bank's transfer
+ *  reference number) are the two genuinely new steps:
+ *   - VR has no field of its own to submit — a custom action
+ *     (saveOffLeaseVoucherRaised below) just stamps these 3 columns, same
+ *     Status/Timestamp/User shape as every other custom action in this file
+ *     (Hold, Move To Stage, ...).
+ *   - UTR IS a real STAGE_FIELDS[8] field (col 351, required, shown only
+ *     once VR is done — see stageFields.js's poRequiredShown-style showIf)
+ *     — submitting it goes through the NORMAL saveOffLeaseStage(Fast) path,
+ *     which is what actually marks this stage (statusCol 106) "Completed",
+ *     same as every other stage's own Save Stage. No separate UTR status
+ *     column needed: a non-blank col 351 IS the completion record.
+ *  Columns 348-351, right after SD Refunds' own 345-347 — OL_HEADERS.length
+ *  is 348, confirmed before picking these (same check as 345-347's own doc
+ *  comment describes). */
+const OL_VR_STATUS_COL = 348;
+const OL_VR_TIMESTAMP_COL = 349;
+const OL_VR_USER_COL = 350;
+const OL_UTR_NUMBER_COL = 351;
+
 /** Stage 1's "Container Photos" — several photos picked at once, combined
  *  client-side into ONE PDF before upload (ImagesToPdfFieldInput in
  *  StageDetailModal.jsx), so this is just a single 'file' value like any
@@ -559,12 +595,14 @@ const stageCaption = (s) => {
 
 // RENAMED 2026-09-18 (explicit request): 5 'Billing Reconciliation' -> 'Final
 // Billing', 8 'FMS Closure' -> 'KAM'. RENAMED AGAIN 2026-09-29 (explicit
-// request): 8 'KAM' -> 'FMS Closed'. Must stay in step with ALL_STAGES in
+// request): 8 'KAM' -> 'FMS Closed'. RENAMED AGAIN 2026-10-03 (explicit
+// request): 8 'FMS Closed' -> 'Payment Status' (see OL_STAGE_INFO[8]'s own
+// doc comment). Must stay in step with ALL_STAGES in
 // frontend/src/constants/stages.js.
 const OL_STAGE_LABELS = {
   1: 'Off-Lease Intimation', 2: 'Lifting / Arrival', 3: 'Inspection Checklist',
   4: 'Quotation / Order', 5: 'Final Billing', 6: 'Transportation', 7: 'Gate In',
-  8: 'FMS Closed', 10: 'LR & Return Transportation'
+  8: 'Payment Status', 10: 'LR & Return Transportation'
 };
 
 /* The real home of Order No and Client Name is "New Lease" only (see LMS.js
@@ -2080,7 +2118,14 @@ export async function getOffLeaseData(stage, opts = {}, user) {
        (Container Lookup's own history display still shows what the Gate-In
        form said), just never again as a queue-bypass signal. */
     if (Number(stage) === OL_STAGE3_INTERNAL && gatedIn) continue;
-    if (!(Number(stage) === 1 && opts.filter === 'reject' && rejected)) {
+    /* Stage 7 (Payment Status)'s own Pending/Completed tabs — explicit
+       request 2026-10-03. Every other stage/filter combination here only
+       ever shows PENDING rows (blank statusVal); this is the one place that
+       inverts it, showing only rows this stage's own Save Stage (the UTR
+       Number submission) has already completed. */
+    if (Number(stage) === 8 && opts.filter === 'completed') {
+      if (!statusVal || String(statusVal).trim() === '') continue;
+    } else if (!(Number(stage) === 1 && opts.filter === 'reject' && rejected)) {
       if (statusVal && String(statusVal).trim() !== '') continue;
     }
     /* This row was moved directly past `stage` via an active jump — it isn't
@@ -2626,6 +2671,19 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
     if (Number(stage) === 3) for (const eci of OL_STAGE3_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
     if (Number(stage) === 4) for (const eci of OL_STAGE4_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
 
+    /* Stage 7 (Payment Status)'s own VR status (col_348) and UTR Number
+       (col_351) — outside this stage's own startCol..endCol range (100-106),
+       same reasoning as every other *_EXTRA_COLS stage here. See
+       OL_VR_STATUS_COL's own doc comment. col_351 (UTR Number) is also a
+       real STAGE_FIELDS[8] field, so this is what lets the form pre-fill it
+       once already submitted, same as any other stage field. */
+    if (Number(stage) === 8) {
+      result[`col_${OL_VR_STATUS_COL}`] = safeStr(row[OL_VR_STATUS_COL]);
+      result[`col_${OL_VR_TIMESTAMP_COL}`] = fmtCell(row[OL_VR_TIMESTAMP_COL]);
+      result[`col_${OL_VR_USER_COL}`] = safeStr(row[OL_VR_USER_COL]);
+      result[`col_${OL_UTR_NUMBER_COL}`] = safeStr(row[OL_UTR_NUMBER_COL]);
+    }
+
     /* Explicit request 2026-09-29: Stage 3's (Inspection Checklist) own
        "Container Received Date" (col_24) is the same real-world event
        STAGE-10 Site Delivery already records as "Vehicle Reached at Site
@@ -3120,16 +3178,25 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
     const curStatus = row[info.statusCol];
     if (curStatus && String(curStatus).trim() !== '') return 'ALREADY_PROCESSED';
 
-    /* Stage 7 (FMS Closed, internal 8) blocks on Stage 6 (SD Refunds,
+    /* Stage 7 (Payment Status, internal 8) blocks on Stage 6 (SD Refunds,
        internal 11) being Completed — explicit request 2026-10-01, confirmed
        as a hard block, not just a queue-visibility thing (see
        OL_STAGE_INFO[11]'s own doc comment for why 11's status is never
        user-submitted here, only ever set by markOffLeaseSdRefundApproved).
        This is the first genuine "previous stage must be done" WRITE-time
        guard in this function — every other stage here only ever checks its
-       OWN status column, never a prior one. */
-    if (stageNum === 8 && safeStr(row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
-      throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before FMS Closed can be completed.');
+       OWN status column, never a prior one.
+       EXTENDED 2026-10-03: also blocks on VR (Voucher Raised) being done —
+       the payment pipeline's own second step, before this (the UTR Number
+       submission) can be its third/final one. See OL_VR_STATUS_COL's own
+       doc comment. */
+    if (stageNum === 8) {
+      if (safeStr(row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
+        throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before Payment Status can be completed.');
+      }
+      if (safeStr(row[OL_VR_STATUS_COL]).trim() !== 'Completed') {
+        throw new AppError('Voucher must be raised before Payment Status can be completed.');
+      }
     }
 
     /* STAGE 1 -> assign the Lease ID here (inside the lock = no clash). If the
@@ -3347,10 +3414,15 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail,
   const curStatus = found.row[info.statusCol];
   if (curStatus && String(curStatus).trim() !== '') return 'ALREADY_PROCESSED';
 
-  // Same Stage 6 (SD Refunds) block as the live saveOffLeaseStage above —
-  // see that function's identical guard for the full doc comment.
-  if (stageNum === 8 && safeStr(found.row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
-    throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before FMS Closed can be completed.');
+  // Same Stage 6 (SD Refunds) + VR block as the live saveOffLeaseStage above
+  // — see that function's identical guard for the full doc comment.
+  if (stageNum === 8) {
+    if (safeStr(found.row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
+      throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before Payment Status can be completed.');
+    }
+    if (safeStr(found.row[OL_VR_STATUS_COL]).trim() !== 'Completed') {
+      throw new AppError('Voucher must be raised before Payment Status can be completed.');
+    }
   }
 
   // Same technician-cost derivation as the live path — pure arithmetic on
@@ -4345,6 +4417,80 @@ export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail, k
   await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
   const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
   await enqueueSheetReplay('offlease.saveOffLeaseSendBackToStage1', [containerNo, userEmail, resolvedRow], { actor: userEmail });
+
+  return 'OK';
+}
+
+/**
+ * Stage 7 (Payment Status)'s "Voucher Raised" — the pipeline's own custom
+ * middle step, explicit request 2026-10-03. No field of its own to submit
+ * (unlike UTR Number, which is a real STAGE_FIELDS[8] field going through
+ * the normal saveOffLeaseStage(Fast) path) — just stamps
+ * OL_VR_STATUS_COL/TIMESTAMP/USER, same Status/Timestamp/User shape as Hold
+ * above. Gated on Stage 6 (SD Refunds) already being CEO-approved — raising
+ * a voucher for a refund that was never approved makes no sense — and on VR
+ * not already being raised (ALREADY_PROCESSED, same convention as every
+ * other custom action here). Permission: 'offlease8', same actor as the rest
+ * of this stage.
+ */
+export async function saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow) {
+  await checkActionPermission('offlease8', userEmail);
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    if (safeStr(row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
+      throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before a voucher can be raised.');
+    }
+    if (safeStr(row[OL_VR_STATUS_COL]).trim() !== '') return 'ALREADY_PROCESSED';
+
+    const stamp = dmyTime(new Date());
+    const cellUpdates = [
+      { range: `'${OL_SHEET}'!${colLetter(OL_VR_STATUS_COL)}${rn}`, values: [['Completed']] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_VR_TIMESTAMP_COL)}${rn}`, values: [[stamp]] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_VR_USER_COL)}${rn}`, values: [[userEmail || '']] }
+    ];
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const r = await getCollection(OL_SHEET).updateOne(
+        { key: `row_${rn - 2}` },
+        { $set: { [`row.${OL_VR_STATUS_COL}`]: 'Completed', [`row.${OL_VR_TIMESTAMP_COL}`]: stamp, [`row.${OL_VR_USER_COL}`]: userEmail || '' } }
+      );
+      if (!r.matchedCount) console.warn(`[OL-VR] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-VR] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/** Mongo-first fast path for Voucher Raised — same trade-off as the other
+ *  Fast paths in this file. */
+export async function saveOffLeaseVoucherRaisedFast(containerNo, userEmail, knownRow) {
+  await checkActionPermission('offlease8', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+  if (safeStr(found.row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
+    throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before a voucher can be raised.');
+  }
+  if (safeStr(found.row[OL_VR_STATUS_COL]).trim() !== '') return 'ALREADY_PROCESSED';
+
+  const stamp = dmyTime(new Date());
+  await getCollection(OL_SHEET).updateOne(
+    { key: found.key },
+    { $set: { [`row.${OL_VR_STATUS_COL}`]: 'Completed', [`row.${OL_VR_TIMESTAMP_COL}`]: stamp, [`row.${OL_VR_USER_COL}`]: userEmail || '', updatedAt: new Date() } }
+  );
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseVoucherRaised', [containerNo, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
 }

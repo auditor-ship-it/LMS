@@ -225,9 +225,10 @@ export function PipelineDashboard({ onOpenTab }) {
             renamed 'Sales' -> 'FMS Closed' the same day, which would just
             repeat this card's own label.
             RELABELED 2026-10-01 "Stage 6" -> "Stage 7": SD Refunds (internal
-            11, card just above) is now the display Stage 6. */}
+            11, card just above) is now the display Stage 6.
+            RELABELED AGAIN 2026-10-03 "FMS Closed" -> "Payment Status". */}
         <StatCard
-          icon={STAGE_ICONS[8]} label="Stage 7 · FMS Closed" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[8]} label="Stage 7 · Payment Status" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
           onClick={() => toggleFilter(8)}
         />
       </div>
