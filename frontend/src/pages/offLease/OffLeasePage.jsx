@@ -10,6 +10,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchApprovalQueue, decideApproval, sendBackToStage1FromApproval, decideClientToClient, lookupContainer } from '../../services/offLease.service.js';
+import { fetchAgreementPoPdf } from '../../services/stage.service.js';
 import { RejectModal } from './RejectModal.jsx';
 import { ClientToClientModal } from './ClientToClientModal.jsx';
 import { getStageCounts as fetchStageCounts } from '../../api/offlease.api.js';
@@ -510,6 +511,21 @@ function ApprovalQueue() {
  */
 function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, onApprove, onSendBack, onReject, onClientToClient }) {
   const containerNo = item.row?.[0];
+  // "Return Transportation PO Amount" matches the system-wide rate/amount
+  // hide rule (isRateOrAmountHeader) that built detailColIdx, so the generic
+  // loop below skips it — explicit request 2026-10-03 to show it anyway here,
+  // same deliberate exception "Rate" elsewhere in this app does NOT get.
+  const poAmountIdx = headers.indexOf('Return Transportation PO Amount');
+
+  /* Agreement PDF / PO PDF — explicit request 2026-10-03. Not OL_SHEET
+     columns (they live on SHEETS.DEPLOYED), so getOffLeaseApprovalData's own
+     row doesn't carry them. Uses the DEDICATED fast lookup (not
+     fetchCardEnrichment/getOffLeaseCardEnrichment, which also resolves Order
+     No with a slow multi-sheet fallback and Transportation — neither needed
+     here, and bundling them made these two wait on that slower one too,
+     confirmed live taking up to a minute) — see getOffLeaseAgreementPoPdf's
+     own doc comment on the backend. */
+  const { data: enrichment } = useAsync(() => fetchAgreementPoPdf(containerNo), [containerNo]);
 
   return (
     <div>
@@ -527,6 +543,20 @@ function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, on
               <span className={styles.detailValue}>{renderCellValue(item.row?.[ci]) || '—'}</span>
             </div>
           ))}
+          <div className={styles.detailField}>
+            <span className={styles.detailLabel}>Agreement PDF</span>
+            <span className={styles.detailValue}>{!enrichment ? '…' : renderCellValue(enrichment.agreementUrl)}</span>
+          </div>
+          <div className={styles.detailField}>
+            <span className={styles.detailLabel}>PO PDF</span>
+            <span className={styles.detailValue}>{!enrichment ? '…' : renderCellValue(enrichment.poPdfUrl)}</span>
+          </div>
+          {poAmountIdx >= 0 && (
+            <div className={styles.detailField}>
+              <span className={styles.detailLabel}>Return Transportation PO Amount</span>
+              <span className={styles.detailValue}>{renderCellValue(item.row?.[poAmountIdx]) || '—'}</span>
+            </div>
+          )}
         </div>
 
         {canAct && (

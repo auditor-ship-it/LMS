@@ -37,6 +37,12 @@ router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveSt
  * down waiting on these (see getOffLeaseCardEnrichment's doc comment). */
 router.get('/:containerNo/enrichment', asyncHandler(offLeaseController.getCardEnrichment));
 
+/* Agreement/PO PDF only, no Order No/Transportation — fast lookup for
+ * Pending Approval's detail view (OffLeasePage.jsx's ApprovalDetail), which
+ * must not wait on the slower multi-sheet Order No fallback the full
+ * enrichment above can trigger. See getOffLeaseAgreementPoPdf's doc comment. */
+router.get('/:containerNo/agreement-po-pdf', asyncHandler(offLeaseController.getAgreementPoPdf));
+
 /* Stage 6 (SD Refunds, internal 11) — this container's own SD Refund
  * entries + HOD/CEO/Accounts status, explicit request 2026-10-01. See
  * getSdRefundsForContainer's own doc comment for why this calls

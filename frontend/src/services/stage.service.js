@@ -1,5 +1,5 @@
 import {
-  getStageData, getStageDetail, getCardEnrichment, saveStage, getNextLeaseId, saveMoveToStage, saveMoveToStageClientToClientPending, saveSendBack, getMoveHistory,
+  getStageData, getStageDetail, getCardEnrichment, getAgreementPoPdf, saveStage, getNextLeaseId, saveMoveToStage, saveMoveToStageClientToClientPending, saveSendBack, getMoveHistory,
   saveHold, saveSendBackToStage1, saveSendRejectedToStage1, saveSendBackFromBilling, getSdRefundsForContainer
 } from '../api/stage.api.js';
 import { invalidate } from '../shared/dataBus.js';
@@ -12,6 +12,9 @@ export async function fetchStageDetail(containerNo, stage, rowNum) {
 }
 export async function fetchCardEnrichment(containerNo, rowNum) {
   return getCardEnrichment(containerNo, rowNum);
+}
+export async function fetchAgreementPoPdf(containerNo) {
+  return getAgreementPoPdf(containerNo);
 }
 export async function fetchSdRefundsForContainer(containerNo) {
   return getSdRefundsForContainer(containerNo);

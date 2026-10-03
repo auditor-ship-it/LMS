@@ -424,26 +424,33 @@ export const BASE_FIELDS = [
   { key: 'col_8', label: 'Valid Upto' },
   // Explicit request 2026-10-01 ("show order no offlease") — a cross-sheet
   // lookup, not a col_N. `source: 'enrichment'` means StageDetailModal.jsx
-  // reads this from the separate, slower getOffLeaseCardEnrichment fetch
+  // reads this from the separate, SLOWER getOffLeaseCardEnrichment fetch
   // (see that function's doc comment in offlease.service.js) rather than the
-  // fast stage-detail fetch every other BASE_FIELDS key comes from.
+  // fast stage-detail fetch every other BASE_FIELDS key comes from. Genuinely
+  // slow when this container has no STAGE-9 record yet (a multi-sheet
+  // fallback scan) — kept separate from the 'enrichmentFast' fields below for
+  // exactly that reason, see StageDetailModal.jsx's two separate useAsync calls.
   { key: 'orderNos', label: 'Order No', source: 'enrichment' },
-  // Explicit request 2026-10-01 ("show agreement pdf and po pdf offlease") —
-  // same enrichment fetch as orderNos above. `link: true` renders them as a
-  // "View" link instead of plain text (see StageDetailModal.jsx's BASE_FIELDS block).
-  { key: 'agreementUrl', label: 'Agreement PDF', link: true, source: 'enrichment' },
-  { key: 'poPdfUrl', label: 'PO PDF', link: true, source: 'enrichment' },
+  // Explicit request 2026-10-01 ("show agreement pdf and po pdf offlease"),
+  // moved to the FAST enrichment fetch 2026-10-03 (explicit request: "same
+  // this" after Pending Approval's identical fields were found stuck waiting
+  // on orderNos' slow lookup above — see getOffLeaseAgreementPoPdf's own doc
+  // comment). `link: true` renders them as a "View" link instead of plain
+  // text (see StageDetailModal.jsx's BASE_FIELDS block).
+  { key: 'agreementUrl', label: 'Agreement PDF', link: true, source: 'enrichmentFast' },
+  { key: 'poPdfUrl', label: 'PO PDF', link: true, source: 'enrichmentFast' },
   // Explicit request 2026-10-01 ("fetch order no wise stage 1 sheet...
   // transportation one way, transportation return way"), widened the same
   // day to every stage ("all stage fetch the transportation one way and
-  // retrun way") — same enrichment fetch as orderNos above.
+  // retrun way") — joined by Order No, so same (slow) enrichment fetch as
+  // orderNos above, not the fast one.
   { key: 'transportOneWay', label: 'Transportation One Way', source: 'enrichment' },
   { key: 'transportReturnWay', label: 'Transportation Return Way', source: 'enrichment' },
   // Explicit request 2026-10-01 ("this email fetch the stage 1") — the
   // Deployed sheet's own "Email ID" column (captured when this container was
   // actually marked Off-Lease/Renewed from Lease Expiry), not OL_SHEET's own
   // Stage 1 User/Timestamp (removed the same day — only set once Stage 1's
-  // form is submitted, a separate later step). Stage 1 only, same enrichment
-  // fetch as orderNos above.
-  { key: 'deployedEmailId', label: 'Email ID', source: 'enrichment', onlyStage: 1 }
+  // form is submitted, a separate later step). Stage 1 only. Same Deployed-
+  // sheet row as agreementUrl/poPdfUrl above, so fast enrichment too.
+  { key: 'deployedEmailId', label: 'Email ID', source: 'enrichmentFast', onlyStage: 1 }
 ];

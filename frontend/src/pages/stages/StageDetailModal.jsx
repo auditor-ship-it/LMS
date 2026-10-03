@@ -7,7 +7,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchCardEnrichment, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { RefundSubmitForm } from '../refunds/RefundSubmitForm.jsx';
@@ -62,14 +62,22 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     () => (stageNumber === 1 ? fetchNextLeaseId() : Promise.resolve(null)),
     [stageNumber]
   );
-  /* Order No / Agreement PDF / PO PDF / Transportation One Way & Return Way —
-     explicit report 2026-10-01: fetching these inline with the stage detail
-     above made the modal slow to open. Fetched separately so the modal opens
-     immediately on `data` and these fill in a moment later (BASE_FIELDS
-     reads `enrichment?.[f.key] ?? data?.[f.key]` below) — same
+  /* Order No / Transportation One Way & Return Way — explicit report
+     2026-10-01: fetching these inline with the stage detail above made the
+     modal slow to open. Fetched separately so the modal opens immediately on
+     `data` and these fill in a moment later (BASE_FIELDS reads
+     `enrichment?.[f.key] ?? data?.[f.key]` below) — same
      fetch-alongside-not-blocking pattern as billingDetail/kamLookup further
-     down in this file. */
+     down in this file. Genuinely SLOW on a container with no STAGE-9 record
+     yet (a multi-sheet fallback scan, confirmed live up to a minute) — kept
+     separate from fastEnrichment below for exactly that reason. */
   const { data: enrichment } = useAsync(() => fetchCardEnrichment(containerNo, rowNum), [containerNo, rowNum]);
+  /* Agreement PDF / PO PDF / Email ID — split out 2026-10-03 (explicit
+     request: "same this", after Pending Approval's identical fields were
+     found stuck waiting on the slow lookup above) into their own fast,
+     Deployed-sheet-only fetch — see getOffLeaseAgreementPoPdf's own doc
+     comment on the backend. */
+  const { data: fastEnrichment } = useAsync(() => fetchAgreementPoPdf(containerNo), [containerNo]);
 
   const [values, setValues] = useState({});
   const [pendingFiles, setPendingFiles] = useState({});
@@ -420,11 +428,16 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               <div className={styles.baseGrid}>
                 {BASE_FIELDS.filter((f) => !f.onlyStage || f.onlyStage === stageNumber).map((f) => {
                   // source: 'enrichment' fields come from the separate,
-                  // slower enrichment fetch (see the useAsync call above)
-                  // rather than `data` — everything else (including col_N
-                  // and createdBy) comes from the fast stage-detail fetch.
+                  // SLOWER enrichment fetch (orderNos/transport* — see that
+                  // useAsync call's own doc comment above); 'enrichmentFast'
+                  // fields (agreementUrl/poPdfUrl/deployedEmailId) come from
+                  // the dedicated fast one instead — everything else
+                  // (including col_N and createdBy) comes from the fast
+                  // stage-detail fetch (`data`).
                   const fromEnrichment = f.source === 'enrichment';
-                  const val = fromEnrichment ? enrichment?.[f.key] : data?.[f.key];
+                  const fromFastEnrichment = f.source === 'enrichmentFast';
+                  const enrichmentLoading = (fromEnrichment && !enrichment) || (fromFastEnrichment && !fastEnrichment);
+                  const val = fromEnrichment ? enrichment?.[f.key] : fromFastEnrichment ? fastEnrichment?.[f.key] : data?.[f.key];
                   return (
                   <div key={f.key} className={styles.baseItem}>
                     <span className={styles.baseLabel}>{f.label}</span>
@@ -443,10 +456,10 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                               <Icon name="external" />
                             </a>
                           )
-                          : (fromEnrichment && !enrichment ? '…' : '—'))
+                          : (enrichmentLoading ? '…' : '—'))
                         : f.key === 'col_1' && !data?.[f.key] && leaseIdPreview
                           ? `${leaseIdPreview} (auto)`
-                          : (val || (fromEnrichment && !enrichment ? '…' : '—'))}
+                          : (val || (enrichmentLoading ? '…' : '—'))}
                     </span>
                   </div>
                   );

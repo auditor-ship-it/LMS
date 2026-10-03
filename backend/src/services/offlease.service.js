@@ -2859,6 +2859,46 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
  * self-contained, independently-callable lookup with its own access gate —
  * not a trusted extension of a row the caller already fetched.
  */
+/**
+ * Agreement PDF / PO PDF / Email ID — the fast half of card enrichment,
+ * explicit request 2026-10-03 (Pending Approval's own detail view: "pls show
+ * agreement pdf and Po pdf", then "same this" for Off-Lease Stage 1's own
+ * modal). Split out of getOffLeaseCardEnrichment below rather than reusing it
+ * directly: that function ALSO resolves Order No (STAGE-9, with a multi-sheet
+ * Operation/New Lease fallback scan when STAGE-9 has no match yet) and the
+ * Transportation One Way/Return Way columns (which need Order No first) in
+ * the SAME response — all Mongo-backed, but the fallback scan over several
+ * thousand-row sheets can still take up to a minute end-to-end, and bundling
+ * every field into one response meant these three sat waiting on that slow
+ * one too (confirmed live: all showed loading for ~a minute on a container
+ * with no STAGE-9 record yet, on both the approval screen and Stage 1's own
+ * modal). This does only the single Deployed-sheet lookup these three fields
+ * actually need — same _deployedRawValues (Mongo mirror, 30s cache) and
+ * _resolveRenewalColumns every other Agreement/PO PDF reader in this app
+ * already uses — so it stays fast regardless of the other lookup's cost. No
+ * OL_SHEET row resolution or access gate here: every caller (Pending
+ * Approval's detail view, StageDetailModal.jsx) only ever passes a
+ * containerNo that already came from an access-gated list/fetch.
+ */
+export async function getOffLeaseAgreementPoPdf(containerNo) {
+  try {
+    const { values } = await _deployedRawValues();
+    const { agrCol, poPdfCol } = _resolveRenewalColumns(values[0] || []);
+    const want = normKey(containerNo);
+    const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
+    return {
+      agreementUrl: dRow ? safeStr(dRow[agrCol]) : '',
+      poPdfUrl: dRow ? safeStr(dRow[poPdfCol]) : '',
+      // Same field getOffLeaseCardEnrichment resolves as deployedEmailId —
+      // see that function's own doc comment for why this is more reliable
+      // than OL_SHEET's "Stage 1 User" for "who created this request".
+      deployedEmailId: dRow ? safeStr(dRow[DEPLOYED_EMAIL_ID_COL]) : ''
+    };
+  } catch (e) {
+    return { agreementUrl: '', poPdfUrl: '', deployedEmailId: '' };
+  }
+}
+
 export async function getOffLeaseCardEnrichment(containerNo, user, knownRow) {
   const { rows } = await getSheetDataFromMongo(OL_SHEET);
   const rn = _resolveOlRow(rows, containerNo, knownRow);
@@ -5544,13 +5584,22 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData, filter)
      ("Client to Client — New Client Name") is blank on every normal pending
      row, only ever filled by the clientToClient decision itself — harmless
      to always include. */
-  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337];
+  // 319/317/318 (Return Transportation PO Required/PO/Amount, OL_RETURN_PO_COLS
+  // — moved to Stage 1's own form 2026-09-18) appended for the approver's own
+  // view — explicit request 2026-10-03 ("transport po yes no amount and fil
+  // show Stage 1 A"). "Amount" matches the system-wide rate/amount hide rule
+  // (isRateOrAmountHeader, frontend/src/utils) just like "Rate" above already
+  // does — ApprovalDetail.jsx pulls that ONE column out explicitly, by this
+  // same header text, as a deliberate exception rather than widening the
+  // generic filter.
+  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337, 319, 317, 318];
   const dateCols = new Set([7, 8, 10, 11, 13]);
   const displayHeaders = [
     'Container No', 'Lease ID', 'Size', 'Type', 'Client Code', 'Client Name',
     'Location', 'Deployed Date', 'Valid Upto', 'Rate',
     'OL Intimation Date', 'OL Date', 'Email Notification', 'Final Billing Date',
-    'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name'
+    'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name',
+    'Return Transportation PO Required', 'Return Transportation PO', 'Return Transportation PO Amount'
   ];
 
   // Stage 1's own completion timestamp — 2 columns before its status column,
