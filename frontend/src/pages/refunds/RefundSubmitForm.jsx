@@ -78,9 +78,28 @@ export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientN
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setSubmitOk(false);
+
+    /* Explicit check before anything else — explicit request 2026-10-03
+       ("i am filed the from but this stage 6 its not submitted"): a blank
+       required field relied purely on the browser's native HTML5 validation,
+       which blocks the click with no visible error inside a scrolled modal
+       (the invalid field can be off-screen, so its native tooltip never
+       shows) — looked exactly like the Submit button silently did nothing.
+       This runs before any upload/network call, so a missing field is never
+       mistaken for a successful-but-silent submit. */
+    const missing = [];
+    if (!form.containerNo.trim()) missing.push('Container No');
+    if (!form.vendorName.trim()) missing.push('Vendor Name');
+    if (!form.invoiceAmount.trim()) missing.push('SD Amount');
+    if (!form.amountToPay.trim()) missing.push('SD Amount to be Refunded');
+    if (missing.length) {
+      setSubmitError(`Please fill in: ${missing.join(', ')}.`);
+      return;
+    }
+
     setSubmitting(true);
     setSubmitError('');
-    setSubmitOk(false);
     try {
       const [invoiceFileUrl, piFileUrl, attachmentsUrl, cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl] = await Promise.all([
         form.invoiceFile ? uploadStageFile(form.invoiceFile) : '',

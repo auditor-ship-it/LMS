@@ -11,10 +11,15 @@ import styles from './RefundsPage.module.css';
    (label/permission/next) — same duplication RefundsPage.jsx and
    RefundApprovalModal.jsx already carry, not shared into one file, matching
    this codebase's convention of small per-page duplication over a premature
-   shared module for a 3-entry map. */
+   shared module for a 3-entry map.
+   Accounts REMOVED from the active chain 2026-10-03 (explicit request: "HOD
+   and CEO approv only") — ceo.next is null, so CEO is the final decision.
+   The `accounts` entry itself stays here (never reachable via availableTabs
+   below) only so an old email link naming stage=accounts still resolves to
+   a real label instead of "Unknown approval stage". */
 const STAGES = {
   hod: { label: 'HOD', permission: 'refundsApprovalHod', next: 'ceo' },
-  ceo: { label: 'CEO', permission: 'refundsApprovalCeo', next: 'accounts' },
+  ceo: { label: 'CEO', permission: 'refundsApprovalCeo', next: null },
   accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', next: null }
 };
 
@@ -44,13 +49,11 @@ const BASE_HEADERS = [
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];
-const CEO_AUDIT_HEADERS = ['CEO Remarks', 'CEO Timestamp', 'CEO Approver Email'];
 
 function tableHeadersForTab(tab) {
   return [
     ...BASE_HEADERS,
     ...(tab !== 'hod' ? HOD_AUDIT_HEADERS : []),
-    ...(tab === 'accounts' ? CEO_AUDIT_HEADERS : []),
     'Container No', 'Client Name', 'Off-Lease ID'
   ];
 }
@@ -66,7 +69,7 @@ function tableHeadersForTab(tab) {
  */
 export function RefundsApprovalPage() {
   const { canAct } = usePermission();
-  const availableTabs = ['hod', 'ceo', 'accounts'].filter((s) => canAct(STAGES[s].permission));
+  const availableTabs = ['hod', 'ceo'].filter((s) => canAct(STAGES[s].permission));
   const canApprove = availableTabs.length > 0;
 
   const { data, loading, error, reload } = useAsync(() => (canApprove ? fetchRefunds() : Promise.resolve({ headers: [], data: [] })), [canApprove]);
@@ -121,7 +124,7 @@ export function RefundsApprovalPage() {
 
   return (
     <>
-      <PageHeader title="Refunds Approval" subtitle="HOD / CEO / Accounts approval queue" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
+      <PageHeader title="Refunds Approval" subtitle="HOD / CEO approval queue" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
 
       {!canApprove ? (
         <Card><div className={styles.viewOnly}>You don't have any Refunds approval permission. Ask an admin to grant it via Roles & Access.</div></Card>
@@ -161,21 +164,13 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>Submitted By</span><span>{reviewRow.userEmail}</span></div>
                     </div>
 
-                    {/* HOD's own decision — shown once CEO or Accounts is
-                        reviewing, so they have the prior stage's context. */}
+                    {/* HOD's own decision — shown once CEO is reviewing, so
+                        they have the prior stage's context. */}
                     {reviewStage !== 'hod' && (
                       <div className={styles.grid3} style={{ marginTop: 14 }}>
                         <div className={styles.field}><span className={styles.label}>HOD Remarks</span><span>{reviewRow.hodRemarks || '—'}</span></div>
                         <div className={styles.field}><span className={styles.label}>HOD Timestamp</span><span>{reviewRow.hodDate || '—'}</span></div>
                         <div className={styles.field}><span className={styles.label}>HOD Approver Email</span><span>{reviewRow.hodApprover || '—'}</span></div>
-                      </div>
-                    )}
-                    {/* CEO's own decision — shown once Accounts is reviewing. */}
-                    {reviewStage === 'accounts' && (
-                      <div className={styles.grid3} style={{ marginTop: 14 }}>
-                        <div className={styles.field}><span className={styles.label}>CEO Remarks</span><span>{reviewRow.ceoRemarks || '—'}</span></div>
-                        <div className={styles.field}><span className={styles.label}>CEO Timestamp</span><span>{reviewRow.ceoDate || '—'}</span></div>
-                        <div className={styles.field}><span className={styles.label}>CEO Approver Email</span><span>{reviewRow.ceoApprover || '—'}</span></div>
                       </div>
                     )}
 
@@ -235,11 +230,6 @@ export function RefundsApprovalPage() {
                     <td key="hr">{r.hodRemarks || '—'}</td>,
                     <td key="hd">{r.hodDate || '—'}</td>,
                     <td key="ha">{r.hodApprover || '—'}</td>
-                  ] : []),
-                  ...(effectiveTab === 'accounts' ? [
-                    <td key="cr">{r.ceoRemarks || '—'}</td>,
-                    <td key="cd">{r.ceoDate || '—'}</td>,
-                    <td key="ca">{r.ceoApprover || '—'}</td>
                   ] : []),
                   <td key="cn">{r.containerNo || '—'}</td>,
                   <td key="clnm">{r.clientName || '—'}</td>,

@@ -76,14 +76,22 @@ const CONTAINER_NO_COL = 37;
 const CLIENT_NAME_COL = 38;
 const OFFLEASE_ID_COL = 39;
 
-/* Sequential stage order: hod -> ceo -> accounts. `next` is the stage whose
- * Status gets set to 'Pending' the moment this one is Approved — that's what
- * makes the NEXT stage actionable; nothing else in this file threads that
- * state through, it all falls out of "read whichever stage's Status is
- * currently 'Pending'". */
+/* Sequential stage order: hod -> ceo. `next` is the stage whose Status gets
+ * set to 'Pending' the moment this one is Approved — that's what makes the
+ * NEXT stage actionable; nothing else in this file threads that state
+ * through, it all falls out of "read whichever stage's Status is currently
+ * 'Pending'".
+ *
+ * Accounts REMOVED from the chain 2026-10-03 (explicit request: "HOD and CEO
+ * approv only") — ceo.next is now null, so CEO approving is the final
+ * decision (triggers markOffLeaseSdRefundApproved immediately, same as
+ * Accounts used to). The `accounts` entry/columns stay defined (never
+ * written to going forward) purely so old code referencing STAGES.accounts
+ * or these column indices doesn't break — there was no live data in this
+ * sheet when the chain was shortened, so there's nothing to migrate. */
 const STAGES = {
   hod: { label: 'HOD', permission: 'refundsApprovalHod', statusCol: 22, remarksCol: 23, dateCol: 24, approverCol: 25, reviewLinkCol: 34, next: 'ceo' },
-  ceo: { label: 'CEO', permission: 'refundsApprovalCeo', statusCol: 26, remarksCol: 27, dateCol: 28, approverCol: 29, reviewLinkCol: 35, next: 'accounts' },
+  ceo: { label: 'CEO', permission: 'refundsApprovalCeo', statusCol: 26, remarksCol: 27, dateCol: 28, approverCol: 29, reviewLinkCol: 35, next: null },
   accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', statusCol: 30, remarksCol: 31, dateCol: 32, approverCol: 33, reviewLinkCol: 36, next: null }
 };
 
@@ -157,12 +165,16 @@ function _mapRow(r, rowNum) {
 
   /* Which stage (if any) is actionable right now — the frontend uses this to
    * decide whose Approve/Reject buttons to show on a given row, alongside
-   * its own canAct(STAGES[stage].permission) check. */
+   * its own canAct(STAGES[stage].permission) check.
+   *
+   * Stops at 'ceo' — Accounts removed from the chain 2026-10-03 (see STAGES'
+   * own doc comment). accountsStatus is still read/returned below for any
+   * historical row, but no longer decides currentStage: a row with
+   * ceoStatus === 'Approved' is 'done', full stop. */
   let currentStage = 'done';
-  if (hodStatus === 'Rejected' || ceoStatus === 'Rejected' || accountsStatus === 'Rejected') currentStage = 'rejected';
+  if (hodStatus === 'Rejected' || ceoStatus === 'Rejected') currentStage = 'rejected';
   else if (hodStatus !== 'Approved') currentStage = 'hod';
   else if (ceoStatus !== 'Approved') currentStage = 'ceo';
-  else if (accountsStatus !== 'Approved') currentStage = 'accounts';
 
   return {
     _rowNum: rowNum,
@@ -548,8 +560,7 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
 
   const approvalRows = [
     ['HOD', entry.hodStatus, entry.hodDate, entry.hodRemarks],
-    ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks],
-    ['Accounts', entry.accountsStatus, entry.accountsDate, entry.accountsRemarks]
+    ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks]
   ];
 
   let subject, intro;
@@ -561,7 +572,7 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
     intro = `${stageLabel} rejected this refund bill.${extra.remarks ? ` Remarks: ${extra.remarks}` : ''}`;
   } else {
     subject = `Refund Fully Approved – ${entry.invoiceNumber || 'Unknown Invoice'}`;
-    intro = 'This refund bill has been approved at every stage (HOD, CEO, Accounts).';
+    intro = 'This refund bill has been approved at every stage (HOD, CEO).';
   }
 
   const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;

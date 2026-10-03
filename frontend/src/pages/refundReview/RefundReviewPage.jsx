@@ -7,8 +7,12 @@ import { RefundApprovalModal } from '../refunds/RefundApprovalModal.jsx';
 import refundsStyles from '../refunds/RefundsPage.module.css';
 import styles from '../sso/EmbedShell.module.css';
 
+/* Accounts removed from the active chain 2026-10-03 (explicit request: "HOD
+   and CEO approv only") — ceo's next is now null, CEO is the final decision.
+   Both maps keep an 'accounts' entry only so an old email link naming
+   stage=accounts still resolves to a real label instead of breaking. */
 const STAGE_LABELS = { hod: 'HOD', ceo: 'CEO', accounts: 'Accounts' };
-const STAGE_NEXT = { hod: 'ceo', ceo: 'accounts', accounts: null };
+const STAGE_NEXT = { hod: 'ceo', ceo: null, accounts: null };
 
 function Link({ url }) {
   if (!url) return <span>—</span>;

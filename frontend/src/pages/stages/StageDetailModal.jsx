@@ -613,9 +613,10 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   2026-10-01. No fields of its own (see SD_REFUNDS_STAGE's doc
                   comment): shows the submission form (container pre-filled
                   and locked) until something's been raised for this
-                  container, then its HOD/CEO/Accounts pipeline status
-                  instead. FMS Closed (Stage 7) won't complete until this
-                  reaches Accounts-approved. */}
+                  container, then its HOD/CEO pipeline status instead. FMS
+                  Closed (Stage 7) won't complete until this reaches
+                  CEO-approved. Accounts removed from the chain 2026-10-03
+                  (explicit request: "HOD and CEO approv only"). */}
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
                 <div className={sdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
                   {!sdRefunds ? (
@@ -634,14 +635,14 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     <>
                       <p className={styles.savedTitle}>SD Refund — {sdRefunds[0].vendorName || containerNo}</p>
                       <p className={styles.savedHint}>
-                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · CEO: {sdRefunds[0].ceoStatus || '—'} · Accounts: {sdRefunds[0].accountsStatus || '—'}
+                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · CEO: {sdRefunds[0].ceoStatus || '—'}
                       </p>
                       <p className={styles.savedHint}>
-                        {sdRefunds[0].accountsStatus === 'Approved'
-                          ? 'Accounts-approved — FMS Closed (Stage 7) can now be completed.'
+                        {sdRefunds[0].ceoStatus === 'Approved'
+                          ? 'CEO-approved — FMS Closed (Stage 7) can now be completed.'
                           : sdRefunds[0].currentStage === 'rejected'
                             ? 'Rejected — raise a new SD Refund for this container to proceed.'
-                            : 'Still working through HOD → CEO → Accounts — see SD Refunds Approval for full detail.'}
+                            : 'Still working through HOD → CEO — see SD Refunds Approval for full detail.'}
                       </p>
                     </>
                   )}
@@ -803,9 +804,10 @@ const GATE_IN_STAGE = 7;
 /** SD Refunds (internally stage 11, shown as Stage 6) — explicit request
  *  2026-10-01. No form of its own either (see OL_STAGE_INFO[11]'s backend
  *  doc comment): this stage's content is the SD Refund submission form (if
- *  nothing submitted yet for this container) or its HOD/CEO/Accounts
- *  pipeline status (once something has). FMS Closed (internal 8) refuses to
- *  complete until this reaches Accounts-approved. */
+ *  nothing submitted yet for this container) or its HOD/CEO pipeline status
+ *  (once something has). FMS Closed (internal 8) refuses to complete until
+ *  this reaches CEO-approved — Accounts removed from the chain 2026-10-03
+ *  (explicit request: "HOD and CEO approv only"). */
 const SD_REFUNDS_STAGE = 11;
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for

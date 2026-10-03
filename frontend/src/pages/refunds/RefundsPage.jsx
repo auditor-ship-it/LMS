@@ -39,7 +39,9 @@ const TABLE_HEADERS = [
   'Payment Due Date', 'SD Calculation',
   'Quarterly Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded',
-  'HOD', 'CEO', 'Accounts',
+  // Accounts removed from the approval chain 2026-10-03 (explicit request:
+  // "HOD and CEO approv only") — CEO approving is now the final decision.
+  'HOD', 'CEO',
   // Explicit request 2026-10-01 ("add the stage 6 SD refunds"): links a bill
   // to its Off-Lease container — required on every new submission now.
   'Container No',
@@ -119,7 +121,6 @@ export function RefundsPage() {
                   <td key="at"><Link url={r.attachmentsUrl} /></td>,
                   <td key="hod"><StageBadge status={r.hodStatus} /></td>,
                   <td key="ceo"><StageBadge status={r.ceoStatus} /></td>,
-                  <td key="acc"><StageBadge status={r.accountsStatus} /></td>,
                   <td key="cn">{r.containerNo || '—'}</td>,
                   <td key="clnm">{r.clientName || '—'}</td>,
                   <td key="oid">{r.offLeaseId || '—'}</td>

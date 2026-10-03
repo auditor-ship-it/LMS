@@ -185,10 +185,12 @@ export const OL_STAGE_INFO = {
      either — confirmed live before picking this.) Unlike every other stage,
      NOTHING is submitted here directly: this status is set automatically by
      markOffLeaseSdRefundApproved (below) the moment this container's own SD
-     Refund entry (refunds.service.js) reaches Accounts-approved. The
-     frontend shows the SD Refund submission form / HOD-CEO-Accounts status
-     here instead of an editable form — see getOffLeaseStageDetail's stage-11
-     branch and StageDetailModal.jsx. */
+     Refund entry (refunds.service.js) reaches CEO-approved — Accounts was
+     removed from that chain 2026-10-03 (explicit request: "HOD and CEO
+     approv only"), so CEO is now the final decision. The frontend shows the
+     SD Refund submission form / HOD-CEO status here instead of an editable
+     form — see getOffLeaseStageDetail's stage-11 branch and
+     StageDetailModal.jsx. */
   11: { statusCol: 347, startCol: 345, endCol: 347, label: 'SD Refunds' }
 };
 /* 133/134/135 deliberately excluded -- confirmed via the live sheet those
@@ -3055,8 +3057,8 @@ export async function markOffLeaseSdRefundApproved(containerNo, note) {
   } catch (e) {
     // Best-effort — a failure here must never fail the refund approval that
     // triggered it; the container's Stage 6 just stays blocked until this is
-    // retried (re-approving isn't possible once Accounts-approved, so this
-    // would need a manual sheet fix if it ever genuinely fails).
+    // retried (re-approving isn't possible once CEO-approved, so this would
+    // need a manual sheet fix if it ever genuinely fails).
     console.error('[OL-SD-REFUND] Could not mark stage 11 complete for', containerNo, ':', e?.message || e);
   }
 }
@@ -3087,7 +3089,7 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
        guard in this function — every other stage here only ever checks its
        OWN status column, never a prior one. */
     if (stageNum === 8 && safeStr(row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
-      throw new AppError('Stage 6 (SD Refunds) must be Accounts-approved before FMS Closed can be completed.');
+      throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before FMS Closed can be completed.');
     }
 
     /* STAGE 1 -> assign the Lease ID here (inside the lock = no clash). If the
@@ -3308,7 +3310,7 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail,
   // Same Stage 6 (SD Refunds) block as the live saveOffLeaseStage above —
   // see that function's identical guard for the full doc comment.
   if (stageNum === 8 && safeStr(found.row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
-    throw new AppError('Stage 6 (SD Refunds) must be Accounts-approved before FMS Closed can be completed.');
+    throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before FMS Closed can be completed.');
   }
 
   // Same technician-cost derivation as the live path — pure arithmetic on
