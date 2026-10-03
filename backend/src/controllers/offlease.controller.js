@@ -245,6 +245,15 @@ export async function saveHold(req, res) {
   res.json({ message });
 }
 
+/** Stage 7 (Payment Status) "Voucher Raised" — the payment pipeline's own
+ *  custom middle step, explicit request 2026-10-03. Permission ('offlease8')
+ *  is checked inside the service. */
+export async function saveVoucherRaised(req, res) {
+  const { rowNum } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseVoucherRaisedFast(req.params.containerNo, req.user.email, rowNum);
+  res.json({ message });
+}
+
 /** Reverses an active Hold, sending the record back to Stage 1's normal
  *  queue. Permission ('offlease1') is checked inside the service. */
 export async function saveSendBackToStage1(req, res) {

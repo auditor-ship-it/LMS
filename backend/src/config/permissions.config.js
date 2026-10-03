@@ -53,7 +53,8 @@ export const PERMISSION_KEYS = [
   { key: 'offlease5', label: 'Off-Lease Stage 6: Final Billing (Shivani)' },
   { key: 'offlease6', label: 'Off-Lease Stage 2: Transportation (Kshirod Khatua)' },
   { key: 'offlease7', label: 'Off-Lease Stage 4: Gate In (Pritam)' },
-  { key: 'offlease8', label: 'Off-Lease Stage 7: FMS Closed (Sales)' },
+  // RENAMED 2026-10-03 (explicit request): "FMS Closed" -> "Payment Status".
+  { key: 'offlease8', label: 'Off-Lease Stage 7: Payment Status (Sales)' },
   { key: 'billing', label: 'Billing' },
   { key: 'receivables', label: 'Receivables' },
   /* APPENDED, never inserted — exactly like SIDEBAR_KEYS below. This array is

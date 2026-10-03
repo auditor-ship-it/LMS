@@ -68,6 +68,12 @@ const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
  *  moved to a since-removed Stage 10 2026-09-18, back here 2026-09-22. */
 const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
 
+/** Stage 7 (Payment Status)'s UTR Number field only makes sense once VR
+ *  (Voucher Raised, a separate custom action — see StageDetailModal.jsx's
+ *  PAYMENT_STATUS_STAGE block) is done; col_348 is OL_VR_STATUS_COL on the
+ *  backend. Added 2026-10-03. */
+const vrDoneShown = (v) => String(v.col_348 || '').trim() === 'Completed';
+
 /**
  * Stage 3 inspection checklist — the 8 container inspection points from the
  * printed instruction sheet, plus Curtain / Tube Light / Mantrap.
@@ -397,11 +403,16 @@ export const STAGE_FIELDS = {
      Amount Paid? + their proof uploads, col_326-331, added 2026-09-17) —
      Stage 6 (KAM) no longer asks for any of this. Existing data on
      already-saved rows is untouched (still visible in the Full Off-Lease
-     History view/PDF); this only stops asking for it going forward. Kept as
-     an empty array, same convention as internal stage 7 (Gate In) right
-     above — this stage still exists and still resolves in every stage-number
-     mapping, it simply has no fields of its own to fill in anymore. */
-  8: []
+     History view/PDF); this only stops asking for it going forward.
+     RENAMED stage 2026-10-03 'FMS Closed' -> 'Payment Status', and ONE field
+     added back: UTR Number — see OL_UTR_NUMBER_COL's own doc comment on the
+     backend. Submitting this (via the normal Save Stage path, same as any
+     other stage field) is what marks this stage Completed; VR (Voucher
+     Raised, a separate custom action with no field of its own) must happen
+     first, hence showIf. */
+  8: [
+    { key: 'col_351', label: 'UTR Number', type: 'text', required: true, showIf: vrDoneShown }
+  ]
   /* Internal stage 10, "LR & Return Transportation" (displayed as "Stage 3"
      between Transportation and Gate In) lived here 2026-09-18 to 2026-09-22
      (explicit request each time) — LR details read-only from FMS plus an

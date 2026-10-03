@@ -33,6 +33,13 @@ import styles from './StagePageBase.module.css';
    the same way READ_ONLY_STAGES already works. */
 const STAGE1_EXTRAS_STAGE = 1;
 
+/* Stage 7 (internal 8, Payment Status) only — Pending/Completed sub-tabs,
+   explicit request 2026-10-03. "Completed" means this stage's own Save
+   Stage (the UTR Number submission) has already gone through; "Pending"
+   is the normal queue, same default as every other stage. Same plain
+   number-check convention as STAGE1_EXTRAS_STAGE above. */
+const PAYMENT_STATUS_EXTRAS_STAGE = 8;
+
 /* Stage 2 (internal 6, Transportation) only — the list is big enough here
    (dozens of pending records across many clients/depots) that Location and
    Size filters are worth it; no other stage's queue has asked for them.
@@ -128,15 +135,18 @@ export function StagePageBase({ stageNumber, embedded }) {
   const readOnly = isReadOnlyStage(stageNumber);
   const canEdit = !readOnly && canAct(permKey);
   const stage1Extras = stageNumber === STAGE1_EXTRAS_STAGE;
+  const paymentStatusExtras = stageNumber === PAYMENT_STATUS_EXTRAS_STAGE;
 
-  /* 'pending' (the normal queue), or 'hold'/'reject' (Stage 1's own Hold /
-     Reject views) — only ever switched away from 'pending' when
-     stage1Extras, but harmless to carry for every stage since fetchStageList
-     ignores it unless the backend also recognises stageNumber === 1. */
+  /* 'pending' (the normal queue), 'hold'/'reject' (Stage 1's own Hold /
+     Reject views), or 'completed' (Stage 7/Payment Status's own Completed
+     view) — only ever switched away from 'pending' when stage1Extras or
+     paymentStatusExtras, but harmless to carry for every stage since
+     fetchStageList ignores it unless the backend also recognises this exact
+     stageNumber+filter combination. */
   const [subTab, setSubTab] = useState('pending');
   const { data, loading, error, reload } = useAsync(
-    () => fetchStageList(stageNumber, stage1Extras && subTab !== 'pending' ? subTab : undefined),
-    [stageNumber, stage1Extras, subTab]
+    () => fetchStageList(stageNumber, (stage1Extras || paymentStatusExtras) && subTab !== 'pending' ? subTab : undefined),
+    [stageNumber, stage1Extras, paymentStatusExtras, subTab]
   );
   /* Catches a container becoming eligible from OUTSIDE this app — a Gate-In
      form submission, an FMS sheet update — without the user clicking
@@ -281,6 +291,29 @@ export function StagePageBase({ stageNumber, embedded }) {
               onClick={() => switchSubTab('reject')}
             >
               Reject
+            </button>
+          </div>
+        )}
+
+        {/* Stage 7 (Payment Status) only: Pending / Completed — explicit
+            request 2026-10-03. "Completed" means this stage's own Save Stage
+            (the UTR Number submission) has already gone through; see
+            getOffLeaseData's stage-8-specific filter branch on the backend. */}
+        {paymentStatusExtras && (
+          <div className={styles.tabRow}>
+            <button
+              type="button"
+              className={`${styles.tab} ${subTab === 'pending' ? styles.tabActive : ''}`}
+              onClick={() => switchSubTab('pending')}
+            >
+              Pending
+            </button>
+            <button
+              type="button"
+              className={`${styles.tab} ${subTab === 'completed' ? styles.tabActive : ''}`}
+              onClick={() => switchSubTab('completed')}
+            >
+              Completed
             </button>
           </div>
         )}

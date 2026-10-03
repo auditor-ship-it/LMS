@@ -23,7 +23,11 @@ export const ALL_STAGES = [
   // RENAMED AGAIN 2026-09-29 (explicit request): 'KAM' -> 'FMS Closed', and the
   // 'Sales' owner (shown as the tab strip's "Stage 6 (Sales)") -> 'FMS Closed'
   // too, same request, same day.
-  { number: 8, label: 'FMS Closed', owner: 'FMS Closed' },
+  // RENAMED AGAIN 2026-10-03 (explicit request): 'FMS Closed' -> 'Payment
+  // Status' — its content replaced the same day with the HOD/CEO (Stage 6's
+  // own decision, shown again)/VR/UTR payment pipeline. See
+  // StageDetailModal.jsx's PAYMENT_STATUS_STAGE block.
+  { number: 8, label: 'Payment Status', owner: 'Payment Status' },
   /* ADDED 2026-10-01 (explicit request: "add the stage 6 SD refunds...
      button inside Off-Lease Stage 6 that opens the SD Refunds form"),
      inserted into WORKFLOW before 8 — FMS Closed shifts from display 6 to
