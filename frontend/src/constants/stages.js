@@ -27,10 +27,13 @@ export const ALL_STAGES = [
   /* ADDED 2026-10-01 (explicit request: "add the stage 6 SD refunds...
      button inside Off-Lease Stage 6 that opens the SD Refunds form"),
      inserted into WORKFLOW before 8 — FMS Closed shifts from display 6 to
-     display 7. No form/owner the way other stages have one: this stage's
+     display 7. No human owner the way other stages have one: this stage's
      own status is set automatically (see backend's
-     markOffLeaseSdRefundApproved), not submitted by a person here. */
-  { number: 11, label: 'SD Refunds' },
+     markOffLeaseSdRefundApproved), not submitted by a person here. `owner`
+     is set to the label itself (same convention as stage 8's "FMS Closed")
+     purely so OffLeasePage.jsx's tab strip reads "Stage 6 (SD Refunds)"
+     instead of a bare "Stage 6" — explicit request 2026-10-03. */
+  { number: 11, label: 'SD Refunds', owner: 'SD Refunds' },
   /* ADDED 2026-09-18 (explicit request) as a genuinely new stage between
      Transportation and Gate In, displaying as "Stage 3" — LR details fetched
      live from FMS plus the Return Transportation PO fields. RETIRED
