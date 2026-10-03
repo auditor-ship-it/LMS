@@ -5584,13 +5584,22 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData, filter)
      ("Client to Client — New Client Name") is blank on every normal pending
      row, only ever filled by the clientToClient decision itself — harmless
      to always include. */
-  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337];
+  // 319/317/318 (Return Transportation PO Required/PO/Amount, OL_RETURN_PO_COLS
+  // — moved to Stage 1's own form 2026-09-18) appended for the approver's own
+  // view — explicit request 2026-10-03 ("transport po yes no amount and fil
+  // show Stage 1 A"). "Amount" matches the system-wide rate/amount hide rule
+  // (isRateOrAmountHeader, frontend/src/utils) just like "Rate" above already
+  // does — ApprovalDetail.jsx pulls that ONE column out explicitly, by this
+  // same header text, as a deliberate exception rather than widening the
+  // generic filter.
+  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337, 319, 317, 318];
   const dateCols = new Set([7, 8, 10, 11, 13]);
   const displayHeaders = [
     'Container No', 'Lease ID', 'Size', 'Type', 'Client Code', 'Client Name',
     'Location', 'Deployed Date', 'Valid Upto', 'Rate',
     'OL Intimation Date', 'OL Date', 'Email Notification', 'Final Billing Date',
-    'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name'
+    'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name',
+    'Return Transportation PO Required', 'Return Transportation PO', 'Return Transportation PO Amount'
   ];
 
   // Stage 1's own completion timestamp — 2 columns before its status column,

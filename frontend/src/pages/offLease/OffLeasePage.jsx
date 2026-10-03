@@ -511,6 +511,11 @@ function ApprovalQueue() {
  */
 function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, onApprove, onSendBack, onReject, onClientToClient }) {
   const containerNo = item.row?.[0];
+  // "Return Transportation PO Amount" matches the system-wide rate/amount
+  // hide rule (isRateOrAmountHeader) that built detailColIdx, so the generic
+  // loop below skips it — explicit request 2026-10-03 to show it anyway here,
+  // same deliberate exception "Rate" elsewhere in this app does NOT get.
+  const poAmountIdx = headers.indexOf('Return Transportation PO Amount');
 
   /* Agreement PDF / PO PDF — explicit request 2026-10-03. Not OL_SHEET
      columns (they live on SHEETS.DEPLOYED), so getOffLeaseApprovalData's own
@@ -546,6 +551,12 @@ function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, on
             <span className={styles.detailLabel}>PO PDF</span>
             <span className={styles.detailValue}>{!enrichment ? '…' : renderCellValue(enrichment.poPdfUrl)}</span>
           </div>
+          {poAmountIdx >= 0 && (
+            <div className={styles.detailField}>
+              <span className={styles.detailLabel}>Return Transportation PO Amount</span>
+              <span className={styles.detailValue}>{renderCellValue(item.row?.[poAmountIdx]) || '—'}</span>
+            </div>
+          )}
         </div>
 
         {canAct && (
