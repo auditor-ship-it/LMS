@@ -1572,7 +1572,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
     if (!reason) { setError('Select a Reason first.'); return; }
     setError('');
 
-    if (!date) { setError('Date is required.'); return; }
+    if (reason !== 'Purchased' && !date) { setError('Date is required.'); return; }
     if (!moveToStage) { setError('Select a Move To Stage destination.'); return; }
     const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => o.value === moveToStage);
     const destLabel = target?.label || `Stage ${moveToStage}`;
@@ -1690,12 +1690,14 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
               onChange={setRemarks}
               disabled={locked}
             />
-            <Field
-              field={{ key: 'moveDate', label: 'Lifting Date', type: 'date', required: true }}
-              value={date}
-              onChange={setDate}
-              disabled={locked}
-            />
+            {reason !== 'Purchased' && (
+              <Field
+                field={{ key: 'moveDate', label: 'Lifting Date', type: 'date', required: true }}
+                value={date}
+                onChange={setDate}
+                disabled={locked}
+              />
+            )}
             <Field
               field={{ key: 'moveToStage', label: 'Move To Stage', type: 'select', options: MOVE_JUMP_TARGET_OPTIONS, required: true }}
               value={moveToStage}

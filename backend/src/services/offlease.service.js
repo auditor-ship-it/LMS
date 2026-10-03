@@ -3619,14 +3619,16 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
   if (!OL_MOVE_REASONS.includes(r)) throw new AppError(`Reason must be one of: ${OL_MOVE_REASONS.join(', ')}`);
   const rmk = safeStr(remarks).trim();
 
-  // All three reasons record where the container actually went: a real Date
-  // and a Move To Stage destination (Gate In / Inspection / Billing) — the
-  // record appears there directly, see _jumpSkipsStage's doc comment,
-  // without being forced through whatever normally sits between
-  // Transportation and that stage. Container No, DO No and Movement Type on
-  // the original record are untouched either way.
+  // Every reason records where the container actually went: a Move To Stage
+  // destination (Gate In / Inspection / Billing) — the record appears there
+  // directly, see _jumpSkipsStage's doc comment, without being forced through
+  // whatever normally sits between Transportation and that stage. Container
+  // No, DO No and Movement Type on the original record are untouched either
+  // way. Date (the lifting date) is required for every reason except
+  // 'Purchased' — explicit request 2026-10-03 ("purchased select not ask the
+  // lifting date"): a purchase has no lifting event of its own to date.
   const d = safeStr(date).trim();
-  if (!d) throw new AppError('Date is required');
+  if (r !== 'Purchased' && !d) throw new AppError('Date is required');
   const display = parseInt(moveToStage, 10);
   const jumpTargetInternal = OL_INTERNAL_BY_DISPLAY.get(display);
   if (!OL_JUMP_TARGET_INTERNALS.includes(jumpTargetInternal)) {
