@@ -122,8 +122,12 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             <input type="date" value={form.renewedDate} onChange={set('renewedDate')} required />
           </label>
           <label className={styles.field}>
-            <span className={styles.label}>Agreement Valid Till *</span>
-            <input type="date" value={form.validTill} onChange={set('validTill')} required />
+            {/* NOT required — explicit request 2026-10-03 ("this is not
+                complusoly"): same reasoning as Signed Copy/PO below — a
+                renewal can go through on a PO basis alone with no agreement,
+                so there's no agreement expiry date to give. */}
+            <span className={styles.label}>Agreement Valid Till</span>
+            <input type="date" value={form.validTill} onChange={set('validTill')} />
           </label>
         </div>
 

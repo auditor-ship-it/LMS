@@ -77,28 +77,45 @@ const POST_FETCH_HOOKS = {
  *  confirmed 2026-07-31 via a doubled Lease Expiry "Overdue" KPI (302 instead
  *  of 151). Wrapping both calls in one transaction makes each process's
  *  refresh atomic, so concurrent runs serialize instead of interleaving. */
-async function reconcileSheetFullRefresh(sheetName, headers, rows) {
+async function reconcileSheetFullRefresh(sheetName, headers, rows, allowEmpty) {
   const col = getCollection(sheetName);
   const now = new Date();
 
-  if (!rows.length) {
+  if (!rows.length && !allowEmpty) {
     // A genuinely empty sheet is essentially impossible for anything mapped
-    // as fullRefresh here (Deployed sheet, New Lease, Operation sheet all
-    // carry live, ongoing business data) — a 0-row read is far more likely a
-    // transient Sheets API hiccup (quota, timeout, a malformed response that
-    // didn't throw) than reality. Wiping the mirror on that basis deletes
-    // every row the whole app reads from while the real spreadsheet is
-    // completely untouched — confirmed 2026-08-21, this exact path zeroed
-    // out all three collections during a period of heavy quota pressure.
-    // Skip the refresh entirely rather than risk it; the next successful
-    // cycle (5 min later) re-syncs normally.
+    // as fullRefresh here WITHOUT allowEmpty (Deployed sheet, New Lease,
+    // Operation sheet all carry live, ongoing business data) — a 0-row read
+    // is far more likely a transient Sheets API hiccup (quota, timeout, a
+    // malformed response that didn't throw) than reality. Wiping the mirror
+    // on that basis deletes every row the whole app reads from while the
+    // real spreadsheet is completely untouched — confirmed 2026-08-21, this
+    // exact path zeroed out all three collections during a period of heavy
+    // quota pressure. Skip the refresh entirely rather than risk it; the
+    // next successful cycle (5 min later) re-syncs normally.
+    //
+    // allowEmpty (added 2026-10-03) exempts the append-only-log sheets
+    // mapped here (Refunds and its five siblings — see mongoSheetMapping.js's
+    // own comment) from this guard: for those, 0 live rows is a perfectly
+    // normal state (nothing submitted yet, or everything since deleted), not
+    // an implausible read failure. Without this exemption, the FIRST time
+    // one of those sheets ever legitimately went to 0 rows, this guard
+    // refused to ever reconcile it again — any stale/ghost doc left in the
+    // mirror (e.g. from a row deleted directly in the sheet) stayed there
+    // forever, since every subsequent cycle kept seeing "0 rows" and kept
+    // skipping. Confirmed live 2026-10-03: a manually-deleted test Refunds
+    // row left exactly this kind of permanent ghost in the mirror.
     logger.error(`[SYNC] Refusing to full-refresh ${sheetName}: fetched 0 rows — treating as a failed read, not a genuinely empty sheet. Mirror left untouched.`);
     return { sheetName, imported: 0, updated: 0, skippedBlankKey: 0, totalRows: 0, skippedEmptyGuard: true };
   }
 
   await withTransaction(async (session) => {
     await col.deleteMany({ _id: { $ne: META_ID } }, { session });
-    await col.insertMany(rows.map((row, i) => ({ key: `row_${i}`, row, deletedAt: null, createdAt: now, updatedAt: now })), { session });
+    // rows.length === 0 only reaches here via allowEmpty — insertMany throws
+    // on an empty array, and there's nothing to insert anyway; the deleteMany
+    // above already did the only thing a genuinely empty sheet needs.
+    if (rows.length) {
+      await col.insertMany(rows.map((row, i) => ({ key: `row_${i}`, row, deletedAt: null, createdAt: now, updatedAt: now })), { session });
+    }
   });
   logger.info(`[SYNC] Inserted: ${rows.length}`);
   logger.info(`[SYNC] Updated: 0`);
@@ -186,7 +203,7 @@ export async function reconcileSheet(sheetName) {
   await col.updateOne({ _id: META_ID }, { $set: { headers, updatedAt: now } }, { upsert: true });
 
   const result = mapping.fullRefresh
-    ? await reconcileSheetFullRefresh(sheetName, headers, rows)
+    ? await reconcileSheetFullRefresh(sheetName, headers, rows, mapping.allowEmpty)
     : await reconcileSheetByKey(sheetName, mapping, rows);
 
   logger.info(`[SYNC] Completed sheet: ${sheetName}`);

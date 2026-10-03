@@ -105,11 +105,20 @@ export const MONGO_SHEET_MAPPING = {
    * so a just-added row doesn't wait for this job's next cycle. fullRefresh
    * here is just "how reconciliation catches up on rows added outside the
    * app, or if a mirror-patch failed" — cheap and safe for logs of this size. */
-  [SHEETS.OFF_LEASE_REMARKS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
-  [SHEETS.OFF_LEASE_MOVE_HISTORY]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
-  [SHEETS.STAGE9_MOVEMENT]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
-  [SHEETS.RENEWAL_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
-  [SHEETS.AUTH_SESSION_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+  /* allowEmpty (added 2026-10-03): unlike Deployed/New Lease/Operation above,
+   * a genuinely empty sheet IS plausible for every one of these six —
+   * nothing logged yet, or (Refunds) every row since deleted — so the
+   * zero-row refusal guard in reconcileSheetFullRefresh (which exists to
+   * protect against a transient Sheets read failure, not a real empty state)
+   * would otherwise never let one of these actually sync to empty. Confirmed
+   * live: a manually-deleted test Refunds row left a permanent ghost doc in
+   * the mirror because every subsequent cycle kept seeing "0 rows" and
+   * refusing to touch the collection. See that guard's own doc comment. */
+  [SHEETS.OFF_LEASE_REMARKS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
+  [SHEETS.OFF_LEASE_MOVE_HISTORY]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
+  [SHEETS.STAGE9_MOVEMENT]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
+  [SHEETS.RENEWAL_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
+  [SHEETS.AUTH_SESSION_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
 
   /* Refunds (Off-Lease Bills) — added 2026-09-30 alongside the new form
    * itself (refunds.service.js). Same reasoning as the five entries above:
@@ -117,7 +126,7 @@ export const MONGO_SHEET_MAPPING = {
    * repeat — a vendor resubmitting, a partial payment against the same
    * invoice), read-only mirror (writes go straight to Sheets, then
    * appendMongoMirrorRow patches this instantly). */
-  [SHEETS.REFUNDS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true },
+  [SHEETS.REFUNDS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
 
   /* Stage 1 sales order-intake form — added 2026-09-30 (explicit request).
    * Google Form-linked; no column's uniqueness has been verified against

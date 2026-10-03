@@ -1,4 +1,5 @@
 import * as offLeaseService from '../services/offlease.service.js';
+import * as refundsService from '../services/refunds.service.js';
 import * as stage9Service from '../services/stage9.service.js';
 import * as remarksService from '../services/offleaseRemarks.service.js';
 import { getMoveHistory } from '../services/offleaseMoveHistory.service.js';
@@ -155,6 +156,19 @@ export async function getCardEnrichment(req, res) {
   const rowNum = req.query.rn ? parseInt(req.query.rn, 10) : undefined;
   const enrichment = await offLeaseService.getOffLeaseCardEnrichment(req.params.containerNo, req.user, rowNum);
   res.json(enrichment);
+}
+
+/** GET /:containerNo/sd-refunds — Stage 6 (SD Refunds, internal 11), explicit
+ *  request 2026-10-01. Deliberately calls refundsService directly (not
+ *  threaded through offlease.service.js) to avoid a circular import —
+ *  refunds.service.js already imports FROM offlease.service.js
+ *  (markOffLeaseSdRefundApproved), so the reverse direction has to live at
+ *  the controller layer instead. No extra permission check here beyond the
+ *  route's own requireAuth — offlease11 (viewing this tab at all) is the
+ *  real gate, same as every other stage's detail endpoint. */
+export async function getSdRefundsForContainer(req, res) {
+  const entries = await refundsService.getRefundEntriesForContainer(req.params.containerNo);
+  res.json({ entries });
 }
 
 export async function saveStage(req, res) {

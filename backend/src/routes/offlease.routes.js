@@ -6,10 +6,11 @@ import * as offLeaseController from '../controllers/offlease.controller.js';
 const router = Router();
 router.use(requireAuth);
 
-/* Core 8-stage pipeline. Per-stage permission (offlease1..offlease8) is
-   dynamic on the :stage param, so it's enforced inside the service rather
-   than via a static requirePermission(...) at the route level. */
-router.get('/', asyncHandler(offLeaseController.getData)); // ?stage=1..8
+/* Core pipeline (1,2,3,4,5,6,7 displayed — internal 1,6,7,3,5,11,8). Per-stage
+   permission (offlease1..offlease8, offlease11) is dynamic on the :stage
+   param, so it's enforced inside the service rather than via a static
+   requirePermission(...) at the route level. */
+router.get('/', asyncHandler(offLeaseController.getData)); // ?stage=1..8,11
 router.get('/next-lease-id', asyncHandler(offLeaseController.nextLeaseId));
 /* Pending count per stage, for the tab badges. */
 router.get('/stage-counts', asyncHandler(offLeaseController.getStageCounts));
@@ -35,6 +36,12 @@ router.post('/:containerNo/stage/:stage', asyncHandler(offLeaseController.saveSt
  * fetched separately from the stage detail above so the modal isn't slowed
  * down waiting on these (see getOffLeaseCardEnrichment's doc comment). */
 router.get('/:containerNo/enrichment', asyncHandler(offLeaseController.getCardEnrichment));
+
+/* Stage 6 (SD Refunds, internal 11) — this container's own SD Refund
+ * entries + HOD/CEO/Accounts status, explicit request 2026-10-01. See
+ * getSdRefundsForContainer's own doc comment for why this calls
+ * refundsService directly rather than through offlease.service.js. */
+router.get('/:containerNo/sd-refunds', asyncHandler(offLeaseController.getSdRefundsForContainer));
 
 /* Stage 2 (Transportation) "Move To Stage" / Send Back — manual alternate-
    disposition move. Declared here, not under /:containerNo/stage/:stage,

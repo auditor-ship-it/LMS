@@ -716,6 +716,13 @@
   background: var(--surface-2);
 }
 .savedTitle { margin: 0 0 6px; font-size: 15px; font-weight: 800; color: var(--success, #16a34a); }
+
+/* Stage 6 (SD Refunds) hosts a full form inside .savedPanel, not just a
+   confirmation message — explicit request 2026-10-03: the grey panel
+   background made the form's own white fields hard to tell apart from the
+   panel, especially the locked/disabled ones. Text-align left here too,
+   since the form itself isn't centered content. */
+.savedPanelForm { background: var(--surface); text-align: left; }
 .savedHint { margin: 0 0 18px; font-size: 13px; color: var(--text-2); }
 .savedActions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 

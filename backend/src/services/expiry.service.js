@@ -1283,7 +1283,10 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
     if (!renewedDate) throw new AppError('Renewed Date is required');
-    if (!validTill) throw new AppError('Valid Till Date is required');
+    // Agreement Valid Till is NOT required — explicit request 2026-10-03
+    // ("this is not complusoly"): same reasoning as the Signed Copy/PO
+    // fields just below — a renewal can go through on a PO basis alone with
+    // no agreement, so there's no agreement expiry date to give.
 
     const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
     if (!rows.length) throw new AppError('No data rows');

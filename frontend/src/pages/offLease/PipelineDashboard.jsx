@@ -15,7 +15,7 @@ import { OrderBookView } from './OrderBookView.jsx';
 import { ContainerDetailModal } from './ContainerDetailModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
-const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock' };
+const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
 
 /**
  * Off-Lease pipeline overview — KPI counts + every active container's
@@ -207,6 +207,15 @@ export function PipelineDashboard({ onOpenTab }) {
           footnote={STAGES.find((s) => s.number === 5)?.owner}
           onClick={() => toggleFilter(5)}
         />
+        {/* ADDED 2026-10-01 (explicit request: "add the stage 6 SD refunds")
+            — internal stage 11, inserted before FMS Closed (internal 8,
+            card just below, relabeled from "Stage 6" to "Stage 7" the same
+            day). No footnote: no `owner` is set for this stage in stages.js
+            (its status is set automatically, not by a named person). */}
+        <StatCard
+          icon={STAGE_ICONS[11]} label="Stage 6 · SD Refunds" value={kpis.byStage?.[11] ?? '—'} loading={loading} tint="info"
+          onClick={() => toggleFilter(11)}
+        />
         {/* Explicit request 2026-09-29: replaces "Completed this month" —
             Stage 6 (FMS Closed, internal 8) was the one active stage with no
             card of its own on this dashboard at all; same pattern as every
@@ -214,9 +223,11 @@ export function PipelineDashboard({ onOpenTab }) {
             existed and were computed, just never rendered here). No footnote
             (unlike every other Stage N card): its `owner` (stages.js) was
             renamed 'Sales' -> 'FMS Closed' the same day, which would just
-            repeat this card's own label. */}
+            repeat this card's own label.
+            RELABELED 2026-10-01 "Stage 6" -> "Stage 7": SD Refunds (internal
+            11, card just above) is now the display Stage 6. */}
         <StatCard
-          icon={STAGE_ICONS[8]} label="Stage 6 · FMS Closed" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[8]} label="Stage 7 · FMS Closed" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
           onClick={() => toggleFilter(8)}
         />
       </div>

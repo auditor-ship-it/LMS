@@ -27,6 +27,7 @@ import { checkActionPermission } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { signJwt, verifyJwt } from '../utils/jwtLite.js';
 import { env } from '../config/env.js';
+import { markOffLeaseSdRefundApproved } from './offlease.service.js';
 
 const REFUNDS_SHEET = SHEETS.REFUNDS;
 
@@ -54,17 +55,43 @@ export const REFUNDS_HEADERS = [
    * directly into the sheet (and emailed) the moment each stage becomes
    * actionable, matching the reference "Bill & Compliance Portal" the user
    * pointed at. See mintRefundReviewLink/decideRefundApprovalViaLink below. */
-  'HOD Review Link', 'CEO Review Link', 'Accounts Review Link'
+  'HOD Review Link', 'CEO Review Link', 'Accounts Review Link',
+  /* Added 2026-10-01, explicit request ("add the stage 6 SD refunds"): links
+   * a bill to the Off-Lease container it belongs to, so Stage 6 (SD Refunds,
+   * internal stage 11 — see offlease.service.js's OL_STAGE_INFO) can show
+   * and gate on THIS container's own refund rather than the whole queue.
+   * Required going forward (addRefundEntry below); earlier rows predate this
+   * and are simply blank here, same as every other column added this day. */
+  'Container No',
+  /* Added 2026-10-03, explicit request ("save this backend container no and
+   * Client name and offlease id"): when a refund is raised from Off-Lease
+   * Stage 6, StageDetailModal.jsx already knows the container's Client Name
+   * and Lease ID (Off-Lease ID) from the row it opened — captured here too
+   * so the bill is traceable without re-looking the container up. Blank for
+   * refunds raised from the standalone SD Refunds page, which has no
+   * container context to pull these from. */
+  'Client Name', 'Off-Lease ID'
 ];
+const CONTAINER_NO_COL = 37;
+const CLIENT_NAME_COL = 38;
+const OFFLEASE_ID_COL = 39;
 
-/* Sequential stage order: hod -> ceo -> accounts. `next` is the stage whose
- * Status gets set to 'Pending' the moment this one is Approved — that's what
- * makes the NEXT stage actionable; nothing else in this file threads that
- * state through, it all falls out of "read whichever stage's Status is
- * currently 'Pending'". */
+/* Sequential stage order: hod -> ceo. `next` is the stage whose Status gets
+ * set to 'Pending' the moment this one is Approved — that's what makes the
+ * NEXT stage actionable; nothing else in this file threads that state
+ * through, it all falls out of "read whichever stage's Status is currently
+ * 'Pending'".
+ *
+ * Accounts REMOVED from the chain 2026-10-03 (explicit request: "HOD and CEO
+ * approv only") — ceo.next is now null, so CEO approving is the final
+ * decision (triggers markOffLeaseSdRefundApproved immediately, same as
+ * Accounts used to). The `accounts` entry/columns stay defined (never
+ * written to going forward) purely so old code referencing STAGES.accounts
+ * or these column indices doesn't break — there was no live data in this
+ * sheet when the chain was shortened, so there's nothing to migrate. */
 const STAGES = {
   hod: { label: 'HOD', permission: 'refundsApprovalHod', statusCol: 22, remarksCol: 23, dateCol: 24, approverCol: 25, reviewLinkCol: 34, next: 'ceo' },
-  ceo: { label: 'CEO', permission: 'refundsApprovalCeo', statusCol: 26, remarksCol: 27, dateCol: 28, approverCol: 29, reviewLinkCol: 35, next: 'accounts' },
+  ceo: { label: 'CEO', permission: 'refundsApprovalCeo', statusCol: 26, remarksCol: 27, dateCol: 28, approverCol: 29, reviewLinkCol: 35, next: null },
   accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', statusCol: 30, remarksCol: 31, dateCol: 32, approverCol: 33, reviewLinkCol: 36, next: null }
 };
 
@@ -138,12 +165,16 @@ function _mapRow(r, rowNum) {
 
   /* Which stage (if any) is actionable right now — the frontend uses this to
    * decide whose Approve/Reject buttons to show on a given row, alongside
-   * its own canAct(STAGES[stage].permission) check. */
+   * its own canAct(STAGES[stage].permission) check.
+   *
+   * Stops at 'ceo' — Accounts removed from the chain 2026-10-03 (see STAGES'
+   * own doc comment). accountsStatus is still read/returned below for any
+   * historical row, but no longer decides currentStage: a row with
+   * ceoStatus === 'Approved' is 'done', full stop. */
   let currentStage = 'done';
-  if (hodStatus === 'Rejected' || ceoStatus === 'Rejected' || accountsStatus === 'Rejected') currentStage = 'rejected';
+  if (hodStatus === 'Rejected' || ceoStatus === 'Rejected') currentStage = 'rejected';
   else if (hodStatus !== 'Approved') currentStage = 'hod';
   else if (ceoStatus !== 'Approved') currentStage = 'ceo';
-  else if (accountsStatus !== 'Approved') currentStage = 'accounts';
 
   return {
     _rowNum: rowNum,
@@ -169,6 +200,9 @@ function _mapRow(r, rowNum) {
     clientEmailConfirmationUrl: safeStr(r[19]),
     clientLedgerUrl: safeStr(r[20]),
     attachmentsUrl: safeStr(r[21]),
+    containerNo: safeStr(r[CONTAINER_NO_COL]),
+    clientName: safeStr(r[CLIENT_NAME_COL]),
+    offLeaseId: safeStr(r[OFFLEASE_ID_COL]),
     currentStage,
     hodStatus, hodRemarks: safeStr(r[STAGES.hod.remarksCol]), hodDate: safeStr(r[STAGES.hod.dateCol]), hodApprover: safeStr(r[STAGES.hod.approverCol]), hodReviewLink: safeStr(r[STAGES.hod.reviewLinkCol]),
     ceoStatus, ceoRemarks: safeStr(r[STAGES.ceo.remarksCol]), ceoDate: safeStr(r[STAGES.ceo.dateCol]), ceoApprover: safeStr(r[STAGES.ceo.approverCol]), ceoReviewLink: safeStr(r[STAGES.ceo.reviewLinkCol]),
@@ -214,6 +248,23 @@ export async function getRefundEntries(userEmail) {
     .reverse();
 }
 
+/** Every refund entry for this container, most recent first — explicit
+ *  request 2026-10-01, used by Off-Lease Stage 6 (SD Refunds, internal stage
+ *  11 — see offlease.service.js's OL_STAGE_INFO) to show/gate on THIS
+ *  container's own refund rather than the whole queue. No
+ *  _assertCanViewRefunds gate here on purpose — the caller is already behind
+ *  Off-Lease's own stage access control (a separate permission boundary from
+ *  the standalone SD Refunds page). */
+export async function getRefundEntriesForContainer(containerNo) {
+  const want = safeStr(containerNo).trim().toUpperCase();
+  if (!want) return [];
+  const { rows } = await getSheetDataFromMongo(REFUNDS_SHEET);
+  return rows
+    .map((r, i) => _mapRow(r, i + 2))
+    .filter((r) => safeStr(r.containerNo).trim().toUpperCase() === want)
+    .reverse();
+}
+
 export async function addRefundEntry(payload, userEmail) {
   await checkActionPermission('refunds', userEmail);
 
@@ -228,11 +279,19 @@ export async function addRefundEntry(payload, userEmail) {
   const invoiceAmount = safeStr(payload.invoiceAmount).trim();
   const amountToPay = safeStr(payload.amountToPay).trim();
   const department = safeStr(payload.department).trim();
+  // Required going forward — explicit request 2026-10-01 ("add the stage 6
+  // SD refunds"): this is what lets Off-Lease Stage 6 find and gate on a
+  // container's own refund. Not validated against OL_SHEET here (a bill can
+  // be raised before/without a matching Off-Lease record) — Stage 6 itself
+  // just won't find anything to show until one is submitted with this
+  // Container No.
+  const containerNo = safeStr(payload.containerNo).trim();
 
   if (!vendorName) throw new AppError('Vendor Name is required');
   if (!invoiceAmount) throw new AppError('Invoice Amount is required');
   if (!amountToPay) throw new AppError('Amount to Pay is required');
   if (!department) throw new AppError('Department is required');
+  if (!containerNo) throw new AppError('Container No is required');
 
   const row = [
     dmyTime(new Date()),
@@ -264,7 +323,10 @@ export async function addRefundEntry(payload, userEmail) {
     '', '', '', '',
     // Review Link columns (HOD/CEO/Accounts) — filled in below once rowNum
     // is known; appendRow needs the row number before a link can be minted.
-    '', '', ''
+    '', '', '',
+    containerNo,
+    safeStr(payload.clientName).trim(),
+    safeStr(payload.offLeaseId).trim()
   ];
 
   await _ensureRefundsHeaderWidth();
@@ -386,6 +448,16 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
       }
     } catch (e) { console.error('[REFUND-APPROVAL-EMAIL]', e.message); }
 
+    // Off-Lease Stage 6 (SD Refunds) unblock — explicit request 2026-10-01.
+    // `!cfg.next` means this WAS the Accounts stage and it just got approved
+    // (the final decision in the sequence); only then is the refund actually
+    // done. Best-effort inside markOffLeaseSdRefundApproved itself — never
+    // lets an Off-Lease write failure undo an already-recorded approval.
+    if (decision === 'approved' && !cfg.next) {
+      const containerNo = safeStr(updatedRow[CONTAINER_NO_COL]).trim();
+      if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || 'Accounts'}`);
+    }
+
     return 'OK';
   });
 }
@@ -488,8 +560,7 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
 
   const approvalRows = [
     ['HOD', entry.hodStatus, entry.hodDate, entry.hodRemarks],
-    ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks],
-    ['Accounts', entry.accountsStatus, entry.accountsDate, entry.accountsRemarks]
+    ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks]
   ];
 
   let subject, intro;
@@ -501,7 +572,7 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
     intro = `${stageLabel} rejected this refund bill.${extra.remarks ? ` Remarks: ${extra.remarks}` : ''}`;
   } else {
     subject = `Refund Fully Approved – ${entry.invoiceNumber || 'Unknown Invoice'}`;
-    intro = 'This refund bill has been approved at every stage (HOD, CEO, Accounts).';
+    intro = 'This refund bill has been approved at every stage (HOD, CEO).';
   }
 
   const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;

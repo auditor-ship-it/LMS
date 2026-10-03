@@ -170,7 +170,28 @@ export const OL_STAGE_INFO = {
      own Remark/Timestamp/User/Status quad at 332-335 is never written to
      again. The Return Transportation PO fields (317-319) it also briefly
      owned moved back to Stage 1 — see OL_RETURN_PO_COLS. */
-  10: { statusCol: 335, startCol: 332, endCol: 335, label: 'LR & Return Transportation' }
+  10: { statusCol: 335, startCol: 332, endCol: 335, label: 'LR & Return Transportation' },
+  /* ADDED 2026-10-01 (explicit request: "add the stage 6 SD refunds"),
+     displayed as "Stage 6" (WORKFLOW inserts internal 11 before 8 — see
+     constants/stages.js on the frontend and OL_ACTIVE_STAGE_NUMS below),
+     pushing FMS Closed (internal 8, unchanged) to display as "Stage 7".
+     Same Timestamp/User/Status quad shape as every other stage, appended at
+     345-347 — NOT 305-307 (checked, and genuinely wrong the first time this
+     was written: 304 is OL_TRACKING_PERSON_NAME_COL, but 305-307 are already
+     real, live Billing columns — "Billing Rentals Billed Upto Last
+     Date"/"Billing Outstanding Amount"/"Billing Date Billed Till", part of
+     OL_STAGE5_EXTRA_COLS. 345 is the true first free column: OL_HEADERS.length
+     is 345, and no OL_*_COL constant in this file references anything >= 345
+     either — confirmed live before picking this.) Unlike every other stage,
+     NOTHING is submitted here directly: this status is set automatically by
+     markOffLeaseSdRefundApproved (below) the moment this container's own SD
+     Refund entry (refunds.service.js) reaches CEO-approved — Accounts was
+     removed from that chain 2026-10-03 (explicit request: "HOD and CEO
+     approv only"), so CEO is now the final decision. The frontend shows the
+     SD Refund submission form / HOD-CEO status here instead of an editable
+     form — see getOffLeaseStageDetail's stage-11 branch and
+     StageDetailModal.jsx. */
+  11: { statusCol: 347, startCol: 345, endCol: 347, label: 'SD Refunds' }
 };
 /* 133/134/135 deliberately excluded -- confirmed via the live sheet those
    columns are the Marked sync flag / Email ID / Mail Status feature, not
@@ -476,8 +497,13 @@ const OL_LEASE_ID_PAD = 4;
  * OL_RETIRED_STAGES so a container that already has data there before this
  * change still reports it, same treatment as 2 and 4. Gate In/Inspection/
  * Billing/KAM's displayed numbers shift back down by one each, undoing the
- * 2026-09-18 shift. */
-export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 8];
+ * 2026-09-18 shift.
+ *
+ * SD REFUNDS ADDED 2026-10-01 (explicit request): internal stage 11 inserted
+ * before 8, displaying as the new "Stage 6" — FMS Closed (still internal 8)
+ * shifts from display 6 to display 7. Must stay in sync with WORKFLOW in
+ * frontend/src/constants/stages.js. */
+export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 11, 8];
 const OL_RETIRED_STAGES = new Set([2, 4, 10]);
 
 /* Internal numbers for the two stages the STAGE-10 hand-off moves between:
@@ -2988,6 +3014,55 @@ function _sanitizeRichTextPayload(payload) {
   }
 }
 
+/**
+ * Marks Stage 6 (SD Refunds, internal 11) Completed for this container —
+ * explicit request 2026-10-01. Called from refunds.service.js's
+ * decideRefundApproval the moment a linked SD Refund entry's Accounts stage
+ * is approved; nothing in the UI writes this directly (see OL_STAGE_INFO[11]'s
+ * own doc comment). Best-effort by design: a container can have more than one
+ * off-lease row for the same number (TRIU6681671-style reuse — see
+ * _resolveOlRow's doc comment), so this updates EVERY row currently pending
+ * at stage 11 for this container rather than guessing which one the refund
+ * belongs to; a refund raised against a container with no pending stage-11
+ * row at all is a no-op (nothing to unblock yet).
+ */
+export async function markOffLeaseSdRefundApproved(containerNo, note) {
+  const info = OL_STAGE_INFO[11];
+  try {
+    await withSheetLock(OL_SHEET, async () => {
+      const { rows } = await getSheetData(OL_SHEET);
+      const want = normKey(containerNo);
+      const stamp = dmyTime(new Date());
+      const updates = [];
+      const mirrorOps = [];
+      rows.forEach((row, i) => {
+        if (normKey(row[0]) !== want) return;
+        if (safeStr(row[info.statusCol]).trim() !== '') return; // already done (or not reached yet is fine too — still blank)
+        const rn = i + 2;
+        updates.push(
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [[stamp]] },
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 1)}${rn}`, values: [[note || 'System (SD Refund Approved)']] },
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol)}${rn}`, values: [['Completed']] }
+        );
+        mirrorOps.push({ key: `row_${i}`, patch: { [`row.${info.statusCol - 2}`]: stamp, [`row.${info.statusCol - 1}`]: note || 'System (SD Refund Approved)', [`row.${info.statusCol}`]: 'Completed' } });
+      });
+      if (!updates.length) return;
+      await batchUpdateValues(updates);
+      for (const op of mirrorOps) {
+        await getCollection(OL_SHEET).updateOne({ key: op.key }, { $set: { ...op.patch, updatedAt: new Date() } }).catch((e) => {
+          console.error('[OL-SD-REFUND] mirror patch failed (reconcile will correct):', e?.message || e);
+        });
+      }
+    });
+  } catch (e) {
+    // Best-effort — a failure here must never fail the refund approval that
+    // triggered it; the container's Stage 6 just stays blocked until this is
+    // retried (re-approving isn't possible once CEO-approved, so this would
+    // need a manual sheet fix if it ever genuinely fails).
+    console.error('[OL-SD-REFUND] Could not mark stage 11 complete for', containerNo, ':', e?.message || e);
+  }
+}
+
 export async function saveOffLeaseStage(containerNo, stage, data, userEmail, knownRow) {
   const stageNum = parseInt(stage, 10);
   await checkActionPermission(`offlease${stageNum}`, userEmail); // per-stage access: offlease1..offlease8
@@ -3004,6 +3079,18 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
     const row = rows[rn - 2] || [];
     const curStatus = row[info.statusCol];
     if (curStatus && String(curStatus).trim() !== '') return 'ALREADY_PROCESSED';
+
+    /* Stage 7 (FMS Closed, internal 8) blocks on Stage 6 (SD Refunds,
+       internal 11) being Completed — explicit request 2026-10-01, confirmed
+       as a hard block, not just a queue-visibility thing (see
+       OL_STAGE_INFO[11]'s own doc comment for why 11's status is never
+       user-submitted here, only ever set by markOffLeaseSdRefundApproved).
+       This is the first genuine "previous stage must be done" WRITE-time
+       guard in this function — every other stage here only ever checks its
+       OWN status column, never a prior one. */
+    if (stageNum === 8 && safeStr(row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
+      throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before FMS Closed can be completed.');
+    }
 
     /* STAGE 1 -> assign the Lease ID here (inside the lock = no clash). If the
        row already holds a valid Lease ID, keep it. col_1 sent by the form is
@@ -3220,6 +3307,12 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail,
   const curStatus = found.row[info.statusCol];
   if (curStatus && String(curStatus).trim() !== '') return 'ALREADY_PROCESSED';
 
+  // Same Stage 6 (SD Refunds) block as the live saveOffLeaseStage above —
+  // see that function's identical guard for the full doc comment.
+  if (stageNum === 8 && safeStr(found.row[OL_STAGE_INFO[11].statusCol]).trim() !== 'Completed') {
+    throw new AppError('Stage 6 (SD Refunds) must be CEO-approved before FMS Closed can be completed.');
+  }
+
   // Same technician-cost derivation as the live path — pure arithmetic on
   // the caller's own payload, not a Sheets call, so duplicating it here
   // carries none of the drift risk the rest of this design avoids.
@@ -3317,7 +3410,12 @@ const OL_CTC_PENDING_TARGET_COL = 342;
 const OL_CTC_PENDING_BY_COL = 343;
 const OL_CTC_PENDING_TIMESTAMP_COL = 344;
 
-export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other'];
+/* 'Purchased' added 2026-10-03 (explicit request): the container was bought
+ * outright rather than transported onward. No reason-specific field of its
+ * own like Client Scope/Other have — just the fields every reason already
+ * captures (Remarks, Date, Move To Stage). See _prepareMoveToStage's own
+ * branch for the shape this writes. */
+export const OL_MOVE_REASONS = ['Client to Client', 'Client Scope', 'Other', 'Purchased'];
 
 /** DISPLAY stage number (what the UI and this Move To Stage dropdown show,
  *  e.g. 4/5/6) -> INTERNAL stage number (what selects the sheet column
@@ -3523,14 +3621,16 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
   if (!OL_MOVE_REASONS.includes(r)) throw new AppError(`Reason must be one of: ${OL_MOVE_REASONS.join(', ')}`);
   const rmk = safeStr(remarks).trim();
 
-  // All three reasons record where the container actually went: a real Date
-  // and a Move To Stage destination (Gate In / Inspection / Billing) — the
-  // record appears there directly, see _jumpSkipsStage's doc comment,
-  // without being forced through whatever normally sits between
-  // Transportation and that stage. Container No, DO No and Movement Type on
-  // the original record are untouched either way.
+  // Every reason records where the container actually went: a Move To Stage
+  // destination (Gate In / Inspection / Billing) — the record appears there
+  // directly, see _jumpSkipsStage's doc comment, without being forced through
+  // whatever normally sits between Transportation and that stage. Container
+  // No, DO No and Movement Type on the original record are untouched either
+  // way. Date (the lifting date) is required for every reason except
+  // 'Purchased' — explicit request 2026-10-03 ("purchased select not ask the
+  // lifting date"): a purchase has no lifting event of its own to date.
   const d = safeStr(date).trim();
-  if (!d) throw new AppError('Date is required');
+  if (r !== 'Purchased' && !d) throw new AppError('Date is required');
   const display = parseInt(moveToStage, 10);
   const jumpTargetInternal = OL_INTERNAL_BY_DISPLAY.get(display);
   if (!OL_JUMP_TARGET_INTERNALS.includes(jumpTargetInternal)) {
@@ -3553,6 +3653,13 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
     const arrival = safeStr(arrivalDate).trim();
     return {
       reason: r, newClientName: '', clientScope: scope, arrivalDate: arrival,
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+    };
+  }
+
+  if (r === 'Purchased') {
+    return {
+      reason: r, newClientName: '', clientScope: '', arrivalDate: '',
       remarks: rmk, commentType: '', date: d, jumpTargetInternal
     };
   }
