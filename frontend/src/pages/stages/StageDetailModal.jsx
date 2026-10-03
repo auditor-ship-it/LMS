@@ -617,7 +617,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   instead. FMS Closed (Stage 7) won't complete until this
                   reaches Accounts-approved. */}
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
-                <div className={styles.savedPanel}>
+                <div className={sdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
                   {!sdRefunds ? (
                     <p className={styles.sectionHint}>Loading…</p>
                   ) : sdRefunds.length === 0 ? (
