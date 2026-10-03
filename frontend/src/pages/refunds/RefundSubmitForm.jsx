@@ -60,8 +60,15 @@ export function makeEmptyForm(containerNo = '') {
  * container is already known from context — pre-filled and not editable, so
  * the bill can't accidentally be raised against the wrong one. The standalone
  * SD Refunds page passes nothing, leaving it a normal free-text field.
+ *
+ * `lockedClientName`/`lockedOffLeaseId` (explicit request 2026-10-03, "save
+ * this backend container no and Client name and offlease id"): same Stage 6
+ * context, but these two have no reason to be user-visible fields — they
+ * just ride along with the submit so the row is traceable. Blank when
+ * submitted from the standalone SD Refunds page, which has no container
+ * context to pull them from.
  */
-export function RefundSubmitForm({ onSubmitted, lockedContainerNo }) {
+export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientName, lockedOffLeaseId }) {
   const [form, setForm] = useState(() => makeEmptyForm(lockedContainerNo || ''));
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -85,6 +92,8 @@ export function RefundSubmitForm({ onSubmitted, lockedContainerNo }) {
       ]);
       await submitRefund({
         containerNo: form.containerNo,
+        clientName: lockedClientName || '',
+        offLeaseId: lockedOffLeaseId || '',
         vendorName: form.vendorName,
         invoiceAmount: form.invoiceAmount,
         amountToPay: form.amountToPay,

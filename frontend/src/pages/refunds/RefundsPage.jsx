@@ -42,7 +42,11 @@ const TABLE_HEADERS = [
   'HOD', 'CEO', 'Accounts',
   // Explicit request 2026-10-01 ("add the stage 6 SD refunds"): links a bill
   // to its Off-Lease container — required on every new submission now.
-  'Container No'
+  'Container No',
+  // Explicit request 2026-10-03 ("save this backend container no and Client
+  // name and offlease id") — captured automatically from Stage 6's own
+  // context, blank for bills raised from this standalone page instead.
+  'Client Name', 'Off-Lease ID'
 ];
 
 function Link({ url }) {
@@ -116,7 +120,9 @@ export function RefundsPage() {
                   <td key="hod"><StageBadge status={r.hodStatus} /></td>,
                   <td key="ceo"><StageBadge status={r.ceoStatus} /></td>,
                   <td key="acc"><StageBadge status={r.accountsStatus} /></td>,
-                  <td key="cn">{r.containerNo || '—'}</td>
+                  <td key="cn">{r.containerNo || '—'}</td>,
+                  <td key="clnm">{r.clientName || '—'}</td>,
+                  <td key="oid">{r.offLeaseId || '—'}</td>
                 ]}
               />
             </Card>

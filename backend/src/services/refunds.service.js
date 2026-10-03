@@ -62,9 +62,19 @@ export const REFUNDS_HEADERS = [
    * and gate on THIS container's own refund rather than the whole queue.
    * Required going forward (addRefundEntry below); earlier rows predate this
    * and are simply blank here, same as every other column added this day. */
-  'Container No'
+  'Container No',
+  /* Added 2026-10-03, explicit request ("save this backend container no and
+   * Client name and offlease id"): when a refund is raised from Off-Lease
+   * Stage 6, StageDetailModal.jsx already knows the container's Client Name
+   * and Lease ID (Off-Lease ID) from the row it opened — captured here too
+   * so the bill is traceable without re-looking the container up. Blank for
+   * refunds raised from the standalone SD Refunds page, which has no
+   * container context to pull these from. */
+  'Client Name', 'Off-Lease ID'
 ];
 const CONTAINER_NO_COL = 37;
+const CLIENT_NAME_COL = 38;
+const OFFLEASE_ID_COL = 39;
 
 /* Sequential stage order: hod -> ceo -> accounts. `next` is the stage whose
  * Status gets set to 'Pending' the moment this one is Approved — that's what
@@ -179,6 +189,8 @@ function _mapRow(r, rowNum) {
     clientLedgerUrl: safeStr(r[20]),
     attachmentsUrl: safeStr(r[21]),
     containerNo: safeStr(r[CONTAINER_NO_COL]),
+    clientName: safeStr(r[CLIENT_NAME_COL]),
+    offLeaseId: safeStr(r[OFFLEASE_ID_COL]),
     currentStage,
     hodStatus, hodRemarks: safeStr(r[STAGES.hod.remarksCol]), hodDate: safeStr(r[STAGES.hod.dateCol]), hodApprover: safeStr(r[STAGES.hod.approverCol]), hodReviewLink: safeStr(r[STAGES.hod.reviewLinkCol]),
     ceoStatus, ceoRemarks: safeStr(r[STAGES.ceo.remarksCol]), ceoDate: safeStr(r[STAGES.ceo.dateCol]), ceoApprover: safeStr(r[STAGES.ceo.approverCol]), ceoReviewLink: safeStr(r[STAGES.ceo.reviewLinkCol]),
@@ -300,7 +312,9 @@ export async function addRefundEntry(payload, userEmail) {
     // Review Link columns (HOD/CEO/Accounts) — filled in below once rowNum
     // is known; appendRow needs the row number before a link can be minted.
     '', '', '',
-    containerNo
+    containerNo,
+    safeStr(payload.clientName).trim(),
+    safeStr(payload.offLeaseId).trim()
   ];
 
   await _ensureRefundsHeaderWidth();

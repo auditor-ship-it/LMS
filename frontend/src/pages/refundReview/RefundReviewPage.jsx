@@ -113,6 +113,8 @@ export function RefundReviewPage() {
             <>
               <div className={refundsStyles.grid3}>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Container No</span><span>{entry.containerNo || '—'}</span></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>Client Name</span><span>{entry.clientName || '—'}</span></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>Off-Lease ID</span><span>{entry.offLeaseId || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Vendor</span><span>{entry.vendorName}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount</span><span>{entry.invoiceAmount}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>SD Amount to be Refunded</span><span>{entry.amountToPay}</span></div>

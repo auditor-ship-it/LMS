@@ -623,7 +623,12 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   ) : sdRefunds.length === 0 ? (
                     <>
                       <p className={styles.savedTitle}>No SD Refund raised yet for {containerNo}</p>
-                      <RefundSubmitForm lockedContainerNo={containerNo} onSubmitted={reloadSdRefunds} />
+                      <RefundSubmitForm
+                        lockedContainerNo={containerNo}
+                        lockedClientName={data?.col_5}
+                        lockedOffLeaseId={data?.col_1}
+                        onSubmitted={reloadSdRefunds}
+                      />
                     </>
                   ) : (
                     <>
