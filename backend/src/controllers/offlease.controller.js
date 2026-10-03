@@ -158,6 +158,14 @@ export async function getCardEnrichment(req, res) {
   res.json(enrichment);
 }
 
+/** GET /:containerNo/agreement-po-pdf — Agreement/PO PDF only, no Order No/
+ *  Transportation (see getOffLeaseAgreementPoPdf's own doc comment) — used by
+ *  Pending Approval's detail view, which only needs these two and must stay
+ *  fast regardless of whether this container has a STAGE-9 record yet. */
+export async function getAgreementPoPdf(req, res) {
+  res.json(await offLeaseService.getOffLeaseAgreementPoPdf(req.params.containerNo));
+}
+
 /** GET /:containerNo/sd-refunds — Stage 6 (SD Refunds, internal 11), explicit
  *  request 2026-10-01. Deliberately calls refundsService directly (not
  *  threaded through offlease.service.js) to avoid a circular import —

@@ -21,6 +21,14 @@ export const getStageDetail = (containerNo, stage, rowNum) =>
 export const getCardEnrichment = (containerNo, rowNum) =>
   apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/enrichment`, rowNum ? { params: { rn: rowNum } } : undefined).then((r) => r.data);
 
+/** GET /api/offlease/:containerNo/agreement-po-pdf — Agreement/PO PDF only,
+ *  explicit request 2026-10-03 (Pending Approval's detail view). Deliberately
+ *  NOT the full enrichment above: that bundles in the slower Order No/
+ *  Transportation lookup, which could keep these two waiting on it for up to
+ *  a minute on a container with no STAGE-9 record yet. */
+export const getAgreementPoPdf = (containerNo) =>
+  apiClient.get(`/offlease/${encodeURIComponent(containerNo)}/agreement-po-pdf`).then((r) => r.data);
+
 /** POST /api/offlease/:containerNo/stage/:stage — data = { col_N: value, ... }
  *  per stageFields. `rowNum`: see getStageDetail's doc comment above — same
  *  reasoning, this time for the write, where a wrong-row match corrupts

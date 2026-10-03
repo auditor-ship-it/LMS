@@ -2859,6 +2859,36 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
  * self-contained, independently-callable lookup with its own access gate —
  * not a trusted extension of a row the caller already fetched.
  */
+/**
+ * Agreement PDF / PO PDF ONLY — explicit request 2026-10-03 (Pending
+ * Approval's own detail view: "pls show agreement pdf and Po pdf"). Split
+ * out of getOffLeaseCardEnrichment below rather than reusing it directly:
+ * that function ALSO resolves Order No (STAGE-9, with a multi-sheet
+ * Operation/New Lease fallback scan when STAGE-9 has no match yet) and the
+ * Transportation One Way/Return Way columns in the SAME response — all
+ * Mongo-backed, but the fallback scan over several thousand-row sheets can
+ * still take up to a minute end-to-end, and every field in one response
+ * means the fast Agreement/PO PDF lookup was stuck waiting on the slow one
+ * too (confirmed live: both showed loading for ~a minute on a container with
+ * no STAGE-9 record yet). This does only the single Deployed-sheet lookup —
+ * same _deployedRawValues (Mongo mirror, 30s cache) and _resolveRenewalColumns
+ * every other Agreement/PO PDF reader in this app already uses — so it stays
+ * fast regardless of the other lookup's cost. No OL_SHEET row resolution or
+ * access gate here: callers (the Pending Approval detail view) only ever
+ * pass a containerNo that already came from an access-gated list.
+ */
+export async function getOffLeaseAgreementPoPdf(containerNo) {
+  try {
+    const { values } = await _deployedRawValues();
+    const { agrCol, poPdfCol } = _resolveRenewalColumns(values[0] || []);
+    const want = normKey(containerNo);
+    const dRow = values.slice(1).find((r) => splitContainers(r[0]).some((p) => normKey(p) === want));
+    return { agreementUrl: dRow ? safeStr(dRow[agrCol]) : '', poPdfUrl: dRow ? safeStr(dRow[poPdfCol]) : '' };
+  } catch (e) {
+    return { agreementUrl: '', poPdfUrl: '' };
+  }
+}
+
 export async function getOffLeaseCardEnrichment(containerNo, user, knownRow) {
   const { rows } = await getSheetDataFromMongo(OL_SHEET);
   const rn = _resolveOlRow(rows, containerNo, knownRow);
