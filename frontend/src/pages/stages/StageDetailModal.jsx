@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import { Button } from '../../components/ui/Button.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { Icon } from '../../components/ui/Icon.jsx';
+import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
@@ -577,11 +578,35 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     <p className={styles.sectionHint}>Loading…</p>
                   ) : (
                     <>
-                      <p className={styles.sectionHint}>
-                        HOD: {sdRefunds[0]?.hodStatus || '—'} · CEO: {sdRefunds[0]?.ceoStatus || '—'} ·
-                        {' '}VR: {data?.col_348 === 'Completed' ? 'Raised' : 'Pending'} ·
-                        {' '}UTR: {data?.col_351 || 'Pending'}
-                      </p>
+                      {/* Colour-coded pipeline — explicit request 2026-10-03
+                          ("HOD approval Green reject red... VR then UTR this
+                          is fetch and green the move to completed"): reuses
+                          StatusBadge's existing semantic colours (green for
+                          Approved/Completed, red for Rejected, amber for
+                          Pending) rather than plain text, so a rejection or a
+                          completed step is visible at a glance. HOD/CEO pass
+                          their real status straight through (StatusBadge
+                          already understands 'Approved'/'Rejected'/'Pending');
+                          VR/UTR have no "Rejected" state of their own, so they
+                          only ever show Completed (green) or Pending (amber). */}
+                      <div className={styles.pipelineRow}>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>HOD</span>
+                          <StatusBadge status={sdRefunds[0]?.hodStatus || 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>CEO</span>
+                          <StatusBadge status={sdRefunds[0]?.ceoStatus || 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>VR</span>
+                          <StatusBadge status={data?.col_348 === 'Completed' ? 'Completed' : 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>UTR</span>
+                          <StatusBadge status={data?.col_351 ? 'Completed' : 'Pending'} />
+                        </span>
+                      </div>
                       {sdRefunds[0]?.ceoStatus !== 'Approved' ? (
                         <p className={styles.sectionHint}>
                           Waiting for Stage 6 (SD Refunds) to be CEO-approved before payment can proceed — see SD Refunds Approval for full detail.
@@ -596,7 +621,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                           {vrError && <div className={styles.error}>{vrError}</div>}
                         </>
                       ) : data?.col_106 === 'Completed' ? (
-                        <p className={styles.sectionHint}>Payment completed — UTR {data?.col_351}.</p>
+                        <p className={styles.sectionHint}>Payment completed — UTR Number: {data?.col_351}.</p>
                       ) : (
                         <p className={styles.sectionHint}>Voucher raised — enter the UTR Number below once the transfer is confirmed.</p>
                       )}
