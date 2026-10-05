@@ -115,7 +115,7 @@ export function LookupResult({ result }) {
   );
 }
 
-function FilledStageCard({ stage: s }) {
+export function FilledStageCard({ stage: s }) {
   return (
     <div className={styles.filledCard}>
       <div className={styles.filledHeader}>
@@ -162,7 +162,7 @@ function FilledStageCard({ stage: s }) {
  * own breakdown instead of just being asserted. Condition uses the same
  * Good/Damage pill styling as ChecklistTable below, for the same reason.
  */
-function EstimateSummaryTable({ totals }) {
+export function EstimateSummaryTable({ totals }) {
   return (
     <div className={styles.filledCard}>
       <div className={styles.filledHeader}>
@@ -211,7 +211,7 @@ const HISTORY_TONE = {
   skipped: 'histNeutral'
 };
 
-function HistoryTable({ rows }) {
+export function HistoryTable({ rows }) {
   return (
     <div className={styles.histWrap}>
       <table className={styles.histTable}>
@@ -251,7 +251,7 @@ function HistoryTable({ rows }) {
  * come straight from the Accounts & Collection API in the order returned; the
  * attachment is joined on from the Billing Sales sheet.
  */
-function InvoicesSection({ invoices }) {
+export function InvoicesSection({ invoices }) {
   if (!invoices) return null;
 
   // Month, Amount and Age read as columns of figures, so they align like ones.
@@ -313,7 +313,7 @@ function InvoicesSection({ invoices }) {
 
 /** Stage 9 in full — the history table above shows one line per movement, this
  *  shows every field each movement recorded. */
-function MovementsSection({ movements, error }) {
+export function MovementsSection({ movements, error }) {
   if (error) return <p className={styles.movementsError}>Stage 9 movements unavailable: {error}</p>;
   if (!movements) return null;
 
@@ -387,7 +387,7 @@ function ChecklistTable({ title, columnLabel, points }) {
   );
 }
 
-function StageCard({ stage, isCurrent }) {
+export function StageCard({ stage, isCurrent }) {
   const cls = stage.done ? styles.cardDone : (isCurrent ? styles.cardCurrent : styles.cardLocked);
   const tat = stage.tat;
   return (
@@ -413,7 +413,7 @@ function StageCard({ stage, isCurrent }) {
   );
 }
 
-function GateCard({ status, date, user }) {
+export function GateCard({ status, date, user }) {
   const cls = status === 'approved' ? styles.cardDone : status === 'rejected' ? styles.cardRejected : styles.cardLocked;
   const label = status === 'approved' ? 'Approved' : status === 'rejected' ? 'Rejected' : 'Pending';
   return (

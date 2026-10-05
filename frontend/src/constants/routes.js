@@ -7,6 +7,7 @@ export const ROUTES = {
   RENEW_DOCUMENT: '/renew-document',
   APPROVAL_PENDING: '/approval-pending',
   OFF_LEASE: '/off-lease',
+  OFF_LEASE_RECORD: '/off-lease/record',
   OFF_LEASE_EFFICIENCY: '/off-lease-efficiency',
   DEPLOYED_SUMMARY: '/deployed-summary',
   ROLES_ACCESS: '/roles-access',

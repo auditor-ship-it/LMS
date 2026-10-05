@@ -5,6 +5,7 @@ import { apiErrorMessage } from '../../shared/auth/index.js';
 import { postRemark, editRemark, removeRemark, fetchRemarkThread } from '../../services/offLease.service.js';
 import { STAGES, isReadOnlyStage } from '../../constants/stages.js';
 import { usePermission } from '../../hooks/usePermission.js';
+import { Highlight } from './Highlight.jsx';
 import { StageDetailModal } from '../stages/StageDetailModal.jsx';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './OrderBookView.module.css';
@@ -94,7 +95,20 @@ function buildChips(item, refundEntry) {
 }
 
 /** Status pill wording and tone, and which tab owns acting on it. */
-function statusOf(item) {
+function statusOf(item, refundEntry) {
+  /* The off-lease row alone cannot say whether the SD Refund has been signed
+     off — that lives in the refunds sheet. So a record the pipeline calls done
+     (or has moved on to Payment Status) while its refund still waits on HOD or
+     CEO is NOT released: say what it is actually waiting for. */
+  if (refundEntry && (item.stageClass === 'done' || item.currentStageNum === 8)) {
+    const hod = String(refundEntry.hodStatus || '').trim().toLowerCase();
+    const ceo = String(refundEntry.ceoStatus || '').trim().toLowerCase();
+    if (hod === 'rejected' || ceo === 'rejected') {
+      return { label: `SD refund rejected (${hod === 'rejected' ? 'HOD' : 'CEO'})`, tone: 'danger', tab: null };
+    }
+    if (hod !== 'approved') return { label: 'Stage 6A · HOD approval pending', tone: 'warn', tab: 'sdRefundsHod' };
+    if (ceo !== 'approved') return { label: 'Stage 6B · CEO approval pending', tone: 'warn', tab: 'sdRefundsCeo' };
+  }
   switch (item.stageClass) {
     case 'approval': return { label: 'Pending approval', tone: 'warn', tab: 'approval' };
     case 'rejected': return { label: 'Rejected', tone: 'danger', tab: null };
@@ -324,7 +338,7 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows }) {
+export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows }) {
   const { canAct } = usePermission();
   /* Which record+stage's own form is open, or null. Distinct from
      onOpenRecord (the read-only all-stage history modal) -- this is the
@@ -365,7 +379,7 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
 
   const rows = useMemo(() => items.map((it) => {
     const refundEntry = refundByContainer.get(String(it.container || '').trim().toUpperCase());
-    return { it, chips: buildChips(it, refundEntry), status: statusOf(it) };
+    return { it, chips: buildChips(it, refundEntry), status: statusOf(it, refundEntry) };
   }), [items, refundByContainer]);
 
   if (loading) return <SkeletonCards count={6} />;
@@ -395,23 +409,23 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
           }}
         >
           <div className={styles.idCol}>
-            <div className={styles.date}>{it.deployedDate || '—'}</div>
-            <div className={styles.leaseId}>{it.leaseId || '—'}</div>
+            <div className={styles.date}><Highlight text={it.deployedDate || '—'} query={highlight} /></div>
+            <div className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={highlight} /></div>
             <div className={styles.kind}>LEASE</div>
-            {it.raisedBy && <div className={styles.owner}>{it.raisedBy}</div>}
+            {it.raisedBy && <div className={styles.owner}><Highlight text={it.raisedBy} query={highlight} /></div>}
           </div>
 
           <div className={styles.mainCol}>
-            <div className={styles.client}>{it.clientName || 'Unknown client'}</div>
+            <div className={styles.client}><Highlight text={it.clientName || 'Unknown client'} query={highlight} /></div>
             {/* Spec, code and location on one line — three short values on
                 three lines left a column of white space beside them. */}
             <div className={styles.meta}>
-              <span>{[it.size, it.type].filter(Boolean).join(' ') || 'Container'}</span>
-              {it.clientCode && <span className={styles.chipCode}>{it.clientCode}</span>}
+              <span><Highlight text={[it.size, it.type].filter(Boolean).join(' ') || 'Container'} query={highlight} /></span>
+              {it.clientCode && <span className={styles.chipCode}><Highlight text={it.clientCode} query={highlight} /></span>}
               {it.location && (
                 <span className={styles.location}>
                   <Icon name="pin" className={styles.locationIcon} />
-                  {it.location}
+                  <Highlight text={it.location} query={highlight} />
                 </span>
               )}
             </div>
@@ -469,10 +483,10 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
             <div className={styles.sideLabel}>Container</div>
             <div className={styles.containerNo}>
               <Icon name="container" className={styles.containerIcon} />
-              <span>{it.container}</span>
+              <span><Highlight text={it.container} query={highlight} /></span>
             </div>
             <div className={styles.sideLabel}>Valid upto</div>
-            <div className={styles.sideValue}>{it.validUpto || '—'}</div>
+            <div className={styles.sideValue}><Highlight text={it.validUpto || '—'} query={highlight} /></div>
           </div>
         </div>
       ))}

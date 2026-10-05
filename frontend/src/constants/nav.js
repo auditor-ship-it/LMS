@@ -28,6 +28,10 @@ import { ROUTES } from './routes.js';
 // only). taskKey (where present) maps to a field on GET /tasks (My Task's
 // existing pending-count aggregate) the sidebar reuses to show a badge —
 // no separate endpoint per nav item.
+/* `hidden: true` keeps the page, its route, permissions and breadcrumb exactly
+   as they are and only leaves the item out of the sidebar menu (explicit
+   request 2026-10-05: SD Refunds and Refunds Approval). Remove the flag to
+   show it again. */
 export const NAV_TREE = {
   label: 'Lease Management System',
   items: [
@@ -60,13 +64,13 @@ export const NAV_TREE = {
     // sidebarKey added 2026-10-01 (explicit request). Real access is still
     // separately gated by the 'refunds' PERMISSION key (page renders
     // view-only without it) — this just controls menu visibility.
-    { key: 'refunds', label: 'SD Refunds', path: ROUTES.REFUNDS, icon: 'inbox', section: 'Reports', sidebarKey: 'refunds' },
+    { key: 'refunds', label: 'SD Refunds', path: ROUTES.REFUNDS, icon: 'inbox', section: 'Reports', sidebarKey: 'refunds', hidden: true },
     // Own sidebar page, not inline actions on the Refunds page — explicit
     // request 2026-09-30, same "separate approval page" pattern as Renew
     // Approval Pending above. sidebarKey added 2026-10-01; real access to
     // the Approve/Reject buttons is gated by the refundsApprovalHod/Ceo/
     // Accounts PERMISSION keys (page shows only what this caller can act on).
-    { key: 'refundsApproval', label: 'Refunds Approval', path: ROUTES.REFUNDS_APPROVAL, icon: 'clock', section: 'Reports', sidebarKey: 'refundsApproval' },
+    { key: 'refundsApproval', label: 'Refunds Approval', path: ROUTES.REFUNDS_APPROVAL, icon: 'clock', section: 'Reports', sidebarKey: 'refundsApproval', hidden: true },
     // permKey added 2026-09-30 (explicit request: "this two access only
     // employee id 1111") — the menu entry itself now disappears for anyone
     // without the 'rolesAdmin' permission, not just the page content after

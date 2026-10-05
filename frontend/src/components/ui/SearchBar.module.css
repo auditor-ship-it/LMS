@@ -65,3 +65,41 @@
   cursor: pointer;
 }
 .clear:hover { background: var(--line-strong); color: var(--text); }
+
+/* Large variant — the page's main search. Raised, roomier, easier to find. */
+.wrap.large {
+  /* Fixed height = the height of the selects it sits beside, so a row of
+     controls lines up. */
+  height: 42px;
+  box-sizing: border-box;
+  min-width: 420px;
+  flex: 1 1 420px;
+  max-width: 560px;
+  gap: 10px;
+  padding: 0 14px 0 16px;
+  border-width: 1.5px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+.wrap.large:hover { box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 6px 18px rgba(15, 23, 42, 0.1); }
+.wrap.large .icon { width: 18px; height: 18px; }
+.wrap.large .input { height: 100%; padding: 0; font-size: 14px; text-overflow: ellipsis; }
+.wrap.large .clear { width: 22px; height: 22px; font-size: 15px; }
+.hint {
+  flex: none;
+  min-width: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-family: var(--f-mono, monospace);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--text-3);
+}
+@media (max-width: 640px) {
+  .wrap.large { min-width: 0; flex-basis: 100%; max-width: 100%; }
+  .hint { display: none; }
+}

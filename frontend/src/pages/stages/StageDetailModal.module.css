@@ -878,3 +878,9 @@
   font-size: 12px;
   color: var(--text);
 }
+
+/* Inline variant (record page): the form sits in the page's own content area
+   rather than over it, so the page's header and rails stay visible. */
+.inlineWrap { width: 100%; }
+.inlinePanel { max-width: none; max-height: none; box-shadow: none; }
+.inlinePanel > .header { display: none; }

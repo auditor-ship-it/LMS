@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { NAV_TREE } from '../../constants/nav.js';
 import { useSidebarState } from '../../hooks/useSidebarState.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -19,12 +20,55 @@ function badgeValue(item, counts) {
   return item.taskKey ? (counts[item.taskKey] || 0) : 0;
 }
 
+const SECTIONS_KEY = 'lm_sidebar_collapsed_sections';
+/* These two start collapsed on every load, whatever was left open last time
+   (explicit request 2026-10-05). Opening one still works for the session, and
+   landing on a page inside one opens it. */
+const ALWAYS_COLLAPSED = ['Reports', 'Admin'];
+
+/** Which section headings are collapsed — persisted, everything open by default. */
+function useCollapsedSections(activePath, groups) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return new Set([...JSON.parse(localStorage.getItem(SECTIONS_KEY) || '[]'), ...ALWAYS_COLLAPSED]); } catch (e) { return new Set(ALWAYS_COLLAPSED); }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(SECTIONS_KEY, JSON.stringify([...collapsed])); } catch (e) { /* best-effort */ }
+  }, [collapsed]);
+
+  /* Landing on a page (a link, a dashboard button, a deep link) opens the
+     section it lives in, so the highlighted item is never hidden. Keyed on the
+     path only — the user can still collapse it afterwards. */
+  const activeLabel = groups.find((g) => g.items.some((it) => {
+    const paths = it.path ? [it.path] : (it.children || []).map((c) => c.path);
+    return paths.some((p) => activePath === p || activePath.startsWith(`${p}/`));
+  }))?.label;
+  useEffect(() => {
+    if (!activeLabel) return;
+    setCollapsed((prev) => {
+      if (!prev.has(activeLabel)) return prev;
+      const next = new Set(prev);
+      next.delete(activeLabel);
+      return next;
+    });
+  }, [activePath, activeLabel]);
+
+  const toggle = useCallback((label) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      return next;
+    });
+  }, []);
+  return { isCollapsed: (label) => collapsed.has(label), toggle };
+}
+
 function Leaf({ item, onNavigate, badge }) {
   return (
     <NavLink
       to={item.path}
       className={({ isActive }) => `${styles.navItem} ${isActive ? styles.active : ''}`}
       onClick={onNavigate}
+      title={item.label}
     >
       {item.icon && <Icon name={item.icon} className={styles.navIcon} />}
       <span className={styles.navLabel}>{item.label}</span>
@@ -91,7 +135,7 @@ export function Sidebar({ open, onNavigate }) {
     (item.sidebarKey ? canView(item.sidebarKey) : true) &&
     (item.permKey ? canAct(item.permKey) : true);
 
-  const visibleItems = NAV_TREE.items.filter((item) => item.children || visible(item));
+  const visibleItems = NAV_TREE.items.filter((item) => !item.hidden && (item.children || visible(item)));
   const sections = [];
   for (const item of visibleItems) {
     const label = item.section || '';
@@ -99,6 +143,12 @@ export function Sidebar({ open, onNavigate }) {
     if (!group) { group = { label, items: [] }; sections.push(group); }
     group.items.push(item);
   }
+
+  const { pathname } = useLocation();
+  // Collapsed on desktop = an icon rail: every item stays reachable as an icon,
+  // so the accordion state is ignored and the headings become thin dividers.
+  const rail = !open;
+  const { isCollapsed, toggle: toggleSection } = useCollapsedSections(pathname, sections);
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.open : ''}`}>
@@ -109,8 +159,25 @@ export function Sidebar({ open, onNavigate }) {
       <nav className={styles.nav}>
         {sections.map((group) => (
           <div key={group.label || '_'} className={styles.section}>
-            {group.label && <div className={styles.sectionLabel}>{group.label}</div>}
-            {group.items.map((item) => {
+            {group.label && rail && <div className={styles.railDivider} aria-hidden="true" />}
+            {group.label && !rail && (() => {
+              const open = !isCollapsed(group.label);
+              // A collapsed heading still shows how much is waiting inside it.
+              const waiting = open ? 0 : group.items.reduce((sum, it) => sum + (it.children ? 0 : badgeValue(it, counts)), 0);
+              return (
+                <button
+                  type="button"
+                  className={styles.sectionToggle}
+                  aria-expanded={open}
+                  onClick={() => toggleSection(group.label)}
+                >
+                  <span className={styles.sectionToggleLabel}>{group.label}</span>
+                  {waiting > 0 && <span className={styles.navBadge}>{waiting}</span>}
+                  <Icon name="chev-down" size="sm" className={`${styles.chevron} ${open ? styles.chevronOpen : ''}`} />
+                </button>
+              );
+            })()}
+            {(!group.label || rail || !isCollapsed(group.label)) && group.items.map((item) => {
               if (item.children) {
                 const visibleChildren = item.children.filter(visible);
                 if (!visibleChildren.length) return null;

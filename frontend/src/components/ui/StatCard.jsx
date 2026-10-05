@@ -17,6 +17,9 @@ import styles from './StatCard.module.css';
  * label/value button (not nested inside it) so each chip's own onClick
  * fires without also triggering the card's main onClick.
  *
+ * `size`: 'lg' for a headline card (bigger number, roomier), 'sm' for a
+ * compact one that fits many in a row. Omit for the standard card.
+ *
  * `split` (instead of `icon`/`label`/`value`/`onClick`) renders TWO
  * equally-weighted label/value halves side by side in one card, each with
  * its own optional onClick — for a card that genuinely represents two
@@ -25,16 +28,24 @@ import styles from './StatCard.module.css';
  * onClick}, {...}]`, always exactly two entries.
  */
 export function StatCard({
-  icon, label, value, loading, trend, trendDirection = 'flat', footnote, footnoteSegments, tint, active, onClick, split
+  icon, label, value, loading, trend, trendDirection = 'flat', footnote, footnoteSegments, tint, active, onClick, split, size
 }) {
   const cls = [
     styles.card,
     onClick ? styles.hoverable : '',
     tint ? styles.tint : '',
     tint ? styles[`tint-${tint}`] : '',
-    active ? styles.active : ''
+    active ? styles.active : '',
+    size === 'lg' ? styles.sizeLg : '',
+    size === 'sm' ? styles.sizeSm : ''
   ].filter(Boolean).join(' ');
   const HitTag = onClick ? 'button' : 'div';
+  /* Compact cards split "Stage 6A · HOD Approval" into a small kicker line and
+     a name line, so every card has the same two-line head and the numbers line
+     up across the row. */
+  const compactParts = size === 'sm' && typeof label === 'string' && label.includes(' · ')
+    ? [label.slice(0, label.indexOf(' · ')), label.slice(label.indexOf(' · ') + 3)]
+    : null;
   const hasSegments = Array.isArray(footnoteSegments) && footnoteSegments.length > 0;
 
   if (split) {
@@ -64,13 +75,42 @@ export function StatCard({
     );
   }
 
+  /* Compact card: count / POC / stage / stage name, each section split by a
+     dashed rule, so every card in the row reads the same top to bottom. A card
+     with no POC shows a dash rather than collapsing the section. */
+  if (compactParts) {
+    return (
+      <div className={cls}>
+        <HitTag type={onClick ? 'button' : undefined} className={`${styles.hitArea} ${styles.stack}`} onClick={onClick} title={label}>
+          <span className={styles.sCount}>{loading ? <SkeletonValue /> : value}</span>
+          <span className={styles.sPoc}>{loading ? '' : (footnote || '—')}</span>
+          <span className={styles.sStage}>
+            {icon && <Icon name={icon} size="sm" />}
+            {compactParts[0]}
+          </span>
+          <span className={styles.sName}>{compactParts[1]}</span>
+        </HitTag>
+      </div>
+    );
+  }
+
   return (
     <div className={cls}>
       <HitTag type={onClick ? 'button' : undefined} className={styles.hitArea} onClick={onClick}>
-        <span className={styles.klabel}>
-          {icon && <Icon name={icon} size="sm" />}
-          {label}
-        </span>
+        {compactParts ? (
+          <span className={styles.compactHead} title={label}>
+            <span className={styles.kicker}>
+              {icon && <Icon name={icon} size="sm" />}
+              {compactParts[0]}
+            </span>
+            <span className={styles.kname}>{compactParts[1]}</span>
+          </span>
+        ) : (
+          <span className={styles.klabel}>
+            {icon && <Icon name={icon} size="sm" />}
+            {label}
+          </span>
+        )}
         <span className={styles.kval}>{loading ? <SkeletonValue /> : value}</span>
       </HitTag>
       {!loading && (trend || footnote) && !hasSegments && (

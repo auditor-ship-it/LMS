@@ -80,6 +80,14 @@ export function OffLeasePage() {
      Access can now narrow either one. The per-stage tabs are unaffected —
      they were never gated at the tab level, only their save actions were. */
   const visibleTabs = useMemo(() => TABS.filter((t) => {
+    /* The numbered Stage 1..7 tabs are no longer shown (explicit request
+       2026-10-05) — each stage is now worked from the record page. The
+       approval tabs (1A, 6A, 6B) are queues of their own and stay. The tabs
+       still exist in TABS, so the dashboard's "Open" button can still land
+       on one. */
+    if (/^stage\d+$/.test(t.key)) return false;
+    // Explicit request 2026-10-05: 1A / 6A / 6B are hidden from the strip too.
+    if (t.key === 'approval' || t.key === 'sdRefundsHod' || t.key === 'sdRefundsCeo') return false;
     if (t.key === 'dashboard') return canAct('offleasedashboard');
     if (t.key === 'lookup') return canAct('offleaselookup');
     // Stage 6A/6B only shown to callers who could actually act on that
@@ -118,8 +126,17 @@ export function OffLeasePage() {
     <>
       <PageHeader
         title="Off-Lease"
-        subtitle="Pending intimation approvals, container lookup, and the Stage 1–8 pipeline"
       />
+
+      {/* A view reached from a dashboard card or button (1A / 6A / 6B / a stage
+          list) has no tab of its own in the strip any more, so say where you
+          are and offer the way back. */}
+      {!visibleTabs.some((t) => t.key === tab) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <Button size="sm" variant="secondary" onClick={() => setTab('dashboard')}>← Back to Dashboard</Button>
+          <strong>{TABS.find((t) => t.key === tab)?.label || ''}</strong>
+        </div>
+      )}
 
       <div className={styles.tabRow}>
         {visibleTabs.map((t) => (

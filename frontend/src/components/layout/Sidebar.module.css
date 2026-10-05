@@ -117,16 +117,30 @@
    hiding it hands its space straight to the content next to it (wide tables
    like Lease Expiry get the room). */
 @media (min-width: 901px) {
-  .sidebar:not(.open) {
-    width: 0;
-    border-right-color: transparent;
+  /* Collapsed = an icon rail (60px): icons only, labels in the hover tooltip
+     (title=), badges shrink to a corner dot. Content still gains most of the
+     width back. */
+  .sidebar:not(.open) { width: 60px; }
+  .sidebar:not(.open) .brand { justify-content: center; padding: 16px 0; }
+  .sidebar:not(.open) .brandText,
+  .sidebar:not(.open) .navLabel,
+  .sidebar:not(.open) .branchLabel,
+  .sidebar:not(.open) .chevron { display: none; }
+  .sidebar:not(.open) .nav { padding: 9px 8px; }
+  .sidebar:not(.open) .navItem,
+  .sidebar:not(.open) .branchToggle { justify-content: center; padding: 10px 0; position: relative; }
+  .sidebar:not(.open) .navBadge {
+    position: absolute;
+    top: 3px;
+    right: 5px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    font-size: 9px;
   }
-  .sidebar:not(.open) .brand,
-  .sidebar:not(.open) .nav {
-    opacity: 0;
-    pointer-events: none;
-  }
+  .sidebar:not(.open) .section + .section { margin-top: 0; }
 }
+.railDivider { height: 1px; background: var(--line); margin: 8px 6px; }
 
 /* Mobile: unchanged overlay drawer — full width, slides in from off-screen. */
 @media (max-width: 900px) {
@@ -141,3 +155,25 @@
   }
   .sidebar.open { left: 0; }
 }
+
+/* Section headings are accordion toggles: label, an optional pending total
+   (only while collapsed), and a chevron. Same look as .sectionLabel. */
+.sectionToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px 4px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--f-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  text-align: left;
+}
+.sectionToggle:hover { color: var(--text); }
+.sectionToggleLabel { flex: 1; }

@@ -53,7 +53,7 @@ function parseCostFigure(v) {
  * only the visible field keys back to POST /offlease/:containerNo/stage/:stage.
  */
 // The heading comes from stageCaption(stageNumber), so no label prop is needed.
-export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, onClose, onSaved }) {
+export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, identityOnly, movement, transport, delivery, inline, onClose, onSaved }) {
   const { canAct } = usePermission();
   const fields = STAGE_FIELDS[stageNumber] || [];
   const { data, loading, error, reload } = useAsync(() => fetchStageDetail(containerNo, stageNumber, rowNum), [containerNo, stageNumber, rowNum]);
@@ -191,8 +191,19 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [justSaved, setJustSaved] = useState(false);
 
   useEffect(() => {
-    if (data) setValues(data);
-  }, [data]);
+    if (!data) return;
+    /* A saved date comes back as the sheet's display text (dd-mm-yyyy), but
+       <input type="date"> only accepts yyyy-mm-dd and silently shows blank for
+       anything else — so an already-filled stage opened as an empty form. */
+    const next = { ...data };
+    for (const f of fields) {
+      if (f.type !== 'date') continue;
+      const m = String(next[f.key] ?? '').trim().match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+      if (m) next[f.key] = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    }
+    setValues(next);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `fields` is derived from stageNumber; the `|| []` fallback is a new array every render
+  }, [data, stageNumber]);
 
   /* Billing's own "Outstanding Amount" (col_306) and "Estimated repair
      charges billed" (col_308) used to start blank and make the reconciler
@@ -219,20 +230,22 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   }, [stageNumber, data]);
 
   useEffect(() => {
+    if (inline) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, inline]);
 
   /* Lock the page behind while the modal is open. Without it the page keeps
      its own scrollbar alongside the modal's, and scrolling past the end of the
      modal silently scrolls the page underneath. The previous value is restored
      rather than assumed to be "" — another overlay may already have set it. */
   useEffect(() => {
+    if (inline) return undefined;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
-  }, []);
+  }, [inline]);
 
   const setField = (key, v) => setValues((prev) => ({ ...prev, [key]: v }));
 
@@ -372,8 +385,8 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const FormTag = stageNumber === SD_REFUNDS_STAGE ? 'div' : 'form';
 
   return (
-    <div className={styles.backdrop} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={styles.modal} role="dialog" aria-modal="true" aria-label={modalTitle}>
+    <div className={inline ? styles.inlineWrap : styles.backdrop} onMouseDown={(e) => { if (!inline && e.target === e.currentTarget) onClose(); }}>
+      <div className={`${styles.modal} ${inline ? styles.inlinePanel : ''}`} role={inline ? undefined : 'dialog'} aria-modal={inline ? undefined : 'true'} aria-label={modalTitle}>
         <div className={styles.header}>
           <h2 className={styles.title}>{modalTitle}</h2>
           <button type="button" className={styles.closeBtn} onClick={onClose} aria-label="Close">✕</button>
@@ -692,6 +705,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                             ? 'Rejected — raise a new SD Refund for this container to proceed.'
                             : 'Still working through HOD → CEO — see SD Refunds Approval for full detail.'}
                       </p>
+                      <SdRefundDetails entry={sdRefunds[0]} />
                     </>
                   )}
                 </div>
@@ -867,6 +881,38 @@ const GATE_IN_STAGE = 7;
  *  this reaches CEO-approved — Accounts removed from the chain 2026-10-03
  *  (explicit request: "HOD and CEO approv only"). */
 const SD_REFUNDS_STAGE = 11;
+
+/* What was actually submitted on the SD Refund (and who decided it), laid out
+   as read-only fields. The summary line above only carried the vendor and the
+   two statuses, so an already-raised refund opened looking empty. Blank values
+   are skipped; URLs render as links via renderCellValue. */
+const SD_REFUND_DETAIL_FIELDS = [
+  ['Submitted on', 'timestamp'], ['Submitted by', 'user'],
+  ['Vendor / Client', 'vendorName'], ['Invoice number', 'invoiceNumber'], ['Invoice date', 'invoiceDate'],
+  ['Invoice amount', 'invoiceAmount'], ['Amount to pay', 'amountToPay'], ['SD amount to be refunded', 'sdAmountToBeRefunded'],
+  ['SD calculation', 'sdCalculation'], ['Payment due date', 'paymentDueDate'], ['Payment type', 'paymentType'],
+  ['Payment terms', 'paymentTerms'], ['Department', 'department'], ['Ledger head', 'ledgerHead'],
+  ['Bill received by', 'billReceivedBy'],
+  ['Invoice file', 'invoiceFileUrl'], ['PI file', 'piFileUrl'], ['Cancelled cheque', 'cancelledChequeUrl'],
+  ['Client email confirmation', 'clientEmailConfirmationUrl'], ['Client ledger', 'clientLedgerUrl'], ['Other attachments', 'attachmentsUrl'],
+  ['HOD status', 'hodStatus'], ['HOD approver', 'hodApprover'], ['HOD date', 'hodDate'], ['HOD remarks', 'hodRemarks'],
+  ['CEO status', 'ceoStatus'], ['CEO approver', 'ceoApprover'], ['CEO date', 'ceoDate'], ['CEO remarks', 'ceoRemarks']
+];
+
+function SdRefundDetails({ entry }) {
+  const rows = SD_REFUND_DETAIL_FIELDS.filter(([, key]) => String(entry[key] ?? '').trim() !== '');
+  if (!rows.length) return null;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, textAlign: 'left', marginTop: 12 }}>
+      {rows.map(([label, key]) => (
+        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>{label}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-word' }}>{renderCellValue(entry[key])}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Colour for a chosen status: red for any fault, green for Good/OK, grey for
  *  Not Required, nothing while unset. */
