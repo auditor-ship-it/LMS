@@ -8,11 +8,12 @@ import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { fetchMyTasks } from '../../services/myTask.service.js';
+import { fetchRefunds } from '../../services/refunds.service.js';
+import { usePermission } from '../../hooks/usePermission.js';
 import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
 import { toDate } from '../../utils/formatDateTime.js';
 import { OrderBookView } from './OrderBookView.jsx';
-import { ContainerDetailModal } from './ContainerDetailModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
 const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
@@ -40,6 +41,7 @@ const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
 
 export function PipelineDashboard({ onOpenTab }) {
   const navigate = useNavigate();
+  const { canAct } = usePermission();
   const { data, loading, error, reload } = useAsync(fetchOffLeaseDashboard, []);
   // Same background-eligibility catch as StagePageBase — see usePolling's doc comment.
   usePolling(() => reload({ silent: true }));
@@ -49,10 +51,30 @@ export function PipelineDashboard({ onOpenTab }) {
      a different number than the nav item right next to it. */
   const { data: taskCounts, loading: taskCountsLoading, reload: reloadTaskCounts } = useAsync(fetchMyTasks, []);
   usePolling(() => reloadTaskCounts({ silent: true }));
+  /* Stage 6A (HOD) / Stage 6B (CEO) scorecards — explicit request 2026-10-05.
+     SD Refunds is a separate backend system entirely (own sheet, own
+     currentStage field — see refunds.service.js's own header comment), so
+     this is its own fetch, not part of kpis.byStage above. Only fetched at
+     all if the caller can act on at least one of the two, same gate the
+     cards themselves use below. */
+  const canSeeRefundApprovals = canAct('refundsApprovalHod') || canAct('refundsApprovalCeo');
+  const { data: refundsData, reload: reloadRefunds } = useAsync(
+    () => (canSeeRefundApprovals ? fetchRefunds() : Promise.resolve({ data: [] })),
+    [canSeeRefundApprovals]
+  );
+  usePolling(() => reloadRefunds({ silent: true }));
+  const refundRows = refundsData?.data || [];
+  const hodPendingCount = refundRows.filter((r) => r.currentStage === 'hod').length;
+  const ceoPendingCount = refundRows.filter((r) => r.currentStage === 'ceo').length;
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
-  // The record whose full stage history is open, or null.
-  const [openRecord, setOpenRecord] = useState(null);
+  // Opens the record's full stage history on its own page (not a modal).
+  const openRecord = (rec) => {
+    const q = new URLSearchParams({ container: rec.container });
+    if (rec.leaseId) q.set('leaseId', rec.leaseId);
+    if (rec._rowNum) q.set('row', String(rec._rowNum));
+    navigate(`${ROUTES.OFF_LEASE_RECORD}?${q}`);
+  };
   /* null = no filter; an internal stage number, 'approval' or 'done'. */
   const [stageFilter, setStageFilter] = useState(null);
   /* '' = every month; otherwise a "YYYY-MM" key (monthKey) — explicit request
@@ -216,6 +238,29 @@ export function PipelineDashboard({ onOpenTab }) {
           icon={STAGE_ICONS[11]} label="Stage 6 · SD Refunds" value={kpis.byStage?.[11] ?? '—'} loading={loading} tint="info"
           onClick={() => toggleFilter(11)}
         />
+        {/* Stage 6A (HOD) / Stage 6B (CEO) — explicit request 2026-10-05.
+            Jumps straight to the matching Off-Lease tab (onOpenTab, same
+            mechanism the "Approve"/"Open" buttons in the table below already
+            use) rather than this dashboard's own stageFilter/table, since
+            SD Refunds records aren't part of that OL_SHEET-based table at
+            all. Each card only renders for a caller who can act on that
+            stage, same gate SdRefundApprovalTab itself falls back to a "no
+            permission" message for — hiding the card entirely here is
+            nicer than a dead-end click. */}
+        {canAct('refundsApprovalHod') && (
+          <StatCard
+            icon="clock" label="Stage 6A · HOD Approval" value={hodPendingCount} loading={loading} tint="warn"
+            footnote={hodPendingCount > 0 ? 'Needs sign-off' : undefined}
+            onClick={() => onOpenTab?.('sdRefundsHod')}
+          />
+        )}
+        {canAct('refundsApprovalCeo') && (
+          <StatCard
+            icon="clock" label="Stage 6B · CEO Approval" value={ceoPendingCount} loading={loading} tint="warn"
+            footnote={ceoPendingCount > 0 ? 'Needs sign-off' : undefined}
+            onClick={() => onOpenTab?.('sdRefundsCeo')}
+          />
+        )}
         {/* Explicit request 2026-09-29: replaces "Completed this month" —
             Stage 6 (FMS Closed, internal 8) was the one active stage with no
             card of its own on this dashboard at all; same pattern as every
@@ -297,7 +342,7 @@ export function PipelineDashboard({ onOpenTab }) {
             /* No reload — the remark cell keeps itself up to date locally.
                Refetching all 35 records to reflect one comment is what made
                Save and Delete sit spinning. */
-            onOpenRecord={setOpenRecord}
+            onOpenRecord={openRecord}
           />
         )}
 
@@ -349,13 +394,6 @@ export function PipelineDashboard({ onOpenTab }) {
         )}
       </Card>
 
-      {openRecord && (
-        <ContainerDetailModal
-          container={openRecord.container}
-          leaseId={openRecord.leaseId}
-          onClose={() => setOpenRecord(null)}
-        />
-      )}
     </>
   );
 }
