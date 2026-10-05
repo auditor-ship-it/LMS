@@ -248,6 +248,20 @@ export async function getRefundEntries(userEmail) {
     .reverse();
 }
 
+/** Whole-desk HOD/CEO pending counts, no permission gate — same "desk total
+ *  shown to everyone" pattern as offlease.service.js's getOffLeaseStageCounts,
+ *  used by My Task (Stage 6A/6B cards are visible to every login there, same
+ *  as every other Off-Lease stage card, action itself still gated separately
+ *  by refundsApprovalHod/Ceo on the page that actually does the approving). */
+export async function getRefundStageCounts() {
+  const { rows } = await getSheetDataFromMongo(REFUNDS_SHEET);
+  const entries = rows.map((r, i) => _mapRow(r, i + 2)).filter((r) => r.invoiceNumber || r.vendorName);
+  return {
+    hod: entries.filter((r) => r.currentStage === 'hod').length,
+    ceo: entries.filter((r) => r.currentStage === 'ceo').length
+  };
+}
+
 /** Every refund entry for this container, most recent first — explicit
  *  request 2026-10-01, used by Off-Lease Stage 6 (SD Refunds, internal stage
  *  11 — see offlease.service.js's OL_STAGE_INFO) to show/gate on THIS
