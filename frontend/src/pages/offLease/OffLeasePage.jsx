@@ -21,6 +21,7 @@ import { exportLookupToExcel, exportLookupToPdf } from './lookupExport.js';
 import { useStageSelection, StageSelector } from './StageSelector.jsx';
 import { PipelineDashboard } from './PipelineDashboard.jsx';
 import { StagePageBase } from '../stages/StagePageBase.jsx';
+import { SdRefundApprovalTab } from './SdRefundApprovalTab.jsx';
 import { STAGES } from '../../constants/stages.js';
 import styles from './OffLeasePage.module.css';
 
@@ -30,6 +31,17 @@ import styles from './OffLeasePage.module.css';
    approvals happened before intimation. RENAMED 2026-09-18 (explicit
    request) from "Stage 1.2" to "Stage 1A" — no position change. */
 const APPROVAL_TAB = { key: 'approval', label: 'Stage 1A (Pushpa)', countKey: 'approval' };
+
+/* Stage 6A (HOD) / Stage 6B (CEO) — explicit request 2026-10-05: the same
+   HOD/CEO approval RefundsApprovalPage.jsx already does, surfaced as real
+   Off-Lease tabs too (both kept — explicit request). Not numbered stages of
+   their own (no OL_SHEET columns, no countKey into getOffLeaseStageCounts) —
+   same "synthetic tab sitting between two real stages" shape as APPROVAL_TAB
+   above, just for Stage 6/SD Refunds instead of Stage 1. Their counts come
+   from SdRefundApprovalTab's own fetch (see its onCountChange), tracked in
+   OffLeasePage's own state below, not from the counts object. */
+const SD_REFUNDS_HOD_TAB = { key: 'sdRefundsHod', label: 'Stage 6A (HOD)', countKey: 'sdRefundsHod' };
+const SD_REFUNDS_CEO_TAB = { key: 'sdRefundsCeo', label: 'Stage 6B (CEO)', countKey: 'sdRefundsCeo' };
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -44,7 +56,12 @@ const TABS = [
       countKey: String(s.number),
       label: s.owner ? `Stage ${s.display} (${s.owner})` : `Stage ${s.display}`
     };
-    return s.display === 1 ? [tab, APPROVAL_TAB] : [tab];
+    if (s.display === 1) return [tab, APPROVAL_TAB];
+    // Internal 11 is SD Refunds, display 6 — 6A/6B slot in right after it,
+    // before internal 8 (Payment Status, display 7) which follows next in
+    // STAGES' own order (WORKFLOW = [1, 6, 7, 3, 5, 11, 8]).
+    if (s.number === 11) return [tab, SD_REFUNDS_HOD_TAB, SD_REFUNDS_CEO_TAB];
+    return [tab];
   })
 ];
 
@@ -65,6 +82,12 @@ export function OffLeasePage() {
   const visibleTabs = useMemo(() => TABS.filter((t) => {
     if (t.key === 'dashboard') return canAct('offleasedashboard');
     if (t.key === 'lookup') return canAct('offleaselookup');
+    // Stage 6A/6B only shown to callers who could actually act on that
+    // approval stage — same gate SdRefundApprovalTab itself falls back to a
+    // "no permission" message for, but hiding the tab entirely here is
+    // nicer than showing an empty/denied tab in the strip.
+    if (t.key === 'sdRefundsHod') return canAct('refundsApprovalHod');
+    if (t.key === 'sdRefundsCeo') return canAct('refundsApprovalCeo');
     return true;
   }), [canAct]);
 
@@ -79,7 +102,12 @@ export function OffLeasePage() {
      on error, and a default only applies to `undefined`. Tabs without a
      countKey then indexed null and the whole page crashed. */
   const { data: countsData, reload: reloadCounts } = useAsync(fetchStageCounts, []);
-  const counts = countsData || {};
+  // Stage 6A/6B's own counts — separate from `counts` above since SD Refunds
+  // is a different backend system entirely (see SD_REFUNDS_HOD_TAB's own doc
+  // comment); SdRefundApprovalTab reports its count up via onCountChange the
+  // moment it loads/changes.
+  const [sdRefundCounts, setSdRefundCounts] = useState({ sdRefundsHod: 0, sdRefundsCeo: 0 });
+  const counts = { ...(countsData || {}), ...sdRefundCounts };
   // Badges reflect a container becoming eligible in the background (an
   // external Gate-In form submission, an FMS update) without a manual
   // refresh — see usePolling's doc comment.
@@ -119,6 +147,22 @@ export function OffLeasePage() {
       {tab === 'approval' && <ApprovalQueue />}
       {tab === 'lookup' && canAct('offleaselookup') && <ContainerLookup />}
       {stageMatch && <StagePageBase stageNumber={Number(stageMatch[1])} embedded />}
+      {/* Both mounted whenever the caller can act on them (not just the
+          active one) so BOTH tab badges stay live via onCountChange — same
+          "always know every badge regardless of which tab you're looking
+          at" behaviour the counts object already gives every other tab.
+          Hidden with CSS, not unmounted, so switching tabs doesn't restart
+          the count the moment you leave it. */}
+      {canAct('refundsApprovalHod') && (
+        <div style={{ display: tab === 'sdRefundsHod' ? 'block' : 'none' }}>
+          <SdRefundApprovalTab tab="hod" onCountChange={(n) => setSdRefundCounts((c) => ({ ...c, sdRefundsHod: n }))} />
+        </div>
+      )}
+      {canAct('refundsApprovalCeo') && (
+        <div style={{ display: tab === 'sdRefundsCeo' ? 'block' : 'none' }}>
+          <SdRefundApprovalTab tab="ceo" onCountChange={(n) => setSdRefundCounts((c) => ({ ...c, sdRefundsCeo: n }))} />
+        </div>
+      )}
     </>
   );
 }
