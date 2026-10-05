@@ -602,7 +602,7 @@ const stageCaption = (s) => {
 const OL_STAGE_LABELS = {
   1: 'Off-Lease Intimation', 2: 'Lifting / Arrival', 3: 'Inspection Checklist',
   4: 'Quotation / Order', 5: 'Final Billing', 6: 'Transportation', 7: 'Gate In',
-  8: 'Payment Status', 10: 'LR & Return Transportation'
+  8: 'Payment Status', 10: 'LR & Return Transportation', 11: 'SD Refunds'
 };
 
 /* The real home of Order No and Client Name is "New Lease" only (see LMS.js
@@ -3113,16 +3113,71 @@ function _sanitizeRichTextPayload(payload) {
 }
 
 /**
+ * Marks Stage 6 (SD Refunds, internal 11) "Submitted" for this container —
+ * explicit request 2026-10-05 ("this is not sho stage 6 this pending sho
+ * stage 6A stage"): a container with an SD Refund already raised, now
+ * awaiting HOD/CEO, was staying listed as PENDING in Stage 6's own queue the
+ * whole time (statusCol only ever went from blank to 'Completed'), so it sat
+ * in both Stage 6's list AND Stage 6A/6B's at once — confusing, and unlike
+ * every other stage->sub-stage handoff in this app (Stage 1 drops out of its
+ * own queue the moment it moves to 1A). Called from refunds.service.js's
+ * addRefundEntry right after a successful submission. Same best-effort,
+ * match-every-currently-blank-row shape as markOffLeaseSdRefundApproved
+ * below — a container can have more than one off-lease row for the same
+ * number (TRIU6681671-style reuse), and this has no row reference from the
+ * submit form to disambiguate with, only the container number text.
+ */
+export async function markOffLeaseSdRefundSubmitted(containerNo) {
+  const info = OL_STAGE_INFO[11];
+  try {
+    await withSheetLock(OL_SHEET, async () => {
+      const { rows } = await getSheetData(OL_SHEET);
+      const want = normKey(containerNo);
+      const stamp = dmyTime(new Date());
+      const updates = [];
+      const mirrorOps = [];
+      rows.forEach((row, i) => {
+        if (normKey(row[0]) !== want) return;
+        if (safeStr(row[info.statusCol]).trim() !== '') return; // already submitted or completed
+        const rn = i + 2;
+        updates.push(
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [[stamp]] },
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 1)}${rn}`, values: [['System (SD Refund Submitted)']] },
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol)}${rn}`, values: [['Submitted']] }
+        );
+        mirrorOps.push({ key: `row_${i}`, patch: { [`row.${info.statusCol - 2}`]: stamp, [`row.${info.statusCol - 1}`]: 'System (SD Refund Submitted)', [`row.${info.statusCol}`]: 'Submitted' } });
+      });
+      if (!updates.length) return;
+      await batchUpdateValues(updates);
+      for (const op of mirrorOps) {
+        await getCollection(OL_SHEET).updateOne({ key: op.key }, { $set: { ...op.patch, updatedAt: new Date() } }).catch((e) => {
+          console.error('[OL-SD-REFUND] mirror patch failed (reconcile will correct):', e?.message || e);
+        });
+      }
+    });
+  } catch (e) {
+    // Best-effort — a failure here must never fail the refund submission
+    // that triggered it; worst case the container stays listed as pending
+    // in Stage 6's own queue too until this is retried.
+    console.error('[OL-SD-REFUND] Could not mark stage 11 submitted for', containerNo, ':', e?.message || e);
+  }
+}
+
+/**
  * Marks Stage 6 (SD Refunds, internal 11) Completed for this container —
  * explicit request 2026-10-01. Called from refunds.service.js's
- * decideRefundApproval the moment a linked SD Refund entry's Accounts stage
- * is approved; nothing in the UI writes this directly (see OL_STAGE_INFO[11]'s
+ * decideRefundApproval the moment a linked SD Refund entry's CEO stage is
+ * approved; nothing in the UI writes this directly (see OL_STAGE_INFO[11]'s
  * own doc comment). Best-effort by design: a container can have more than one
  * off-lease row for the same number (TRIU6681671-style reuse — see
- * _resolveOlRow's doc comment), so this updates EVERY row currently pending
- * at stage 11 for this container rather than guessing which one the refund
- * belongs to; a refund raised against a container with no pending stage-11
- * row at all is a no-op (nothing to unblock yet).
+ * _resolveOlRow's doc comment), so this updates EVERY row currently at
+ * 'Submitted' for this container rather than guessing which one the refund
+ * belongs to; a refund approved against a container with no row sitting at
+ * 'Submitted' is a no-op.
+ *
+ * Checks `!== 'Completed'` now, not `!== ''` — markOffLeaseSdRefundSubmitted
+ * above already moved a normal row from blank to 'Submitted' long before
+ * this ever runs, so a blank-only check would make this a permanent no-op.
  */
 export async function markOffLeaseSdRefundApproved(containerNo, note) {
   const info = OL_STAGE_INFO[11];
@@ -3135,7 +3190,7 @@ export async function markOffLeaseSdRefundApproved(containerNo, note) {
       const mirrorOps = [];
       rows.forEach((row, i) => {
         if (normKey(row[0]) !== want) return;
-        if (safeStr(row[info.statusCol]).trim() !== '') return; // already done (or not reached yet is fine too — still blank)
+        if (safeStr(row[info.statusCol]).trim() === 'Completed') return; // already done
         const rn = i + 2;
         updates.push(
           { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [[stamp]] },
