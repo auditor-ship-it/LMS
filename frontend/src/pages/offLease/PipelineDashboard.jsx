@@ -8,11 +8,13 @@ import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { fetchMyTasks } from '../../services/myTask.service.js';
+import { fetchRefunds } from '../../services/refunds.service.js';
+import { usePermission } from '../../hooks/usePermission.js';
 import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
 import { toDate } from '../../utils/formatDateTime.js';
+import { Highlight } from './Highlight.jsx';
 import { OrderBookView } from './OrderBookView.jsx';
-import { ContainerDetailModal } from './ContainerDetailModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
 const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
@@ -34,12 +36,19 @@ const VIEWS = [
   { key: 'table', label: 'View 2' }
 ];
 
+/* Record fields the dashboard search looks through. */
+const SEARCH_FIELDS = [
+  'container', 'leaseId', 'clientName', 'clientCode', 'location', 'size', 'type',
+  'raisedBy', 'deployedDate', 'validUpto', 'intimationDate'
+];
+
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 /** "YYYY-MM" — sorts correctly as a plain string, which a "Month Year" label doesn't. */
 const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
 export function PipelineDashboard({ onOpenTab }) {
   const navigate = useNavigate();
+  const { canAct } = usePermission();
   const { data, loading, error, reload } = useAsync(fetchOffLeaseDashboard, []);
   // Same background-eligibility catch as StagePageBase — see usePolling's doc comment.
   usePolling(() => reload({ silent: true }));
@@ -49,10 +58,30 @@ export function PipelineDashboard({ onOpenTab }) {
      a different number than the nav item right next to it. */
   const { data: taskCounts, loading: taskCountsLoading, reload: reloadTaskCounts } = useAsync(fetchMyTasks, []);
   usePolling(() => reloadTaskCounts({ silent: true }));
+  /* Stage 6A (HOD) / Stage 6B (CEO) scorecards — explicit request 2026-10-05.
+     SD Refunds is a separate backend system entirely (own sheet, own
+     currentStage field — see refunds.service.js's own header comment), so
+     this is its own fetch, not part of kpis.byStage above. Only fetched at
+     all if the caller can act on at least one of the two, same gate the
+     cards themselves use below. */
+  const canSeeRefundApprovals = canAct('refundsApprovalHod') || canAct('refundsApprovalCeo');
+  const { data: refundsData, reload: reloadRefunds } = useAsync(
+    () => (canSeeRefundApprovals ? fetchRefunds() : Promise.resolve({ data: [] })),
+    [canSeeRefundApprovals]
+  );
+  usePolling(() => reloadRefunds({ silent: true }));
+  const refundRows = refundsData?.data || [];
+  const hodPendingCount = refundRows.filter((r) => r.currentStage === 'hod').length;
+  const ceoPendingCount = refundRows.filter((r) => r.currentStage === 'ceo').length;
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
-  // The record whose full stage history is open, or null.
-  const [openRecord, setOpenRecord] = useState(null);
+  // Opens the record's full stage history on its own page (not a modal).
+  const openRecord = (rec) => {
+    const q = new URLSearchParams({ container: rec.container });
+    if (rec.leaseId) q.set('leaseId', rec.leaseId);
+    if (rec._rowNum) q.set('row', String(rec._rowNum));
+    navigate(`${ROUTES.OFF_LEASE_RECORD}?${q}`);
+  };
   /* null = no filter; an internal stage number, 'approval' or 'done'. */
   const [stageFilter, setStageFilter] = useState(null);
   /* '' = every month; otherwise a "YYYY-MM" key (monthKey) — explicit request
@@ -108,7 +137,13 @@ export function PipelineDashboard({ onOpenTab }) {
        "1" while its own click-through showed 0 records — the one container
        behind that count was pending here too, just not as its "primary"
        stage. */
-    else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
+    /* 6A / 6B: the records whose SD Refund is waiting on HOD / CEO. That status
+       lives in the refunds sheet, not on the off-lease row, so match by
+       container number — the same match the 6A/6B chips use. */
+    else if (stageFilter === 'hod' || stageFilter === 'ceo') {
+      const waiting = new Set(refundRows.filter((r) => r.currentStage === stageFilter).map((r) => String(r.containerNo || '').trim().toUpperCase()));
+      out = out.filter((it) => waiting.has(String(it.container || '').trim().toUpperCase()));
+    } else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
 
     if (monthFilter) {
       out = out.filter((it) => {
@@ -118,11 +153,15 @@ export function PipelineDashboard({ onOpenTab }) {
     }
 
     if (!term) return out;
-    return out.filter((it) =>
-      it.container.toLowerCase().includes(term) ||
-      it.clientName.toLowerCase().includes(term) ||
-      it.leaseId.toLowerCase().includes(term));
-  }, [items, debouncedSearch, stageFilter, monthFilter]);
+    /* Every space-separated word must match somewhere in the record, in any
+       order ("draeger vasai", "hnku 6063239", "reefer dahanu"). Matches the
+       fields shown on the row, not just container / client / lease. */
+    const words = term.split(/s+/).filter(Boolean);
+    return out.filter((it) => {
+      const hay = SEARCH_FIELDS.map((k) => String(it[k] ?? '')).join(' ').toLowerCase();
+      return words.every((w) => hay.includes(w));
+    });
+  }, [items, debouncedSearch, stageFilter, monthFilter, refundRows]);
 
   /* Clicking the active card again clears it — the same control that applied
      the filter removes it, so there is no hunting for a reset. */
@@ -133,13 +172,17 @@ export function PipelineDashboard({ onOpenTab }) {
       ? 'Completed'
       : stageFilter === 'hold'
         ? 'On hold'
-        : stageFilter != null
+        : stageFilter === 'hod'
+          ? 'Stage 6A · HOD approval pending'
+          : stageFilter === 'ceo'
+            ? 'Stage 6B · CEO approval pending'
+            : stageFilter != null
           ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
           : '';
 
   return (
     <>
-      <div className={styles.kpiRow}>
+      <div className={styles.kpiPrimary}>
         {/* Fixed order per explicit request, 2026-09-04: Lease Expiry, Hold,
             Active, then the live workflow in sequence (Intimation ->
             Approval -> Transportation -> Gate In -> Inspection -> Final
@@ -160,62 +203,91 @@ export function PipelineDashboard({ onOpenTab }) {
             item goes to); Active Off-Lease keeps its own separate card. A
             plain client-side sum of the two — no backend change needed,
             both numbers are already loaded on this page. */}
-        <StatCard
+        <StatCard size="lg"
           icon="grid" label="Total · Lease Expiry + Off-Lease"
           value={(taskCounts?.expired != null && kpis.active != null) ? taskCounts.expired + kpis.active : '—'}
           loading={loading || taskCountsLoading}
           tint="neutral"
         />
-        <StatCard
+        <StatCard size="lg"
           icon="clock" label="Lease Expiry" value={taskCounts?.expired ?? '—'} loading={taskCountsLoading} tint="warn"
           footnote={taskCounts?.expired > 0 ? 'Overdue' : undefined}
           onClick={() => navigate(ROUTES.LEASE_EXPIRY)}
         />
-        <StatCard
-          icon="lock" label="Hold · Stage 1" value={kpis.holdStage1 ?? '—'} loading={loading} tint="warn"
+        <StatCard size="lg" icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} loading={loading} tint="navy" />
+      </div>
+
+      {/* One compact row for the per-stage counts; scrolls sideways rather
+          than wrapping on a narrow window. */}
+      <div className={styles.kpiStages}>
+        <StatCard size="sm"
+          icon="lock" label="Hold · Stage 1" value={kpis.holdStage1 ?? '—'} loading={loading} tint="hold"
           footnote={kpis.holdStage1 > 0 ? 'Paused' : undefined}
-          onClick={() => toggleFilter('hold')}
+          active={stageFilter === 'hold'} onClick={() => toggleFilter('hold')}
         />
-        <StatCard icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} loading={loading} tint="navy" />
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[1]} label="Stage 1 · Off-Lease Intimation" value={kpis.byStage?.[1] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 1)?.owner}
-          onClick={() => toggleFilter(1)}
+          active={stageFilter === 1} onClick={() => toggleFilter(1)}
         />
-        <StatCard
-          icon="clock" label="Stage 1A · Approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="warn"
-          footnote={kpis.pendingApproval > 0 ? 'Needs sign-off' : undefined}
-          onClick={() => toggleFilter('approval')}
+        <StatCard size="sm"
+          icon="clock" label="Stage 1A · Approval" value={kpis.pendingApproval ?? '—'} loading={loading} tint="approval"
+          footnote="Pushpalata"
+          active={stageFilter === 'approval'} onClick={() => toggleFilter('approval')}
         />
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[6]} label="Stage 2 · Transportation" value={kpis.byStage?.[6] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 6)?.owner}
-          onClick={() => toggleFilter(6)}
+          active={stageFilter === 6} onClick={() => toggleFilter(6)}
         />
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[7]} label="Stage 3 · Gate In" value={kpis.byStage?.[7] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 7)?.owner}
-          onClick={() => toggleFilter(7)}
+          active={stageFilter === 7} onClick={() => toggleFilter(7)}
         />
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[3]} label="Stage 4 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 3)?.owner}
-          onClick={() => toggleFilter(3)}
+          active={stageFilter === 3} onClick={() => toggleFilter(3)}
         />
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[5]} label="Stage 5 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 5)?.owner}
-          onClick={() => toggleFilter(5)}
+          active={stageFilter === 5} onClick={() => toggleFilter(5)}
         />
         {/* ADDED 2026-10-01 (explicit request: "add the stage 6 SD refunds")
             — internal stage 11, inserted before FMS Closed (internal 8,
             card just below, relabeled from "Stage 6" to "Stage 7" the same
             day). No footnote: no `owner` is set for this stage in stages.js
             (its status is set automatically, not by a named person). */}
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[11]} label="Stage 6 · SD Refunds" value={kpis.byStage?.[11] ?? '—'} loading={loading} tint="info"
-          onClick={() => toggleFilter(11)}
+          footnote="Christopher"
+          active={stageFilter === 11} onClick={() => toggleFilter(11)}
         />
+        {/* Stage 6A (HOD) / Stage 6B (CEO) — explicit request 2026-10-05.
+            Jumps straight to the matching Off-Lease tab (onOpenTab, same
+            mechanism the "Approve"/"Open" buttons in the table below already
+            use) rather than this dashboard's own stageFilter/table, since
+            SD Refunds records aren't part of that OL_SHEET-based table at
+            all. Each card only renders for a caller who can act on that
+            stage, same gate SdRefundApprovalTab itself falls back to a "no
+            permission" message for — hiding the card entirely here is
+            nicer than a dead-end click. */}
+        {canAct('refundsApprovalHod') && (
+          <StatCard size="sm"
+            icon="clock" label="Stage 6A · HOD Approval" value={hodPendingCount} loading={loading} tint="approval"
+            footnote="Pushpalata"
+            active={stageFilter === 'hod'} onClick={() => toggleFilter('hod')}
+          />
+        )}
+        {canAct('refundsApprovalCeo') && (
+          <StatCard size="sm"
+            icon="clock" label="Stage 6B · CEO Approval" value={ceoPendingCount} loading={loading} tint="approval"
+            footnote="Akash Sir"
+            active={stageFilter === 'ceo'} onClick={() => toggleFilter('ceo')}
+          />
+        )}
         {/* Explicit request 2026-09-29: replaces "Completed this month" —
             Stage 6 (FMS Closed, internal 8) was the one active stage with no
             card of its own on this dashboard at all; same pattern as every
@@ -227,9 +299,10 @@ export function PipelineDashboard({ onOpenTab }) {
             RELABELED 2026-10-01 "Stage 6" -> "Stage 7": SD Refunds (internal
             11, card just above) is now the display Stage 6.
             RELABELED AGAIN 2026-10-03 "FMS Closed" -> "Payment Status". */}
-        <StatCard
+        <StatCard size="sm"
           icon={STAGE_ICONS[8]} label="Stage 7 · Payment Status" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
-          onClick={() => toggleFilter(8)}
+          footnote="FMS Done"
+          active={stageFilter === 8} onClick={() => toggleFilter(8)}
         />
       </div>
 
@@ -268,13 +341,14 @@ export function PipelineDashboard({ onOpenTab }) {
                 options: monthOptions
               }]}
             />
-            <SearchBar value={search} onChange={setSearch} placeholder="Search container, client, lease ID…" />
+            <SearchBar variant="large" value={search} onChange={setSearch} placeholder="Search container, client, lease, location…" />
           </div>
           {/* An active filter has to be visible and removable here — otherwise
               a shrunken list looks like missing data. */}
           {stageFilter != null && (
-            <button type="button" className={styles.filterChip} onClick={() => setStageFilter(null)}>
-              {filterLabel}
+            <button type="button" className={styles.filterChip} onClick={() => setStageFilter(null)} title="Clear filter">
+              <span className={styles.filterKicker}>Filtered by</span>
+              <span className={styles.filterName}>{filterLabel}</span>
               <span className={styles.filterX} aria-hidden="true">×</span>
               <span className={styles.srOnly}>Clear filter</span>
             </button>
@@ -284,11 +358,13 @@ export function PipelineDashboard({ onOpenTab }) {
 
         {view === 'book' && (
           <OrderBookView
+            highlight={debouncedSearch}
             items={filtered}
             loading={loading}
             error={error}
             onRetry={reload}
             onOpenTab={onOpenTab}
+            refundRows={refundRows}
             /* Refetches the dashboard after a stage form saves, so the
                chip that just went from current to done -- and the next one
                that becomes current -- update without a manual Refresh. */
@@ -297,7 +373,7 @@ export function PipelineDashboard({ onOpenTab }) {
             /* No reload — the remark cell keeps itself up to date locally.
                Refetching all 35 records to reflect one comment is what made
                Save and Delete sit spinning. */
-            onOpenRecord={setOpenRecord}
+            onOpenRecord={openRecord}
           />
         )}
 
@@ -326,9 +402,9 @@ export function PipelineDashboard({ onOpenTab }) {
                     row. The lease is what distinguishes the records. */}
                 {filtered.map((it, i) => (
                   <tr key={`${it.leaseId || i}-${it.container}`}>
-                    <td className={styles.leaseId}>{it.leaseId || '—'}</td>
-                    <td className={styles.container}>{it.container}</td>
-                    <td>{it.clientName || '—'}</td>
+                    <td className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={debouncedSearch} /></td>
+                    <td className={styles.container}><Highlight text={it.container} query={debouncedSearch} /></td>
+                    <td><Highlight text={it.clientName || '—'} query={debouncedSearch} /></td>
                     <td><MiniPipeline item={it} /></td>
                     <td className={styles.actionCell}>
                       {it.stageClass === 'approval' ? (
@@ -349,13 +425,6 @@ export function PipelineDashboard({ onOpenTab }) {
         )}
       </Card>
 
-      {openRecord && (
-        <ContainerDetailModal
-          container={openRecord.container}
-          leaseId={openRecord.leaseId}
-          onClose={() => setOpenRecord(null)}
-        />
-      )}
     </>
   );
 }

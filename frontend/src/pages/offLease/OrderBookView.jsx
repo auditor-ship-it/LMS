@@ -5,6 +5,7 @@ import { apiErrorMessage } from '../../shared/auth/index.js';
 import { postRemark, editRemark, removeRemark, fetchRemarkThread } from '../../services/offLease.service.js';
 import { STAGES, isReadOnlyStage } from '../../constants/stages.js';
 import { usePermission } from '../../hooks/usePermission.js';
+import { Highlight } from './Highlight.jsx';
 import { StageDetailModal } from '../stages/StageDetailModal.jsx';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './OrderBookView.module.css';
@@ -33,7 +34,7 @@ import styles from './OrderBookView.module.css';
  *  the status pill beside them -- a completed or future chip is just as
  *  clickable as the current one, so any stage's record is one click away
  *  regardless of where the container actually is right now. */
-function buildChips(item) {
+function buildChips(item, refundEntry) {
   const [first, ...rest] = STAGES;
   const approval = String(item.approvalStatus || '').trim().toLowerCase();
   const stageOf = (n) => item.stages?.find((s) => s.stage === n);
@@ -60,11 +61,54 @@ function buildChips(item) {
         : item.stageClass === 'approval' ? 'current' : 'future'
   };
 
-  return [chip(first), gate, ...rest.map(chip)];
+  /* 6A/6B -- the HOD/CEO SD Refund approval gates, same shape as 1A above.
+     refundEntry comes from the separate Refunds sheet (see refunds.service.js),
+     matched to this record by container number -- it's absent entirely until
+     the SD Refund is actually filed, in which case both chips just show future. */
+  const hodStatus = String(refundEntry?.hodStatus || '').trim().toLowerCase();
+  const ceoStatus = String(refundEntry?.ceoStatus || '').trim().toLowerCase();
+  const sdHod = {
+    key: 'sdHod',
+    label: '6A',
+    title: `Stage 6A · HOD Approval — ${hodStatus || 'pending'}`,
+    tab: 'sdRefundsHod',
+    tone: hodStatus === 'approved' ? 'done'
+      : hodStatus === 'rejected' ? 'rejected'
+        : refundEntry?.currentStage === 'hod' ? 'current' : 'future'
+  };
+  const sdCeo = {
+    key: 'sdCeo',
+    label: '6B',
+    title: `Stage 6B · CEO Approval — ${ceoStatus || 'pending'}`,
+    tab: 'sdRefundsCeo',
+    tone: ceoStatus === 'approved' ? 'done'
+      : ceoStatus === 'rejected' ? 'rejected'
+        : refundEntry?.currentStage === 'ceo' ? 'current' : 'future'
+  };
+
+  const chips = [chip(first), gate];
+  for (const stage of rest) {
+    chips.push(chip(stage));
+    if (stage.number === 11) chips.push(sdHod, sdCeo);
+  }
+  return chips;
 }
 
 /** Status pill wording and tone, and which tab owns acting on it. */
-function statusOf(item) {
+function statusOf(item, refundEntry) {
+  /* The off-lease row alone cannot say whether the SD Refund has been signed
+     off — that lives in the refunds sheet. So a record the pipeline calls done
+     (or has moved on to Payment Status) while its refund still waits on HOD or
+     CEO is NOT released: say what it is actually waiting for. */
+  if (refundEntry && (item.stageClass === 'done' || item.currentStageNum === 8)) {
+    const hod = String(refundEntry.hodStatus || '').trim().toLowerCase();
+    const ceo = String(refundEntry.ceoStatus || '').trim().toLowerCase();
+    if (hod === 'rejected' || ceo === 'rejected') {
+      return { label: `SD refund rejected (${hod === 'rejected' ? 'HOD' : 'CEO'})`, tone: 'danger', tab: null };
+    }
+    if (hod !== 'approved') return { label: 'Stage 6A · HOD approval pending', tone: 'warn', tab: 'sdRefundsHod' };
+    if (ceo !== 'approved') return { label: 'Stage 6B · CEO approval pending', tone: 'warn', tab: 'sdRefundsCeo' };
+  }
   switch (item.stageClass) {
     case 'approval': return { label: 'Pending approval', tone: 'warn', tab: 'approval' };
     case 'rejected': return { label: 'Rejected', tone: 'danger', tab: null };
@@ -294,7 +338,7 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved }) {
+export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows }) {
   const { canAct } = usePermission();
   /* Which record+stage's own form is open, or null. Distinct from
      onOpenRecord (the read-only all-stage history modal) -- this is the
@@ -315,9 +359,28 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
     const canEditNow = !readOnlyType && chip.tone === 'current' && canAct(`offlease${chip.stageNumber}`);
     setStageForm({ container: containerNo, rowNum, stageNumber: chip.stageNumber, readOnly: !canEditNow, identityOnly: readOnlyType });
   };
-  const rows = useMemo(() => items.map((it) => ({
-    it, chips: buildChips(it), status: statusOf(it)
-  })), [items]);
+  /* Keyed by container number -- the only link between this (Off-Lease's own
+     OL_SHEET) record and a Refunds-sheet entry, see refunds.service.js. A
+     container can in principle carry more than one refund row; the pending
+     one (still at hod/ceo) wins over an already-settled one so the chip
+     reflects what's actually waiting on someone right now. */
+  const refundByContainer = useMemo(() => {
+    const map = new Map();
+    for (const r of refundRows || []) {
+      const key = String(r.containerNo || '').trim().toUpperCase();
+      if (!key) continue;
+      const existing = map.get(key);
+      if (!existing || existing.currentStage === 'done' || existing.currentStage === 'rejected') {
+        map.set(key, r);
+      }
+    }
+    return map;
+  }, [refundRows]);
+
+  const rows = useMemo(() => items.map((it) => {
+    const refundEntry = refundByContainer.get(String(it.container || '').trim().toUpperCase());
+    return { it, chips: buildChips(it, refundEntry), status: statusOf(it, refundEntry) };
+  }), [items, refundByContainer]);
 
   if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
@@ -346,23 +409,23 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
           }}
         >
           <div className={styles.idCol}>
-            <div className={styles.date}>{it.deployedDate || '—'}</div>
-            <div className={styles.leaseId}>{it.leaseId || '—'}</div>
+            <div className={styles.date}><Highlight text={it.deployedDate || '—'} query={highlight} /></div>
+            <div className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={highlight} /></div>
             <div className={styles.kind}>LEASE</div>
-            {it.raisedBy && <div className={styles.owner}>{it.raisedBy}</div>}
+            {it.raisedBy && <div className={styles.owner}><Highlight text={it.raisedBy} query={highlight} /></div>}
           </div>
 
           <div className={styles.mainCol}>
-            <div className={styles.client}>{it.clientName || 'Unknown client'}</div>
+            <div className={styles.client}><Highlight text={it.clientName || 'Unknown client'} query={highlight} /></div>
             {/* Spec, code and location on one line — three short values on
                 three lines left a column of white space beside them. */}
             <div className={styles.meta}>
-              <span>{[it.size, it.type].filter(Boolean).join(' ') || 'Container'}</span>
-              {it.clientCode && <span className={styles.chipCode}>{it.clientCode}</span>}
+              <span><Highlight text={[it.size, it.type].filter(Boolean).join(' ') || 'Container'} query={highlight} /></span>
+              {it.clientCode && <span className={styles.chipCode}><Highlight text={it.clientCode} query={highlight} /></span>}
               {it.location && (
                 <span className={styles.location}>
                   <Icon name="pin" className={styles.locationIcon} />
-                  {it.location}
+                  <Highlight text={it.location} query={highlight} />
                 </span>
               )}
             </div>
@@ -420,10 +483,10 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
             <div className={styles.sideLabel}>Container</div>
             <div className={styles.containerNo}>
               <Icon name="container" className={styles.containerIcon} />
-              <span>{it.container}</span>
+              <span><Highlight text={it.container} query={highlight} /></span>
             </div>
             <div className={styles.sideLabel}>Valid upto</div>
-            <div className={styles.sideValue}>{it.validUpto || '—'}</div>
+            <div className={styles.sideValue}><Highlight text={it.validUpto || '—'} query={highlight} /></div>
           </div>
         </div>
       ))}

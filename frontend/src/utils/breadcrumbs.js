@@ -17,6 +17,12 @@ function buildPathMap() {
 
 const PATH_MAP = buildPathMap();
 
+const SUBPAGE_LABELS = { record: 'Record' };
+
 export function trailFor(pathname) {
-  return PATH_MAP[pathname] || [NAV_TREE.label];
+  if (PATH_MAP[pathname]) return PATH_MAP[pathname];
+  /* A sub-page (e.g. /off-lease/record) trails off its parent's crumbs. */
+  const parent = Object.keys(PATH_MAP).filter((p) => pathname.startsWith(`${p}/`)).sort((a, b) => b.length - a.length)[0];
+  if (parent) return [...PATH_MAP[parent], SUBPAGE_LABELS[pathname.slice(parent.length + 1)] || 'Details'];
+  return [NAV_TREE.label];
 }

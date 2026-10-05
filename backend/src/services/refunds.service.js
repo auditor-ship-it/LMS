@@ -27,7 +27,7 @@ import { checkActionPermission } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { signJwt, verifyJwt } from '../utils/jwtLite.js';
 import { env } from '../config/env.js';
-import { markOffLeaseSdRefundApproved } from './offlease.service.js';
+import { markOffLeaseSdRefundApproved, markOffLeaseSdRefundSubmitted } from './offlease.service.js';
 
 const REFUNDS_SHEET = SHEETS.REFUNDS;
 
@@ -358,6 +358,14 @@ export async function addRefundEntry(payload, userEmail) {
     try {
       await _sendRefundStageEmail('pending', 'hod', row, rowNum, { reviewLink: hodLink });
     } catch (e) { console.error('[REFUND-APPROVAL-EMAIL]', e.message); }
+
+    // Off-Lease Stage 6 (SD Refunds) own queue — explicit request 2026-10-05:
+    // a container with a refund now raised shouldn't stay listed as pending
+    // in Stage 6's own queue (it belongs in Stage 6A/6B instead, same as a
+    // submitted Stage 1 record drops out of Stage 1 once it's at 1A).
+    // Best-effort inside markOffLeaseSdRefundSubmitted itself — never lets an
+    // Off-Lease write failure undo an already-saved refund submission.
+    if (containerNo) await markOffLeaseSdRefundSubmitted(containerNo);
 
     return { message: 'SAVED', entry: _mapRow(row, rowNum ?? null) };
   });

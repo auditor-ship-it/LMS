@@ -1,0 +1,95 @@
+/* Redesigned 2026-10-05 (explicit request: "add remark option at approval
+   panel. also, better the UI, so reading and approval increases - time
+   efficiency") — the no-login HOD/CEO review page a link opens straight to.
+   Three changes from the old plain-grid layout:
+     1. A hero line (container/client/lease ID) and a bold key-figures row
+        (amount/refund/due date) up top — the numbers an approver actually
+        decides on, readable in under a second instead of hunting through an
+        18-field grid.
+     2. Supporting documents collapse into a single row of link chips, and
+        any document with no URL is skipped entirely rather than showing a
+        "—" that still takes a glance to rule out.
+     3. Remarks is an always-visible textarea right above Approve/Reject,
+        not a second click into RefundApprovalModal — one screen, one pass.
+*/
+
+.hero {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.heroMain { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.heroContainer { font-size: 20px; font-weight: 800; color: var(--text); font-family: var(--f-display); }
+.heroClient { font-size: 14px; color: var(--text-2); }
+.heroLeaseId { font-size: 12px; font-weight: 700; color: var(--text-3); white-space: nowrap; }
+
+.figuresRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 18px;
+}
+@media (max-width: 640px) { .figuresRow { grid-template-columns: 1fr; } }
+.figure {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+}
+.figureLabel { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-3); }
+.figureValue { font-size: 17px; font-weight: 800; color: var(--text); font-family: var(--f-display); }
+
+.sectionLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  margin: 18px 0 8px;
+}
+
+.docsRow { display: flex; flex-wrap: wrap; gap: 8px; }
+.docChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-full);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent, #4f46e5);
+  text-decoration: none;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.docChip:hover { border-color: var(--accent, #4f46e5); background: var(--accent-soft, #eef2ff); }
+.noDocs { font-size: 12.5px; color: var(--text-3); }
+
+.priorStage {
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  margin-top: 4px;
+}
+
+.remarksField { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
+.remarksField textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.remarksField textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

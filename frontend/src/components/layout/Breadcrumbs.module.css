@@ -4,7 +4,7 @@
   flex-wrap: wrap;
   font-family: var(--f-body);
   font-size: 12.5px;
-  margin-bottom: 14px;
+  margin-bottom: 6px;
 }
 .segment { display: inline-flex; align-items: center; }
 .homeIcon { color: var(--text-3); }

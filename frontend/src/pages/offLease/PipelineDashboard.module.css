@@ -6,9 +6,34 @@
   margin-bottom: 16px;
 }
 
+/* The three headline numbers: always the top row, stretched to fill it. */
+.kpiPrimary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+}
+/* Every per-stage card in ONE row, equal widths; below ~125px a card the row
+   scrolls sideways instead of wrapping onto a second line. */
+.kpiStages {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(125px, 1fr);
+  gap: 8px;
+  /* overflow-x: auto also clips vertically, which cut off the active ring and
+     the hover lift. Padding gives them room; the negative margin cancels it so
+     the row doesn't move. */
+  padding: 6px;
+  margin: -6px -6px 10px;
+  overflow-x: auto;
+}
+@media (max-width: 760px) {
+  .kpiPrimary { grid-template-columns: minmax(0, 1fr); }
+}
+
 .toolbar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
@@ -18,30 +43,52 @@
    the Month filter isolating onto its own line above Search. */
 .searchRow {
   display: flex;
-  align-items: center;
+  /* flex-end: the Month filter carries a label above its select, so centring
+     put the search box higher than the select next to it. Bottoms line up. */
+  align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
 }
-.count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
+.count { font-size: 12px; font-weight: 700; color: var(--text-2); white-space: nowrap; line-height: 42px; }
 
 /* Active KPI filter — click to clear. */
 .filterChip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  height: 42px;
+  box-sizing: border-box;
   margin-right: auto;
-  padding: 4px 10px;
-  border: none;
+  padding: 0 8px 0 14px;
+  border: 1.5px solid var(--accent);
   border-radius: var(--r-full);
   background: var(--accent-soft);
   font-family: inherit;
-  font-size: 12px;
-  font-weight: 800;
-  color: var(--accent);
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
-.filterChip:hover { filter: brightness(0.95); }
-.filterX { font-size: 14px; line-height: 1; }
+.filterChip:hover { box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12); }
+.filterKicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.filterName { font-size: 13px; font-weight: 800; color: var(--accent); white-space: nowrap; }
+/* Round close button, so it reads as the thing to press. */
+.filterX {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-size: 15px;
+  line-height: 1;
+}
+.filterChip:hover .filterX { filter: brightness(1.15); }
 .srOnly {
   position: absolute;
   width: 1px; height: 1px;
