@@ -51,6 +51,11 @@ export const SHEETS = {
      Tracking row's own move-state columns get cleared on one. Created on
      first use by offleaseMoveHistory.service.js. */
   OFF_LEASE_MOVE_HISTORY: 'Off-Lease Move History',
+  /* Renew Approval Pending's own live-comment thread, append-only, one row
+     per remark — same pattern as OFF_LEASE_REMARKS above, kept in its own
+     sheet because it is gated by Renew & Document's own permissions, not
+     Off-Lease's. Created on first use by renewRemarks.service.js. */
+  RENEW_REMARKS: 'Renew Remarks',
 
   // Public API framework — hidden bookkeeping tabs
   API_KEYS: '__api_keys',

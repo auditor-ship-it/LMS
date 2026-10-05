@@ -1,5 +1,6 @@
 import {
-  getRenewDocumentData, completeRenewalDocStage, saveRenewalDraft, getApprovalPendingData, decideRenewalApproval, sendBackToPending
+  getRenewDocumentData, completeRenewalDocStage, saveRenewalDraft, getApprovalPendingData, decideRenewalApproval, sendBackToPending,
+  getRenewRemarkThread, addRenewRemark, updateRenewRemark, deleteRenewRemark
 } from '../api/renewDocument.api.js';
 
 export async function fetchDocumentList() {
@@ -19,4 +20,16 @@ export async function submitApprovalDecision(payload) {
 }
 export async function submitSendBackToPending(containerNo, rowNum) {
   return sendBackToPending(containerNo, rowNum);
+}
+export async function fetchRenewRemarkThread(containerNo, rowNum) {
+  return getRenewRemarkThread(containerNo, rowNum);
+}
+export async function postRenewRemark(containerNo, rowNum, html) {
+  return addRenewRemark(containerNo, rowNum, html);
+}
+export async function editRenewRemark(remarkId, html) {
+  return updateRenewRemark(remarkId, html);
+}
+export async function removeRenewRemark(remarkId) {
+  return deleteRenewRemark(remarkId);
 }

@@ -9,6 +9,7 @@ import { fetchApprovalPendingList, submitApprovalDecision } from '../../services
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { ApprovalDecisionModal } from './ApprovalDecisionModal.jsx';
+import { RenewRemarksModal } from './RenewRemarksModal.jsx';
 import styles from './RenewDocumentPage.module.css';
 
 // Same convention as RenewDocumentPage.jsx's own compact-table/detail split.
@@ -50,6 +51,10 @@ export function ApprovalPendingPage() {
   const [decisionTarget, setDecisionTarget] = useState(null); // { containerNo, rowNum, decision }
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState('');
+
+  // Remarks modal — explicit request 2026-10-05 ("click the row and open
+  // then remarks comment option"). { containerNo, rowNum } | null.
+  const [remarksTarget, setRemarksTarget] = useState(null);
 
   const openDecision = (item, decision) => {
     setDecisionError('');
@@ -100,6 +105,7 @@ export function ApprovalPendingPage() {
           onRetry={reload}
           emptyMessage="No renewals awaiting approval"
           rowKey={(r) => r.row?.[0]}
+          onRowClick={(item) => setRemarksTarget({ containerNo: item.row?.[0], rowNum: item._rowNum })}
           renderRow={(values, item) => [
             ...tableColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
             <td key="sd">{formatActionTimestamp(item.renewalSubmittedDate) || '—'}</td>,
@@ -129,6 +135,8 @@ export function ApprovalPendingPage() {
         onClose={() => setDecisionTarget(null)}
         onSubmit={handleDecisionSubmit}
       />
+
+      <RenewRemarksModal item={remarksTarget} onClose={() => setRemarksTarget(null)} />
     </>
   );
 }

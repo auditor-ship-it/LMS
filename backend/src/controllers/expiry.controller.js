@@ -1,6 +1,7 @@
 import * as expiryService from '../services/expiry.service.js';
 import { refreshSalesCrmLeadIndex } from '../services/salesCrmLeads.service.js';
 import { getCompanyContainers, createRenewalLink } from '../services/renewalHandoff.service.js';
+import * as renewRemarksService from '../services/renewRemarks.service.js';
 import { cacheRemoveByPrefix } from '../utils/memoryCache.js';
 
 /** GET /api/expiry?filter=pending|renewed|documents
@@ -156,4 +157,27 @@ export async function decideRenewalApproval(req, res) {
   res.json({
     result: await expiryService.decideRenewalApproval(containerNo, decision, remarks, req.user.email, rowNum)
   });
+}
+
+/* ---- Renew Approval Pending live remarks (explicit request 2026-10-05) ---- */
+
+export async function getRenewRemarkThread(req, res) {
+  res.json({ remarks: await renewRemarksService.getRenewRemarkThread(req.params.containerNo, req.query.rn, req.user) });
+}
+
+export async function addRenewRemark(req, res) {
+  // Permission (document/renew/renewApproval) and visibility are checked inside the service.
+  res.json(await renewRemarksService.addRenewRemark({
+    containerNo: req.params.containerNo,
+    rowNum: req.body?.rowNum,
+    html: req.body?.html
+  }, req.user.email, req.user));
+}
+
+export async function updateRenewRemark(req, res) {
+  res.json(await renewRemarksService.updateRenewRemark(req.params.remarkId, req.body?.html, req.user.email));
+}
+
+export async function deleteRenewRemark(req, res) {
+  res.json(await renewRemarksService.deleteRenewRemark(req.params.remarkId, req.user.email));
 }

@@ -49,3 +49,25 @@ export const decideRenewalApproval = ({ containerNo, decision, remarks, rowNum }
  *  doc comment on the backend. */
 export const sendBackToPending = (containerNo, rowNum) =>
   apiClient.post('/expiry/renewal/send-back-to-pending', { containerNo, rowNum }).then((r) => r.data.result);
+
+/* Renew Approval Pending's own live-comment thread — explicit request
+ * 2026-10-05, same shape as offlease.api.js's identical remark endpoints,
+ * keyed by rowNum instead of leaseId (this sheet has no lease ID column). */
+
+/** GET /api/expiry/renewal/:containerNo/remarks — full thread, newest first. */
+export const getRenewRemarkThread = (containerNo, rowNum) =>
+  apiClient
+    .get(`/expiry/renewal/${encodeURIComponent(containerNo)}/remarks`, { params: { rn: rowNum } })
+    .then((r) => r.data.remarks || []);
+
+/** POST /api/expiry/renewal/:containerNo/remarks — appends one remark. */
+export const addRenewRemark = (containerNo, rowNum, html) =>
+  apiClient.post(`/expiry/renewal/${encodeURIComponent(containerNo)}/remarks`, { rowNum, html }).then((r) => r.data.remark);
+
+/** PUT/DELETE /api/expiry/renewal/remarks/:remarkId — author (or a roles
+ *  admin) only; the server rejects anyone else. */
+export const updateRenewRemark = (remarkId, html) =>
+  apiClient.put(`/expiry/renewal/remarks/${encodeURIComponent(remarkId)}`, { html }).then((r) => r.data.remark);
+
+export const deleteRenewRemark = (remarkId) =>
+  apiClient.delete(`/expiry/renewal/remarks/${encodeURIComponent(remarkId)}`).then((r) => r.data);

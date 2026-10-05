@@ -115,6 +115,7 @@ export const MONGO_SHEET_MAPPING = {
    * the mirror because every subsequent cycle kept seeing "0 rows" and
    * refusing to touch the collection. See that guard's own doc comment. */
   [SHEETS.OFF_LEASE_REMARKS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
+  [SHEETS.RENEW_REMARKS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
   [SHEETS.OFF_LEASE_MOVE_HISTORY]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
   [SHEETS.STAGE9_MOVEMENT]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
   [SHEETS.RENEWAL_LOG]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },

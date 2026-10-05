@@ -52,4 +52,15 @@ router.post('/renewal/decide-approval', asyncHandler(expiryController.decideRene
 router.get('/renewal-companies/containers', asyncHandler(expiryController.companyContainers));
 router.post('/renewal-link', requirePermission('renew'), asyncHandler(expiryController.renewalLink));
 
+/* Renew Approval Pending's own live-comment thread, explicit request
+   2026-10-05 — same "no route-level permission gate" pattern as Off-Lease's
+   own remarks (offlease.routes.js): who may post is checked inside the
+   service (document/renew/renewApproval), and the GET's visibility is scoped
+   to the caller's own Approval Pending rows (see renewRemarks.service.js's
+   assertVisible), not a blanket route permission. */
+router.get('/renewal/:containerNo/remarks', asyncHandler(expiryController.getRenewRemarkThread));
+router.post('/renewal/:containerNo/remarks', asyncHandler(expiryController.addRenewRemark));
+router.put('/renewal/remarks/:remarkId', asyncHandler(expiryController.updateRenewRemark));
+router.delete('/renewal/remarks/:remarkId', asyncHandler(expiryController.deleteRenewRemark));
+
 export default router;
