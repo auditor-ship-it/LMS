@@ -33,7 +33,7 @@ import styles from './OrderBookView.module.css';
  *  the status pill beside them -- a completed or future chip is just as
  *  clickable as the current one, so any stage's record is one click away
  *  regardless of where the container actually is right now. */
-function buildChips(item) {
+function buildChips(item, refundEntry) {
   const [first, ...rest] = STAGES;
   const approval = String(item.approvalStatus || '').trim().toLowerCase();
   const stageOf = (n) => item.stages?.find((s) => s.stage === n);
@@ -60,7 +60,37 @@ function buildChips(item) {
         : item.stageClass === 'approval' ? 'current' : 'future'
   };
 
-  return [chip(first), gate, ...rest.map(chip)];
+  /* 6A/6B -- the HOD/CEO SD Refund approval gates, same shape as 1A above.
+     refundEntry comes from the separate Refunds sheet (see refunds.service.js),
+     matched to this record by container number -- it's absent entirely until
+     the SD Refund is actually filed, in which case both chips just show future. */
+  const hodStatus = String(refundEntry?.hodStatus || '').trim().toLowerCase();
+  const ceoStatus = String(refundEntry?.ceoStatus || '').trim().toLowerCase();
+  const sdHod = {
+    key: 'sdHod',
+    label: '6A',
+    title: `Stage 6A · HOD Approval — ${hodStatus || 'pending'}`,
+    tab: 'sdRefundsHod',
+    tone: hodStatus === 'approved' ? 'done'
+      : hodStatus === 'rejected' ? 'rejected'
+        : refundEntry?.currentStage === 'hod' ? 'current' : 'future'
+  };
+  const sdCeo = {
+    key: 'sdCeo',
+    label: '6B',
+    title: `Stage 6B · CEO Approval — ${ceoStatus || 'pending'}`,
+    tab: 'sdRefundsCeo',
+    tone: ceoStatus === 'approved' ? 'done'
+      : ceoStatus === 'rejected' ? 'rejected'
+        : refundEntry?.currentStage === 'ceo' ? 'current' : 'future'
+  };
+
+  const chips = [chip(first), gate];
+  for (const stage of rest) {
+    chips.push(chip(stage));
+    if (stage.number === 11) chips.push(sdHod, sdCeo);
+  }
+  return chips;
 }
 
 /** Status pill wording and tone, and which tab owns acting on it. */
@@ -294,7 +324,7 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved }) {
+export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows }) {
   const { canAct } = usePermission();
   /* Which record+stage's own form is open, or null. Distinct from
      onOpenRecord (the read-only all-stage history modal) -- this is the
@@ -315,9 +345,28 @@ export function OrderBookView({ items, loading, error, onRetry, onOpenTab, searc
     const canEditNow = !readOnlyType && chip.tone === 'current' && canAct(`offlease${chip.stageNumber}`);
     setStageForm({ container: containerNo, rowNum, stageNumber: chip.stageNumber, readOnly: !canEditNow, identityOnly: readOnlyType });
   };
-  const rows = useMemo(() => items.map((it) => ({
-    it, chips: buildChips(it), status: statusOf(it)
-  })), [items]);
+  /* Keyed by container number -- the only link between this (Off-Lease's own
+     OL_SHEET) record and a Refunds-sheet entry, see refunds.service.js. A
+     container can in principle carry more than one refund row; the pending
+     one (still at hod/ceo) wins over an already-settled one so the chip
+     reflects what's actually waiting on someone right now. */
+  const refundByContainer = useMemo(() => {
+    const map = new Map();
+    for (const r of refundRows || []) {
+      const key = String(r.containerNo || '').trim().toUpperCase();
+      if (!key) continue;
+      const existing = map.get(key);
+      if (!existing || existing.currentStage === 'done' || existing.currentStage === 'rejected') {
+        map.set(key, r);
+      }
+    }
+    return map;
+  }, [refundRows]);
+
+  const rows = useMemo(() => items.map((it) => {
+    const refundEntry = refundByContainer.get(String(it.container || '').trim().toUpperCase());
+    return { it, chips: buildChips(it, refundEntry), status: statusOf(it) };
+  }), [items, refundByContainer]);
 
   if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;

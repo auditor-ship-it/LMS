@@ -334,6 +334,7 @@ export function PipelineDashboard({ onOpenTab }) {
             error={error}
             onRetry={reload}
             onOpenTab={onOpenTab}
+            refundRows={refundRows}
             /* Refetches the dashboard after a stage form saves, so the
                chip that just went from current to done -- and the next one
                that becomes current -- update without a manual Refresh. */
