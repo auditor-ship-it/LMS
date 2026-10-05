@@ -98,7 +98,7 @@ export function ApprovalPendingPage() {
 
       <Card>
         <DataGrid
-          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft PO No', 'Draft Billing Cycle']}
+          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO PDF', 'Draft Billing Cycle']}
           rows={rows}
           loading={loading}
           error={error}
@@ -112,7 +112,14 @@ export function ApprovalPendingPage() {
             <td key="sb">{item.submittedBy || '—'}</td>,
             <td key="drd">{item.draftRenewedDate ? formatActionTimestamp(item.draftRenewedDate) : '—'}</td>,
             <td key="dvt">{item.draftValidTill ? formatActionTimestamp(item.draftValidTill) : '—'}</td>,
+            // The actual uploaded document from Submit — explicit request 2026-10-05
+            // ("renew pending approval not for pdf upload"): Pushpa had no way to open
+            // what was submitted before deciding, only its metadata. draftSignedCopyUrl/
+            // draftPoFileUrl already come off getExpiryDataByFilter('approval', ...),
+            // just never rendered here.
+            <td key="dsc">{renderCellValue(item.draftSignedCopyUrl)}</td>,
             <td key="dpo">{item.draftPoNo || '—'}</td>,
+            <td key="dpopdf">{renderCellValue(item.draftPoFileUrl)}</td>,
             <td key="dbc">{item.draftBillingCycle || '—'}</td>
           ]}
           renderActions={(item) => (
