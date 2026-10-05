@@ -83,6 +83,7 @@ import { sendMail } from './email.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getCollection } from './mongo.service.js';
 import { getSheetDataFromMongo, getMongoRowsWithKeys } from './mongoSheetData.service.js';
+import { cacheRemove } from '../utils/memoryCache.js';
 import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
 import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from './salePersonAccess.service.js';
@@ -2222,7 +2223,20 @@ export async function getOffLeaseData(stage, opts = {}, user) {
       const jumpLanded = jumpTarget != null && Number(stage) === jumpTarget && stage1Done;
       const bypassed = releasedByDelivery || releasedByGateForm || jumpLanded;
       const prevStatus = row[prevInfo.statusCol];
-      if (!bypassed && (!prevStatus || String(prevStatus).trim() === '')) continue;
+      /* Stage 7 (Payment Status)'s own previous stage (11, SD Refunds) needs
+         to be fully 'Completed', not merely non-blank, before a container
+         lists as pending here — explicit bug report 2026-10-05 ("why show
+         stage 7 pending 6A and 6B stage" — a container still awaiting HOD
+         was already showing in Stage 7's queue). 11 now also sits at an
+         intermediate 'Submitted' value the whole time HOD/CEO review it (see
+         markOffLeaseSdRefundSubmitted's own doc comment), which is non-blank
+         but must NOT satisfy this gate on its own — only the generic "any
+         non-blank previous status" rule every other stage uses is too loose
+         for this one specific pair. */
+      const prevSatisfied = (Number(stage) === 8 && prevNum === 11)
+        ? safeStr(prevStatus).trim() === 'Completed'
+        : !!(prevStatus && String(prevStatus).trim() !== '');
+      if (!bypassed && !prevSatisfied) continue;
 
       /* The intimation approval gate sits right after Stage 1 — normally
          only checked here when this stage directly follows Stage 1
@@ -3154,6 +3168,14 @@ export async function markOffLeaseSdRefundSubmitted(containerNo) {
           console.error('[OL-SD-REFUND] mirror patch failed (reconcile will correct):', e?.message || e);
         });
       }
+      // BUG FOUND AND FIXED 2026-10-05: this patches the mirror collection
+      // directly (not via patchMongoMirrorRow, which busts this on its own)
+      // but never invalidated getSheetDataFromMongo's own 8s cache
+      // (mongo_raw_v1:<sheet>) — a caller reading the Off-Lease list right
+      // after this (e.g. the Stage 6/Stage 7 queues) could see the pre-write
+      // snapshot for up to 8 more seconds despite the write having already
+      // succeeded. Confirmed live while testing the Stage 6/6A/6B/7 handoff.
+      cacheRemove(`mongo_raw_v1:${OL_SHEET}`);
     });
   } catch (e) {
     // Best-effort — a failure here must never fail the refund submission
@@ -3206,6 +3228,9 @@ export async function markOffLeaseSdRefundApproved(containerNo, note) {
           console.error('[OL-SD-REFUND] mirror patch failed (reconcile will correct):', e?.message || e);
         });
       }
+      // See markOffLeaseSdRefundSubmitted's identical fix above for why this
+      // is needed — same direct-mirror-patch-without-cache-bust gap.
+      cacheRemove(`mongo_raw_v1:${OL_SHEET}`);
     });
   } catch (e) {
     // Best-effort — a failure here must never fail the refund approval that
