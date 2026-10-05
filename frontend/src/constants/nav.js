@@ -40,16 +40,11 @@ export const NAV_TREE = {
     // restore it for everyone.
     // { key: 'approve', label: 'Approve Lease', path: ROUTES.APPROVE_LEASE, icon: 'check', sidebarKey: 'approve', section: 'Agreements', taskKey: 'pendingApprovals' },
     { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', sidebarKey: 'renewDocument', section: 'Agreements', taskKey: 'renewPending' },
-    // Explicit request 2026-09-29: its own sidebar page, not a tab on Renew &
-    // Document (which is how this was first built the same day) — see
-    // ApprovalPendingPage.jsx. sidebarKey added 2026-10-01 (explicit request) —
-    // real access to the Approve/Reject buttons themselves is still gated by
-    // the 'renewApproval' PERMISSION key (page renders view-only without it).
-    // Label changed to "Renew Approval Pending" 2026-09-30 — Refunds' own
-    // HOD/CEO/Accounts approval workflow (added the same day) introduced a
-    // second, unrelated "approval pending" concept in the app; the plain
-    // "Approval Pending" label became ambiguous between the two.
-    { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending' },
+    // Menu entry removed 2026-10-05 (explicit request) — the page and its
+    // route (ROUTES.APPROVAL_PENDING) still exist and keep working for the
+    // Sales OS SSO embed (SsoApprovalPendingPage.jsx, used by Pushpa Shetty
+    // for real renewal approvals); only this internal sidebar link is gone.
+    // { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
