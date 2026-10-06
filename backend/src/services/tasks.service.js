@@ -19,6 +19,7 @@ import { getApproveData } from './approve.service.js';
 import { getExpiryDataByFilter } from './expiry.service.js';
 import { getVerifyData } from './verify.service.js';
 import { getOffLeaseStageCounts, getOffLeaseData } from './offlease.service.js';
+import { getRefundStageCounts } from './refunds.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { salePersonScopeFor, scopeCacheKey } from './salePersonAccess.service.js';
 
@@ -43,6 +44,7 @@ const MY_TASK_KEY_META = {
   expired: ['Already Expired', 'expired'],
   receivables: ['Pending Receivables', 'receivablesPending'],
   renewPending: ['Renew Pending', 'renewPending'],
+  renewApprovalPending: ['Renew Approval Pending', 'renewApprovalPending'],
   /* Labels only, updated 2026-08-18 to match the live workflow order in
    * frontend/src/constants/stages.js (WORKFLOW = [1,6,7,3,5,8]) — see the
    * identical fix and full explanation in permissions.config.js's
@@ -60,7 +62,15 @@ const MY_TASK_KEY_META = {
   olStage5: ['Off-Lease Stage 6: Final Billing', 'olStage5'],
   olStage6: ['Off-Lease Stage 2: Transportation', 'olStage6'],
   olStage7: ['Off-Lease Stage 4: Gate In', 'olStage7'],
-  olStage8: ['Off-Lease Stage 7: FMS Closed', 'olStage8']
+  // RELABELED 2026-10-05 "FMS Closed" -> "Payment Status", matching the
+  // Off-Lease dashboard's own Stage 7 card (PipelineDashboard.jsx).
+  olStage8: ['Off-Lease Stage 7: Payment Status', 'olStage8'],
+  // ADDED 2026-10-05 (explicit request) — internal stage 11 (SD Refunds,
+  // display Stage 6) plus its HOD/CEO approval gates, matching the three
+  // new Off-Lease dashboard scorecards added the same week.
+  olStage11: ['Off-Lease Stage 6: SD Refunds', 'olStage11'],
+  sdRefundsHod: ['Off-Lease Stage 6A: HOD Approval', 'sdRefundsHod'],
+  sdRefundsCeo: ['Off-Lease Stage 6B: CEO Approval', 'sdRefundsCeo']
 };
 
 /**
@@ -95,8 +105,9 @@ export async function getMyTasks(user, force) {
   return cacheGetOrLoad(cacheKey, 90, async () => {
     const out = {
       pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
-      expiring7: 0, expired: 0, renewPending: 0,
+      expiring7: 0, expired: 0, renewPending: 0, renewApprovalPending: 0,
       olStage1: 0, olStage1Hold: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
+      olStage11: 0, sdRefundsHod: 0, sdRefundsCeo: 0,
       /* Which cards the caller should see, or null for "show everything" (the
        * pre-existing, still-default behaviour for anyone not in this map).
        *
@@ -131,6 +142,11 @@ export async function getMyTasks(user, force) {
        Completion"), so the Renew Pending card always matches that list. */
     try { out.renewPending = ((await getExpiryDataByFilter('documents', user)).data || []).length; } catch (e) { /* noop */ }
 
+    /* Renew Approval Pending sidebar badge — explicit request 2026-10-05.
+       Same source (filter: 'approval') the ApprovalPendingPage.jsx list
+       itself reads, so the badge always matches the page it links to. */
+    try { out.renewApprovalPending = ((await getExpiryDataByFilter('approval', user)).data || []).length; } catch (e) { /* noop */ }
+
     /* olStageN keys map 1:1 to INTERNAL stage numbers — see the mapping comment
        on MY_TASK_KEY_META above. Stages 2 and 4 are retired (no active queue,
        never in OL_ACTIVE_STAGE_NUMS) and simply stay at the 0 default above.
@@ -140,12 +156,21 @@ export async function getMyTasks(user, force) {
     try {
       const { counts: olc, approval } = await getOffLeaseStageCounts();
       out.offleaseApproval = approval ?? 0;
-      for (const n of [1, 3, 5, 6, 7, 8]) out[`olStage${n}`] = olc[n] ?? 0;
+      for (const n of [1, 3, 5, 6, 7, 8, 11]) out[`olStage${n}`] = olc[n] ?? 0;
     } catch (e) { /* noop */ }
 
     /* Stage 1's own Hold sub-queue — explicit request 2026-09-29, same
        source OffLeasePage.jsx's own Hold tab reads. */
     try { out.olStage1Hold = ((await getOffLeaseData(1, { filter: 'hold' }, user)).data || []).length; } catch (e) { /* noop */ }
+
+    /* Stage 6A/6B — SD Refunds is a separate backend system (own sheet, own
+       currentStage field, see refunds.service.js), so its own fetch rather
+       than part of getOffLeaseStageCounts above. */
+    try {
+      const { hod, ceo } = await getRefundStageCounts();
+      out.sdRefundsHod = hod;
+      out.sdRefundsCeo = ceo;
+    } catch (e) { /* noop */ }
 
     return out;
   }); // single-flight: concurrent opens in the same 90s window share one fetch

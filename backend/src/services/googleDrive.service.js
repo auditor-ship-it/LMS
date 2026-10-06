@@ -64,3 +64,23 @@ export function extractFileId(url) {
   const m = String(url).match(/[-\w]{25,}/);
   return m ? m[0] : null;
 }
+
+/** Raw bytes of a Drive file, for embedding as an inline (cid) email
+ *  attachment rather than a clickable link — see
+ *  offlease.service.js's _sendOffLeaseInspectionEmail. Returns null on any
+ *  failure (wrong permissions, deleted file, etc.) rather than throwing: a
+ *  photo that can't be fetched should fall back to a link, not break the
+ *  whole notification. */
+export async function downloadFromDrive(fileId) {
+  if (!fileId) return null;
+  try {
+    const drive = getDriveClient();
+    const res = await drive.files.get(
+      { fileId, alt: 'media', supportsAllDrives: true },
+      { responseType: 'arraybuffer' }
+    );
+    return Buffer.from(res.data);
+  } catch (e) {
+    return null;
+  }
+}

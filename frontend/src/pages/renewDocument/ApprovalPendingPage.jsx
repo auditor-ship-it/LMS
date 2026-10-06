@@ -9,6 +9,7 @@ import { fetchApprovalPendingList, submitApprovalDecision } from '../../services
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { ApprovalDecisionModal } from './ApprovalDecisionModal.jsx';
+import { RenewRemarksModal } from './RenewRemarksModal.jsx';
 import styles from './RenewDocumentPage.module.css';
 
 // Same convention as RenewDocumentPage.jsx's own compact-table/detail split.
@@ -50,6 +51,10 @@ export function ApprovalPendingPage() {
   const [decisionTarget, setDecisionTarget] = useState(null); // { containerNo, rowNum, decision }
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState('');
+
+  // Remarks modal — explicit request 2026-10-05 ("click the row and open
+  // then remarks comment option"). { containerNo, rowNum } | null.
+  const [remarksTarget, setRemarksTarget] = useState(null);
 
   const openDecision = (item, decision) => {
     setDecisionError('');
@@ -93,20 +98,28 @@ export function ApprovalPendingPage() {
 
       <Card>
         <DataGrid
-          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft PO No', 'Draft Billing Cycle']}
+          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO PDF', 'Draft Billing Cycle']}
           rows={rows}
           loading={loading}
           error={error}
           onRetry={reload}
           emptyMessage="No renewals awaiting approval"
           rowKey={(r) => r.row?.[0]}
+          onRowClick={(item) => setRemarksTarget({ containerNo: item.row?.[0], rowNum: item._rowNum })}
           renderRow={(values, item) => [
             ...tableColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
             <td key="sd">{formatActionTimestamp(item.renewalSubmittedDate) || '—'}</td>,
             <td key="sb">{item.submittedBy || '—'}</td>,
             <td key="drd">{item.draftRenewedDate ? formatActionTimestamp(item.draftRenewedDate) : '—'}</td>,
             <td key="dvt">{item.draftValidTill ? formatActionTimestamp(item.draftValidTill) : '—'}</td>,
+            // The actual uploaded document from Submit — explicit request 2026-10-05
+            // ("renew pending approval not for pdf upload"): Pushpa had no way to open
+            // what was submitted before deciding, only its metadata. draftSignedCopyUrl/
+            // draftPoFileUrl already come off getExpiryDataByFilter('approval', ...),
+            // just never rendered here.
+            <td key="dsc">{renderCellValue(item.draftSignedCopyUrl)}</td>,
             <td key="dpo">{item.draftPoNo || '—'}</td>,
+            <td key="dpopdf">{renderCellValue(item.draftPoFileUrl)}</td>,
             <td key="dbc">{item.draftBillingCycle || '—'}</td>
           ]}
           renderActions={(item) => (
@@ -129,6 +142,8 @@ export function ApprovalPendingPage() {
         onClose={() => setDecisionTarget(null)}
         onSubmit={handleDecisionSubmit}
       />
+
+      <RenewRemarksModal item={remarksTarget} onClose={() => setRemarksTarget(null)} />
     </>
   );
 }

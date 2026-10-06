@@ -1515,7 +1515,10 @@ async function _sendRenewalNotification(stamp, info) {
     </table>
   `;
 
-  await sendMail({ to: 'support@crystalgroup.in', subject, body, html });
+  // shivani.dhall@crystalgroup.in added 2026-10-06 (explicit request) — she
+  // was already notified on Reject (_sendRenewalRejectionEmail below) but not
+  // on Approve, so she only ever heard about a renewal when it went wrong.
+  await sendMail({ to: 'support@crystalgroup.in, shivani.dhall@crystalgroup.in', subject, body, html });
   console.log(`[RENEWAL-LOG-EMAIL] sent for ${info.container}`);
 }
 

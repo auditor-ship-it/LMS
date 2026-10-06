@@ -11,10 +11,11 @@ import {
 } from './LookupResult.jsx';
 import { useStageSelection, StageSelector } from './StageSelector.jsx';
 import {
-  buildHistoryRows, buildMovements, buildInvoices, buildEstimateTotals, APPROVAL_LABEL
+  buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices, buildEstimateTotals, APPROVAL_LABEL
 } from './lookupModel.js';
 import { getSdRefundsForContainer } from '../../api/stage.api.js';
 import { ApprovalPanel } from './ApprovalPanel.jsx';
+import { RefundDecisionPanel } from './RefundDecisionPanel.jsx';
 import { StageDetailModal } from '../stages/StageDetailModal.jsx';
 import { isReadOnlyStage, ALL_STAGES } from '../../constants/stages.js';
 import { usePermission } from '../../hooks/usePermission.js';
@@ -79,7 +80,7 @@ export function ContainerDetailPage({ isActive }) {
 
   /* This record's SD Refund entry (newest for the lease) — its HOD / CEO
      decisions are what Stage 6A and 6B show. */
-  const { data: refundEntries } = useAsync(
+  const { data: refundEntries, reload: reloadRefund } = useAsync(
     () => (container ? getSdRefundsForContainer(container) : Promise.resolve([])),
     [container]
   );
@@ -142,6 +143,11 @@ export function ContainerDetailPage({ isActive }) {
     : (refund.hodStatus === 'Rejected' || refund.ceoStatus === 'Rejected') ? null
       : refund.hodStatus !== 'Approved' ? '6a'
         : refund.ceoStatus !== 'Approved' ? '6b' : null;
+  // 6A / 6B open their decision panel in the same place the stage forms do.
+  const openRefund = (which) => {
+    const st = which === 'hod' ? refund?.hodStatus : refund?.ceoStatus;
+    setStageForm({ refund: which, label: which === 'hod' ? 'HOD approval' : 'CEO approval', display: which === 'hod' ? '6A' : '6B', status: st || 'Pending' });
+  };
   // The gate has no stage form; it opens the approval panel in the same place.
   const openGate = () => setStageForm({ gate: true, label: 'Intimation Approval', status: approvalLower === 'approved' ? 'Approved' : approvalLower === 'rejected' ? 'Rejected' : 'Pending approval' });
   const currentNum = (approvalCurrent || gateBlocking) ? null : stages.find((x) => !x.done)?.stage;
@@ -230,13 +236,22 @@ export function ContainerDetailPage({ isActive }) {
                 </span>
                 <span className={styles.bannerTitle}>{stageForm.label}</span>
               </div>
-              {stageForm.gate ? (
+              {stageForm.refund ? (
+                <RefundDecisionPanel
+                  which={stageForm.refund}
+                  entry={refund}
+                  canAct={canAct(stageForm.refund === 'hod' ? 'refundsApprovalHod' : 'refundsApprovalCeo')}
+                  onDone={() => { setStageForm(null); reloadRefund(); }}
+                />
+              ) : stageForm.gate ? (
                 <ApprovalPanel
                   containerNo={container}
                   rowNum={data._rowNum || row}
                   status={approvalLower}
                   date={data.approvalDate}
                   user={data.approvalUser}
+                  remark={data.approvalRemark}
+                  identity={buildIdentityRows(data).filter(([label]) => !/^approv/i.test(label))}
                   stage1Fields={stages.find((x) => x.stage === 1)?.fields}
                   canAct={canAct('offleaseapproval') && approvalLower !== 'approved' && approvalLower !== 'rejected'}
                   onDone={() => { setStageForm(null); reload(); }}
@@ -275,8 +290,8 @@ export function ContainerDetailPage({ isActive }) {
                         if (s.stage !== SD_REFUNDS_INTERNAL) return [card];
                         return [
                           card,
-                          <ApprovalCard key="6a" current={approvalCurrent === '6a'} id="stage-card-6a" label="Stage 6A" title="HOD approval" status={refund?.hodStatus} by={refund?.hodApprover} on={refund?.hodDate} remarks={refund?.hodRemarks} submitted={!!refund} />,
-                          <ApprovalCard key="6b" current={approvalCurrent === '6b'} id="stage-card-6b" label="Stage 6B" title="CEO approval" status={refund?.ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={refund?.ceoRemarks} submitted={!!refund} waiting={refund && refund.hodStatus !== 'Approved'} />
+                          <ApprovalCard key="6a" onOpen={() => openRefund('hod')} current={approvalCurrent === '6a'} id="stage-card-6a" label="Stage 6A" title="HOD approval" status={refund?.hodStatus} by={refund?.hodApprover} on={refund?.hodDate} remarks={refund?.hodRemarks} submitted={!!refund} />,
+                          <ApprovalCard key="6b" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6b'} id="stage-card-6b" label="Stage 6B" title="CEO approval" status={refund?.ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={refund?.ceoRemarks} submitted={!!refund} waiting={refund && refund.hodStatus !== 'Approved'} />
                         ];
                       })}
                       {col.key === 'intimation' && (
@@ -352,11 +367,7 @@ export function ContainerDetailPage({ isActive }) {
                     type="button"
                     title={`Stage ${label} (${who}) — ${status || 'Pending'}`}
                     className={`${styles.railDot} ${status === 'Approved' ? styles.railDone : status === 'Rejected' ? styles.railRejected : approvalCurrent === label.toLowerCase() ? styles.railCurrent : ''}`}
-                    onClick={() => {
-                      setStageForm(null);
-                      setTab('overview');
-                      setTimeout(() => document.getElementById(`stage-card-${label.toLowerCase()}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0);
-                    }}
+                    onClick={() => openRefund(label === '6A' ? 'hod' : 'ceo')}
                   >
                     {label}
                   </button>
@@ -457,11 +468,18 @@ function OverviewCard({ stage: s, isCurrent, onOpen }) {
 
 /** Stage 6A (HOD) / 6B (CEO): the approval decisions on this record's SD Refund.
  *  Read-only here — the deciding happens on the Off-Lease 6A / 6B tabs. */
-function ApprovalCard({ id, label, title, status, by, on, remarks, submitted, waiting, current }) {
+function ApprovalCard({ id, label, title, status, by, on, remarks, submitted, waiting, current, onOpen }) {
   const state = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending';
   const tone = state === 'Approved' ? styles.cDone : state === 'Rejected' ? styles.cRejected : current ? styles.cCurrent : styles.cLocked;
   return (
-    <div id={id} className={`${styles.card} ${tone}`}>
+    <div
+      id={id}
+      className={`${styles.card} ${tone} ${styles.cardLink}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+    >
       <div className={styles.cardHead}>
         <span className={styles.cardNum}>{label}</span>
         <span className={styles.cardTitle}>{title}</span>

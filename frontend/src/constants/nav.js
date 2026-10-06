@@ -44,11 +44,14 @@ export const NAV_TREE = {
     // restore it for everyone.
     // { key: 'approve', label: 'Approve Lease', path: ROUTES.APPROVE_LEASE, icon: 'check', sidebarKey: 'approve', section: 'Agreements', taskKey: 'pendingApprovals' },
     { key: 'renewDocument', label: 'Renew & Document', path: ROUTES.RENEW_DOCUMENT, icon: 'edit', sidebarKey: 'renewDocument', section: 'Agreements', taskKey: 'renewPending' },
-    // Menu entry removed 2026-10-05 (explicit request) — the page and its
-    // route (ROUTES.APPROVAL_PENDING) still exist and keep working for the
-    // Sales OS SSO embed (SsoApprovalPendingPage.jsx, used by Pushpa Shetty
-    // for real renewal approvals); only this internal sidebar link is gone.
-    // { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending' },
+    // Menu entry removed 2026-10-05, then RESTORED the same day (explicit
+    // request) — see ApprovalPendingPage.jsx / the Sales OS SSO embed
+    // (SsoApprovalPendingPage.jsx, used by Pushpa Shetty for real renewal
+    // approvals) for why the page and route never went anywhere in between.
+    // taskKey added same day (explicit request: "show count for renew
+    // approval pending") — same getMyTasks source the page's own "Approval
+    // Pending" tile reads, see tasks.service.js.
+    { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending', taskKey: 'renewApprovalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
