@@ -16,6 +16,61 @@ import styles from './RenewDocumentPage.module.css';
 // Kept out of the compact table view and shown only in the row detail panel.
 const DETAIL_ONLY_HEADERS = /^(location|size|type|city|po)$/i;
 
+const RESULT_CODE_TEXT = {
+  INVALID_STATE: 'not in the document-upload stage',
+  MISSING_PO: 'PO number/file required',
+  MISSING_AGR: 'signed agreement copy required'
+};
+
+/**
+ * Runs `fn` for each item ONE AT A TIME, in the same { status, value|reason }
+ * shape Promise.allSettled returns — a drop-in replacement for it, not a new
+ * contract describeBulkFailures has to learn.
+ *
+ * Bulk Save/Submit used to fire every container's request at once
+ * (Promise.allSettled(items.map(...))). Each one does its own LIVE Sheets
+ * read-then-write (completeDocStage/saveRenewalDraft's "re-read before a
+ * write" guard — see expiry.service.js), and firing a dozen-plus of those in
+ * the same instant is exactly the burst this project's shared Sheets quota
+ * keeps failing under (same root cause documented in
+ * mongoSheetData.service.js's own header note — "any burst of traffic...
+ * tripped the... rate limit... repeatedly"). Confirmed live 2026-10-06: a
+ * 7-of-14 Sales OS bulk Submit failed with no INVALID_STATE/MISSING_PO/
+ * MISSING_AGR reason on any of the 7 — a quota/transient-error signature, not
+ * a data problem (all 7 were still plain 'Documents Pending' rows). Running
+ * these one at a time costs a little wall-clock time on a big batch, but
+ * never exceeds the per-minute quota the way firing them all at once does.
+ */
+async function settleSequentially(items, fn) {
+  const results = [];
+  for (const item of items) {
+    try {
+      results.push({ status: 'fulfilled', value: await fn(item) });
+    } catch (e) {
+      results.push({ status: 'rejected', reason: e });
+    }
+  }
+  return results;
+}
+
+/* Bulk Save/Submit failure summary — groups containers by the actual
+   reason (server message or result code) instead of listing bare numbers. */
+function describeBulkFailures(results, items, doneVerb) {
+  const byReason = new Map();
+  results.forEach((r, i) => {
+    if (r.status !== 'rejected') return;
+    const e = r.reason;
+    const reason = RESULT_CODE_TEXT[e?.message] || apiErrorMessage(e) || 'Unknown error';
+    if (!byReason.has(reason)) byReason.set(reason, []);
+    byReason.get(reason).push(items[i].row?.[0]);
+  });
+  const failedCount = [...byReason.values()].reduce((n, list) => n + list.length, 0);
+  if (!failedCount) return '';
+  const detail = [...byReason.entries()].map(([reason, list]) => `${list.join(', ')} — ${reason}`).join(' | ');
+  const tail = failedCount === items.length ? `None were ${doneVerb}.` : `The other ${items.length - failedCount} were ${doneVerb}.`;
+  return `Failed for ${failedCount} of ${items.length}: ${detail}. ${tail}`;
+}
+
 /**
  * Renew & Document — post-renewal documentation (agreement/PO upload) for
  * containers whose lease has already been renewed. Backed by
@@ -272,7 +327,7 @@ export function RenewDocumentPage() {
         payload.poFile ? uploadStageFile(payload.poFile) : ''
       ]);
 
-      const results = await Promise.allSettled(selectedItems.map(async (it) => {
+      const results = await settleSequentially(selectedItems, async (it) => {
         const result = await submitDocumentCompletion({
           containerNo: it.row?.[0],
           renewedDate: payload.renewedDate,
@@ -289,12 +344,10 @@ export function RenewDocumentPage() {
         if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
           throw new Error(result);
         }
-      }));
-      const failed = results
-        .map((r, i) => (r.status === 'rejected' ? selectedItems[i].row?.[0] : null))
-        .filter(Boolean);
-      if (failed.length) {
-        setBulkError(`Failed for: ${failed.join(', ')}. The rest were updated.`);
+      });
+      const failureText = describeBulkFailures(results, selectedItems, 'submitted');
+      if (failureText) {
+        setBulkError(failureText);
       } else {
         setBulkOpen(false);
         setSelectedKeys(new Set());
@@ -322,7 +375,7 @@ export function RenewDocumentPage() {
         payload.poFile ? uploadStageFile(payload.poFile) : ''
       ]);
 
-      const results = await Promise.allSettled(selectedItems.map(async (it) => {
+      const results = await settleSequentially(selectedItems, async (it) => {
         const result = await saveDocumentDraft({
           containerNo: it.row?.[0],
           renewedDate: payload.renewedDate,
@@ -336,12 +389,10 @@ export function RenewDocumentPage() {
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE') throw new Error(result);
-      }));
-      const failed = results
-        .map((r, i) => (r.status === 'rejected' ? selectedItems[i].row?.[0] : null))
-        .filter(Boolean);
-      if (failed.length) {
-        setBulkError(`Failed for: ${failed.join(', ')}. The rest were saved.`);
+      });
+      const failureText = describeBulkFailures(results, selectedItems, 'saved');
+      if (failureText) {
+        setBulkError(failureText);
       } else {
         setBulkOpen(false);
         setSelectedKeys(new Set());
