@@ -895,19 +895,22 @@ const SD_REFUND_DETAIL_FIELDS = [
   ['Bill received by', 'billReceivedBy'],
   ['Invoice file', 'invoiceFileUrl'], ['PI file', 'piFileUrl'], ['Cancelled cheque', 'cancelledChequeUrl'],
   ['Client email confirmation', 'clientEmailConfirmationUrl'], ['Client ledger', 'clientLedgerUrl'], ['Other attachments', 'attachmentsUrl'],
-  ['HOD status', 'hodStatus'], ['HOD approver', 'hodApprover'], ['HOD date', 'hodDate'], ['HOD remarks', 'hodRemarks'],
-  ['CEO status', 'ceoStatus'], ['CEO approver', 'ceoApprover'], ['CEO date', 'ceoDate'], ['CEO remarks', 'ceoRemarks']
+  ['HOD status', 'hodStatus'], ['HOD approver email', 'hodApprover'], ['HOD timestamp', 'hodDate'], ['HOD remarks', 'hodRemarks'],
+  ['CEO status', 'ceoStatus'], ['CEO approver email', 'ceoApprover'], ['CEO timestamp', 'ceoDate'], ['CEO remarks', 'ceoRemarks']
 ];
 
-function SdRefundDetails({ entry }) {
-  const rows = SD_REFUND_DETAIL_FIELDS.filter(([, key]) => String(entry[key] ?? '').trim() !== '');
+/* `always`: keys shown even when blank (as a dash) — the record page's CEO
+   panel uses it so HOD's decision fields are visible before anyone has decided.
+   `hide`: keys never shown (the HOD panel leaves out HOD / CEO decision fields). */
+export function SdRefundDetails({ entry, always = [], hide = [] }) {
+  const rows = SD_REFUND_DETAIL_FIELDS.filter(([, key]) => !hide.includes(key) && (always.includes(key) || String(entry[key] ?? '').trim() !== ''));
   if (!rows.length) return null;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, textAlign: 'left', marginTop: 12 }}>
       {rows.map(([label, key]) => (
         <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>{label}</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-word' }}>{renderCellValue(entry[key])}</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-word' }}>{String(entry[key] ?? '').trim() === '' ? '—' : renderCellValue(entry[key])}</span>
         </div>
       ))}
     </div>

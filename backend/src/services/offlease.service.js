@@ -5559,8 +5559,10 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
   const apUsCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+  const apRmCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
   const approval = apCol >= 0 ? safeStr(row[apCol]).trim() : '';
   res.approvalStatus = approval;
+  res.approvalRemark = apRmCol >= 0 ? safeStr(row[apRmCol]) : '';
   res.approvalDate = apTsCol >= 0 ? formatDateVal(row[apTsCol]) : '';
   res.approvalUser = apUsCol >= 0 ? safeStr(row[apUsCol]) : '';
 
