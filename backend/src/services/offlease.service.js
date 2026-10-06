@@ -322,6 +322,50 @@ function _olInspectionEstimateTotal(row) {
   return has ? total : null;
 }
 
+/** Indian-grouped money, e.g. 1234567 -> "12,34,567" — same convention
+ *  lookupModel.js's own `money()` uses for this exact report. */
+function _olMoney(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : safeStr(v);
+}
+
+/**
+ * The "Repair Estimate Summary" breakdown — same shape and same filter as
+ * frontend/src/pages/offLease/lookupModel.js's buildEstimateTotals (every
+ * point with an ESTIMATE > 0, regardless of status, plus technician labour),
+ * so the Stage 4 submission email shows the identical summary the Off-Lease
+ * Lookup report/PDF/Excel export already build from this same row. Kept
+ * separate from _olInspectionEstimateTotal just above, which filters by FAULT
+ * STATUS instead — the two totals can legitimately differ (a stray estimate
+ * on a non-fault row, or a fault with no figure entered yet) and this
+ * function must match the on-screen report exactly, not that older total.
+ */
+function _olEstimateSummaryLines(row) {
+  const lines = [];
+  for (const [points, section] of [[OL_INSPECTION_POINTS, 'Inspection'], [OL_MACHINE_POINTS, 'Machine Check']]) {
+    for (const p of points) {
+      const amount = Number(safeStr(row[p.estimate]).replace(/,/g, '').trim());
+      if (Number.isFinite(amount) && amount > 0) {
+        lines.push({ section, item: p.item, status: safeStr(row[p.status]), remark: safeStr(row[p.remark]), amount });
+      }
+    }
+  }
+
+  const hours = safeStr(row[OL_TECHNICIAN_HOURS_COL]);
+  const techCost = Number(safeStr(row[OL_TECHNICIAN_COST_COL]).replace(/,/g, '').trim());
+  if ((Number.isFinite(techCost) && techCost > 0) || (Number(hours) > 0)) {
+    lines.push({
+      section: 'Labour',
+      item: `Technician (${hours || 0} hr @ ${_olMoney(OL_TECHNICIAN_RATE_PER_HOUR)}/hr)`,
+      status: '', remark: '',
+      amount: Number.isFinite(techCost) ? techCost : 0
+    });
+  }
+
+  if (!lines.length) return null;
+  return { lines, total: lines.reduce((sum, l) => sum + l.amount, 0) };
+}
+
 /**
  * Site Cabin fittings inventory, in printed-sheet order. `qty` is the expected
  * count per cabin size — a spec, so it lives here rather than in the sheet;
@@ -4705,6 +4749,7 @@ async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
   const technicianHours = safeStr(mergedRow[OL_TECHNICIAN_HOURS_COL]);
   const technicianCost = safeStr(mergedRow[OL_TECHNICIAN_COST_COL]);
   const estimateTotal = _olInspectionEstimateTotal(mergedRow);
+  const summary = _olEstimateSummaryLines(mergedRow);
 
   const subject = `Inspection Checklist Submitted – ${containerNo}`;
 
@@ -4715,8 +4760,37 @@ async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
     `Technician Cost: ${technicianCost || '-'}`,
     `Total Estimated Repair Cost: ${estimateTotal != null ? estimateTotal : '-'}`,
     '',
+    summary ? [
+      'Repair Estimate Summary:',
+      ...summary.lines.map((l) => `  ${l.section} — ${l.item}${l.status ? ` (${l.status})` : ''}: ₹${_olMoney(l.amount)}${l.remark ? ` — ${l.remark}` : ''}`),
+      `  Total Estimate: ₹${_olMoney(summary.total)}`
+    ].join('\n') : '',
+    '',
     'Full checklist (with photos for faulted points) is in the HTML version of this email.'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
+
+  /* Repair Estimate Summary — explicit request 2026-10-06: the SAME
+     consolidated table lookupModel.js's buildEstimateTotals builds for the
+     on-screen/PDF/Excel Off-Lease Lookup report (only chargeable lines —
+     estimate > 0 — plus technician labour, with a running total), now also
+     in this email rather than only the full point-by-point checklist below
+     it. Kept alongside the full checklist, not instead of it — the summary
+     answers "what's it going to cost", the checklist still answers "what was
+     actually inspected". */
+  const summaryHtml = summary ? `
+    <p style="font-family:Arial,sans-serif;font-weight:bold;">Repair Estimate Summary</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
+      <tr>${th('Section')}${th('Item')}${th('Condition')}${th('Remark')}${th('Amount')}</tr>
+      ${summary.lines.map((l) => `<tr>
+        ${th(l.section)}
+        ${td(l.item)}
+        ${td(l.status || '-')}
+        ${td(l.remark || '-')}
+        ${td(`₹${_olMoney(l.amount)}`)}
+      </tr>`).join('')}
+      <tr>${th('Total Estimate')}<td colspan="3"></td>${th(`₹${_olMoney(summary.total)}`)}</tr>
+    </table>
+  ` : '';
 
   const html = `
     <p>The Inspection Checklist for <strong>${containerNo}</strong> has just been submitted.</p>
@@ -4726,6 +4800,7 @@ async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
       <tr>${th('Technician Cost')}${td(technicianCost)}</tr>
       <tr>${th('Total Estimated Repair Cost')}${td(estimateTotal != null ? String(estimateTotal) : '')}</tr>
     </table>
+    ${summaryHtml}
     <p style="font-family:Arial,sans-serif;font-weight:bold;">Container Inspection Checklist</p>
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
       ${checklistHead}
