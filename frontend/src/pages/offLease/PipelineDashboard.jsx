@@ -289,6 +289,7 @@ export function PipelineDashboard({ onOpenTab }) {
         {canAct('refundsApprovalAccounts') && (
           <StatCard size="sm"
             icon="clock" label="Stage 6B · Accounts Approval" value={accountsPendingCount} loading={loading} tint="approval"
+            footnote="Shivani"
             active={stageFilter === 'accounts'} onClick={() => toggleFilter('accounts')}
           />
         )}

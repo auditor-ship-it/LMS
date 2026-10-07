@@ -13,20 +13,20 @@
   gap: 14px;
   margin-bottom: 12px;
 }
-/* Every per-stage card in ONE row, equal widths; below ~125px a card the row
-   scrolls sideways instead of wrapping onto a second line. */
+/* Every per-stage card in ONE row, genuinely — flex (not a fixed-width grid
+   column) lets each card shrink to fit the available width instead of
+   overflowing into a sideways scrollbar once there are enough of them (11,
+   with 6A/6B/6C). */
 .kpiStages {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(125px, 1fr);
-  gap: 8px;
-  /* overflow-x: auto also clips vertically, which cut off the active ring and
-     the hover lift. Padding gives them room; the negative margin cancels it so
-     the row doesn't move. */
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  /* Padding gives the active ring / hover lift room without clipping; the
+     negative margin cancels it so the row doesn't move. */
   padding: 6px;
   margin: -6px -6px 10px;
-  overflow-x: auto;
 }
+.kpiStages > * { flex: 1 1 0; min-width: 0; }
 @media (max-width: 760px) {
   .kpiPrimary { grid-template-columns: minmax(0, 1fr); }
 }
