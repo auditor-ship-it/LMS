@@ -148,7 +148,7 @@ export function ContainerDetailPage({ isActive }) {
   const REFUND_STAGE_META = {
     hod: { label: 'HOD approval', display: '6A', status: (r) => r?.hodStatus },
     accounts: { label: 'Accounts approval', display: '6B', status: (r) => r?.accountsStatus },
-    ceo: { label: 'CEO approval', display: '6C', status: (r) => r?.ceoStatus }
+    ceo: { label: 'CEO approval', display: '6C', status: (r) => (r?.ceoRequired === false ? 'Skipped' : r?.ceoStatus) }
   };
   // 6A / 6B / 6C open their decision panel in the same place the stage forms do.
   const openRefund = (which) => {
@@ -303,19 +303,24 @@ export function ContainerDetailPage({ isActive }) {
                       {colStages.flatMap((s) => {
                         const card = <OverviewCard key={s.stage} stage={s} isCurrent={s.stage === currentNum} onOpen={openStage} />;
                         if (s.stage !== SD_REFUNDS_INTERNAL) return [card];
-                        // REWORKED 2026-10-07: HOD -> Accounts -> CEO, CEO
-                        // card omitted entirely (not just shown "waiting")
-                        // once a refund exists and its ceoRequired flag is
-                        // explicitly false — same reasoning as the rail dots
-                        // and OrderBookView's chip omission.
+                        // REWORKED 2026-10-07: HOD -> Accounts -> CEO. Stage
+                        // 6C stays on the board even when this bill's amount
+                        // doesn't call for CEO — explicit request: "stage
+                        // remove mat karo, status skipped hoga" (don't remove
+                        // the stage, show it Skipped instead). Shown as
+                        // Skipped the moment ceoRequired is known false (the
+                        // amount alone decides this, before Accounts even
+                        // acts) — backend only writes the literal 'Skipped'
+                        // once Accounts approves, so this falls back to a
+                        // same-wording preview until then.
                         const ceoNotApplicable = refund && refund.ceoRequired === false;
+                        const ceoStatus = ceoNotApplicable ? 'Skipped' : refund?.ceoStatus;
+                        const ceoRemarks = ceoNotApplicable ? (refund?.ceoRemarks || 'Amount to Pay is ₹1,00,000 or below — CEO approval not required.') : refund?.ceoRemarks;
                         return [
                           card,
                           <ApprovalCard key="6a" onOpen={() => openRefund('hod')} current={approvalCurrent === '6a'} id="stage-card-6a" label="Stage 6A" title="HOD approval" status={refund?.hodStatus} by={refund?.hodApprover} on={refund?.hodDate} remarks={refund?.hodRemarks} submitted={!!refund} />,
                           <ApprovalCard key="6b" onOpen={() => openRefund('accounts')} current={approvalCurrent === '6b'} id="stage-card-6b" label="Stage 6B" title="Accounts approval" status={refund?.accountsStatus} by={refund?.accountsApprover} on={refund?.accountsDate} remarks={refund?.accountsRemarks} submitted={!!refund} waiting={refund && refund.hodStatus !== 'Approved'} />,
-                          ...(ceoNotApplicable ? [] : [
-                            <ApprovalCard key="6c" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6c'} id="stage-card-6c" label="Stage 6C" title="CEO approval" status={refund?.ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={refund?.ceoRemarks} submitted={!!refund} waiting={refund && refund.accountsStatus !== 'Approved'} />
-                          ])
+                          <ApprovalCard key="6c" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6c'} id="stage-card-6c" label="Stage 6C" title="CEO approval" status={ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={ceoRemarks} submitted={!!refund} waiting={!ceoNotApplicable && refund && refund.accountsStatus !== 'Approved'} />
                         ];
                       })}
                       {col.key === 'intimation' && (
@@ -382,19 +387,23 @@ export function ContainerDetailPage({ isActive }) {
                that Stage 6 (internal 11) raises. They are queue approvals on
                the Off-Lease page, not per-record forms, so their dots just
                bring up the SD Refunds card. Shown only to those who can act
-               on them, same as the Off-Lease tabs. 6C's dot is omitted
-               entirely once a refund exists and ceoRequired is explicitly
-               false — same reasoning as the ApprovalCard/chip omission
-               elsewhere on this page and in OrderBookView. */
+               on them, same as the Off-Lease tabs. 6C's dot always stays on
+               the rail — explicit request 2026-10-07 ("stage remove mat
+               karo"): a bill whose amount doesn't call for CEO shows 'Skipped'
+               there instead of disappearing. */
             if (s.stage === SD_REFUNDS_INTERNAL) {
-              const dotDefs = [['6A', 'hod', 'HOD', refund?.hodStatus], ['6B', 'accounts', 'Accounts', refund?.accountsStatus]];
-              if (!(refund && refund.ceoRequired === false)) dotDefs.push(['6C', 'ceo', 'CEO', refund?.ceoStatus]);
+              const ceoNotApplicable = refund && refund.ceoRequired === false;
+              const dotDefs = [
+                ['6A', 'hod', 'HOD', refund?.hodStatus],
+                ['6B', 'accounts', 'Accounts', refund?.accountsStatus],
+                ['6C', 'ceo', 'CEO', ceoNotApplicable ? 'Skipped' : refund?.ceoStatus]
+              ];
               const extra = dotDefs.map(([label, which, who, status]) => (
                   <button
                     key={label}
                     type="button"
                     title={`Stage ${label} (${who}) — ${status || 'Pending'}`}
-                    className={`${styles.railDot} ${status === 'Approved' ? styles.railDone : status === 'Rejected' ? styles.railRejected : approvalCurrent === label.toLowerCase() ? styles.railCurrent : ''}`}
+                    className={`${styles.railDot} ${status === 'Approved' || status === 'Skipped' ? styles.railDone : status === 'Rejected' ? styles.railRejected : approvalCurrent === label.toLowerCase() ? styles.railCurrent : ''}`}
                     onClick={() => openRefund(which)}
                   >
                     {label}
@@ -497,8 +506,8 @@ function OverviewCard({ stage: s, isCurrent, onOpen }) {
 /** Stage 6A (HOD) / 6B (CEO): the approval decisions on this record's SD Refund.
  *  Read-only here — the deciding happens on the Off-Lease 6A / 6B tabs. */
 function ApprovalCard({ id, label, title, status, by, on, remarks, submitted, waiting, current, onOpen }) {
-  const state = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : 'Pending';
-  const tone = state === 'Approved' ? styles.cDone : state === 'Rejected' ? styles.cRejected : current ? styles.cCurrent : styles.cLocked;
+  const state = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : status === 'Skipped' ? 'Skipped' : 'Pending';
+  const tone = state === 'Approved' || state === 'Skipped' ? styles.cDone : state === 'Rejected' ? styles.cRejected : current ? styles.cCurrent : styles.cLocked;
   return (
     <div
       id={id}
