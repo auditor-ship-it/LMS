@@ -67,11 +67,11 @@ function buildChips(item, refundEntry) {
      absent entirely until the SD Refund is actually filed, in which case all
      three chips just show future.
      REWORKED 2026-10-07: HOD -> Accounts -> CEO, CEO conditional on the
-     bill's own SD Amount to be Refunded. The 6C chip is omitted entirely
-     (not just greyed out) once a refund entry exists and its ceoRequired
-     flag is explicitly false -- CEO never becomes relevant for that bill, so
-     a permanently-future chip would be misleading. Still shown as 'future'
-     when no refund has been filed yet at all (ceoRequired unknown). */
+     bill's Amount to Pay. The 6C chip always stays -- explicit request
+     ("stage remove mat karo, status skipped hoga"): once a refund entry
+     exists and its ceoRequired flag is explicitly false, the chip shows
+     'done' tone with a Skipped title instead of disappearing. Still shown as
+     'future' when no refund has been filed yet at all (ceoRequired unknown). */
   const hodStatus = String(refundEntry?.hodStatus || '').trim().toLowerCase();
   const accountsStatus = String(refundEntry?.accountsStatus || '').trim().toLowerCase();
   const ceoStatus = String(refundEntry?.ceoStatus || '').trim().toLowerCase();
@@ -94,20 +94,21 @@ function buildChips(item, refundEntry) {
         : refundEntry?.currentStage === 'accounts' ? 'current' : 'future'
   };
   const ceoNotApplicable = refundEntry && refundEntry.ceoRequired === false;
-  const sdCeo = ceoNotApplicable ? null : {
+  const sdCeo = {
     key: 'sdCeo',
     label: '6C',
-    title: `Stage 6C · CEO Approval — ${ceoStatus || 'pending'}`,
+    title: `Stage 6C · CEO Approval — ${ceoNotApplicable ? 'skipped' : (ceoStatus || 'pending')}`,
     tab: 'sdRefundsCeo',
-    tone: ceoStatus === 'approved' ? 'done'
-      : ceoStatus === 'rejected' ? 'rejected'
-        : refundEntry?.currentStage === 'ceo' ? 'current' : 'future'
+    tone: ceoNotApplicable ? 'done'
+      : ceoStatus === 'approved' ? 'done'
+        : ceoStatus === 'rejected' ? 'rejected'
+          : refundEntry?.currentStage === 'ceo' ? 'current' : 'future'
   };
 
   const chips = [chip(first), gate];
   for (const stage of rest) {
     chips.push(chip(stage));
-    if (stage.number === 11) chips.push(sdHod, sdAccounts, ...(sdCeo ? [sdCeo] : []));
+    if (stage.number === 11) chips.push(sdHod, sdAccounts, sdCeo);
   }
   return chips;
 }
