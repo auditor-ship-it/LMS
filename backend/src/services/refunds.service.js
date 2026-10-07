@@ -181,8 +181,16 @@ function _mapRow(r, rowNum) {
   const hodStatus = safeStr(r[STAGES.hod.statusCol]);
   const ceoStatus = safeStr(r[STAGES.ceo.statusCol]);
   const accountsStatus = safeStr(r[STAGES.accounts.statusCol]);
-  const sdAmountToBeRefunded = safeStr(r[16]);
-  const ceoRequired = _isCeoRequired(sdAmountToBeRefunded);
+  /* CEO threshold reads column 8 ("Amount to Pay"), not the legacy column 16
+   * ("SD Amount to be Refunded") — that old column was retired 2026-10-01
+   * (RefundSubmitForm.jsx) when the submission form stopped collecting it;
+   * the form's "SD Amount to be Refunded *" field is actually bound to
+   * amountToPay (col 8) today, so that's the real, populated figure. Column
+   * 16 stays permanently blank on every row submitted since, which made
+   * _isCeoRequired's blank-defaults-to-required fallback silently force
+   * every bill through CEO review regardless of amount — BUG FOUND AND FIXED
+   * 2026-10-07 while verifying a live submission above the threshold. */
+  const ceoRequired = _isCeoRequired(r[8]);
 
   /* Which stage (if any) is actionable right now — the frontend uses this to
    * decide whose Approve/Reject buttons to show on a given row, alongside
@@ -216,7 +224,7 @@ function _mapRow(r, rowNum) {
     piFileUrl: safeStr(r[13]),
     department: safeStr(r[14]),
     ledgerHead: safeStr(r[15]),
-    sdAmountToBeRefunded: safeStr(r[16]),
+    sdAmountToBeRefunded: safeStr(r[8]),
     sdCalculation: safeStr(r[17]),
     cancelledChequeUrl: safeStr(r[18]),
     clientEmailConfirmationUrl: safeStr(r[19]),
@@ -450,7 +458,7 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     // bill's actual SD Amount requires it — see _isCeoRequired/STAGES' own
     // doc comment. Decided here, at decide-time, against the live row just
     // read, never against a stale/cached amount.
-    const nextStage = (stage === 'accounts' && !_isCeoRequired(row[16])) ? null : cfg.next;
+    const nextStage = (stage === 'accounts' && !_isCeoRequired(row[8])) ? null : cfg.next;
 
     const stamp = dmyTime(new Date());
     const status = decision === 'approved' ? 'Approved' : 'Rejected';
