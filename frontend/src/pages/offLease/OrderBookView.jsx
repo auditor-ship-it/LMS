@@ -61,11 +61,19 @@ function buildChips(item, refundEntry) {
         : item.stageClass === 'approval' ? 'current' : 'future'
   };
 
-  /* 6A/6B -- the HOD/CEO SD Refund approval gates, same shape as 1A above.
-     refundEntry comes from the separate Refunds sheet (see refunds.service.js),
-     matched to this record by container number -- it's absent entirely until
-     the SD Refund is actually filed, in which case both chips just show future. */
+  /* 6A/6B/6C -- the HOD/Accounts/CEO SD Refund approval gates, same shape as
+     1A above. refundEntry comes from the separate Refunds sheet (see
+     refunds.service.js), matched to this record by container number -- it's
+     absent entirely until the SD Refund is actually filed, in which case all
+     three chips just show future.
+     REWORKED 2026-10-07: HOD -> Accounts -> CEO, CEO conditional on the
+     bill's own SD Amount to be Refunded. The 6C chip is omitted entirely
+     (not just greyed out) once a refund entry exists and its ceoRequired
+     flag is explicitly false -- CEO never becomes relevant for that bill, so
+     a permanently-future chip would be misleading. Still shown as 'future'
+     when no refund has been filed yet at all (ceoRequired unknown). */
   const hodStatus = String(refundEntry?.hodStatus || '').trim().toLowerCase();
+  const accountsStatus = String(refundEntry?.accountsStatus || '').trim().toLowerCase();
   const ceoStatus = String(refundEntry?.ceoStatus || '').trim().toLowerCase();
   const sdHod = {
     key: 'sdHod',
@@ -76,10 +84,20 @@ function buildChips(item, refundEntry) {
       : hodStatus === 'rejected' ? 'rejected'
         : refundEntry?.currentStage === 'hod' ? 'current' : 'future'
   };
-  const sdCeo = {
-    key: 'sdCeo',
+  const sdAccounts = {
+    key: 'sdAccounts',
     label: '6B',
-    title: `Stage 6B · CEO Approval — ${ceoStatus || 'pending'}`,
+    title: `Stage 6B · Accounts Approval — ${accountsStatus || 'pending'}`,
+    tab: 'sdRefundsAccounts',
+    tone: accountsStatus === 'approved' ? 'done'
+      : accountsStatus === 'rejected' ? 'rejected'
+        : refundEntry?.currentStage === 'accounts' ? 'current' : 'future'
+  };
+  const ceoNotApplicable = refundEntry && refundEntry.ceoRequired === false;
+  const sdCeo = ceoNotApplicable ? null : {
+    key: 'sdCeo',
+    label: '6C',
+    title: `Stage 6C · CEO Approval — ${ceoStatus || 'pending'}`,
     tab: 'sdRefundsCeo',
     tone: ceoStatus === 'approved' ? 'done'
       : ceoStatus === 'rejected' ? 'rejected'
@@ -89,7 +107,7 @@ function buildChips(item, refundEntry) {
   const chips = [chip(first), gate];
   for (const stage of rest) {
     chips.push(chip(stage));
-    if (stage.number === 11) chips.push(sdHod, sdCeo);
+    if (stage.number === 11) chips.push(sdHod, sdAccounts, ...(sdCeo ? [sdCeo] : []));
   }
   return chips;
 }
@@ -102,12 +120,15 @@ function statusOf(item, refundEntry) {
      CEO is NOT released: say what it is actually waiting for. */
   if (refundEntry && (item.stageClass === 'done' || item.currentStageNum === 8)) {
     const hod = String(refundEntry.hodStatus || '').trim().toLowerCase();
+    const accounts = String(refundEntry.accountsStatus || '').trim().toLowerCase();
     const ceo = String(refundEntry.ceoStatus || '').trim().toLowerCase();
-    if (hod === 'rejected' || ceo === 'rejected') {
-      return { label: `SD refund rejected (${hod === 'rejected' ? 'HOD' : 'CEO'})`, tone: 'danger', tab: null };
+    if (hod === 'rejected' || accounts === 'rejected' || (refundEntry.ceoRequired && ceo === 'rejected')) {
+      const which = hod === 'rejected' ? 'HOD' : accounts === 'rejected' ? 'Accounts' : 'CEO';
+      return { label: `SD refund rejected (${which})`, tone: 'danger', tab: null };
     }
     if (hod !== 'approved') return { label: 'Stage 6A · HOD approval pending', tone: 'warn', tab: 'sdRefundsHod' };
-    if (ceo !== 'approved') return { label: 'Stage 6B · CEO approval pending', tone: 'warn', tab: 'sdRefundsCeo' };
+    if (accounts !== 'approved') return { label: 'Stage 6B · Accounts approval pending', tone: 'warn', tab: 'sdRefundsAccounts' };
+    if (refundEntry.ceoRequired && ceo !== 'approved') return { label: 'Stage 6C · CEO approval pending', tone: 'warn', tab: 'sdRefundsCeo' };
   }
   switch (item.stageClass) {
     case 'approval': return { label: 'Pending approval', tone: 'warn', tab: 'approval' };

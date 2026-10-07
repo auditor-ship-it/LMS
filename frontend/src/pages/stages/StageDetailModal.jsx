@@ -608,8 +608,12 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                           <StatusBadge status={sdRefunds[0]?.hodStatus || 'Pending'} />
                         </span>
                         <span className={styles.pipelineStep}>
+                          <span className={styles.pipelineLabel}>Accounts</span>
+                          <StatusBadge status={sdRefunds[0]?.accountsStatus || 'Pending'} />
+                        </span>
+                        <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>CEO</span>
-                          <StatusBadge status={sdRefunds[0]?.ceoStatus || 'Pending'} />
+                          <StatusBadge status={sdRefunds[0]?.ceoRequired ? (sdRefunds[0]?.ceoStatus || 'Pending') : 'Not Required'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>VR</span>
@@ -620,9 +624,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                           <StatusBadge status={data?.col_351 ? 'Completed' : 'Pending'} />
                         </span>
                       </div>
-                      {sdRefunds[0]?.ceoStatus !== 'Approved' ? (
+                      {!sdFinalApproved(sdRefunds[0]) ? (
                         <p className={styles.sectionHint}>
-                          Waiting for Stage 6 (SD Refunds) to be CEO-approved before payment can proceed — see SD Refunds Approval for full detail.
+                          Waiting for Stage 6 (SD Refunds) to clear its final required approval ({sdRefunds[0]?.ceoRequired ? 'CEO' : 'Accounts'}) before payment can proceed — see SD Refunds Approval for full detail.
                         </p>
                       ) : data?.col_348 !== 'Completed' ? (
                         <>
@@ -671,13 +675,13 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               )}
 
               {/* Stage 6 (SD Refunds, internal 11) — explicit request
-                  2026-10-01. No fields of its own (see SD_REFUNDS_STAGE's doc
-                  comment): shows the submission form (container pre-filled
-                  and locked) until something's been raised for this
-                  container, then its HOD/CEO pipeline status instead. FMS
-                  Closed (Stage 7) won't complete until this reaches
-                  CEO-approved. Accounts removed from the chain 2026-10-03
-                  (explicit request: "HOD and CEO approv only"). */}
+                  2026-10-01, reworked 2026-10-07. No fields of its own (see
+                  SD_REFUNDS_STAGE's doc comment): shows the submission form
+                  (container pre-filled and locked) until something's been
+                  raised for this container, then its HOD/Accounts/CEO
+                  pipeline status instead. FMS Closed (Stage 7) won't complete
+                  until this clears its final required approval for the
+                  bill's amount bracket — see sdFinalApproved. */}
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
                 <div className={sdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
                   {!sdRefunds ? (
@@ -696,14 +700,14 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     <>
                       <p className={styles.savedTitle}>SD Refund — {sdRefunds[0].vendorName || containerNo}</p>
                       <p className={styles.savedHint}>
-                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · CEO: {sdRefunds[0].ceoStatus || '—'}
+                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · Accounts: {sdRefunds[0].accountsStatus || 'Pending'} · CEO: {sdRefunds[0].ceoRequired ? (sdRefunds[0].ceoStatus || 'Pending') : 'Not Required'}
                       </p>
                       <p className={styles.savedHint}>
-                        {sdRefunds[0].ceoStatus === 'Approved'
-                          ? 'CEO-approved — FMS Closed (Stage 7) can now be completed.'
+                        {sdFinalApproved(sdRefunds[0])
+                          ? 'Fully approved — FMS Closed (Stage 7) can now be completed.'
                           : sdRefunds[0].currentStage === 'rejected'
                             ? 'Rejected — raise a new SD Refund for this container to proceed.'
-                            : 'Still working through HOD → CEO — see SD Refunds Approval for full detail.'}
+                            : `Still working through HOD → Accounts${sdRefunds[0].ceoRequired ? ' → CEO' : ''} — see SD Refunds Approval for full detail.`}
                       </p>
                       <SdRefundDetails entry={sdRefunds[0]} />
                     </>
@@ -876,11 +880,24 @@ const GATE_IN_STAGE = 7;
 /** SD Refunds (internally stage 11, shown as Stage 6) — explicit request
  *  2026-10-01. No form of its own either (see OL_STAGE_INFO[11]'s backend
  *  doc comment): this stage's content is the SD Refund submission form (if
- *  nothing submitted yet for this container) or its HOD/CEO pipeline status
- *  (once something has). FMS Closed (internal 8) refuses to complete until
- *  this reaches CEO-approved — Accounts removed from the chain 2026-10-03
- *  (explicit request: "HOD and CEO approv only"). */
+ *  nothing submitted yet for this container) or its HOD/Accounts/CEO
+ *  pipeline status (once something has). FMS Closed (internal 8) refuses to
+ *  complete until this reaches its FINAL required approval for the bill's
+ *  amount bracket — see sdFinalApproved below and refunds.service.js's
+ *  _isCeoRequired (REWORKED 2026-10-07: HOD -> Accounts -> CEO, CEO
+ *  conditional on the SD Amount to be Refunded). */
 const SD_REFUNDS_STAGE = 11;
+
+/** True once this refund has cleared every approval its OWN amount bracket
+ *  requires — Accounts, when CEO doesn't apply; CEO, when it does. Must be
+ *  used everywhere "is this SD Refund fully approved" is asked instead of a
+ *  bare `ceoStatus === 'Approved'` check, which would stay permanently false
+ *  (and so permanently block Stage 7) for any bill where CEO was never
+ *  required in the first place. */
+function sdFinalApproved(entry) {
+  if (!entry) return false;
+  return entry.ceoRequired ? entry.ceoStatus === 'Approved' : entry.accountsStatus === 'Approved';
+}
 
 /* What was actually submitted on the SD Refund (and who decided it), laid out
    as read-only fields. The summary line above only carried the vendor and the
@@ -896,6 +913,7 @@ const SD_REFUND_DETAIL_FIELDS = [
   ['Invoice file', 'invoiceFileUrl'], ['PI file', 'piFileUrl'], ['Cancelled cheque', 'cancelledChequeUrl'],
   ['Client email confirmation', 'clientEmailConfirmationUrl'], ['Client ledger', 'clientLedgerUrl'], ['Other attachments', 'attachmentsUrl'],
   ['HOD status', 'hodStatus'], ['HOD approver email', 'hodApprover'], ['HOD timestamp', 'hodDate'], ['HOD remarks', 'hodRemarks'],
+  ['Accounts status', 'accountsStatus'], ['Accounts approver email', 'accountsApprover'], ['Accounts timestamp', 'accountsDate'], ['Accounts remarks', 'accountsRemarks'],
   ['CEO status', 'ceoStatus'], ['CEO approver email', 'ceoApprover'], ['CEO timestamp', 'ceoDate'], ['CEO remarks', 'ceoRemarks']
 ];
 

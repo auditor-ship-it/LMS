@@ -7,10 +7,9 @@ import refundsStyles from '../refunds/RefundsPage.module.css';
 import wrapStyles from '../sso/EmbedShell.module.css';
 import styles from './RefundReviewPage.module.css';
 
-/* Accounts removed from the active chain 2026-10-03 (explicit request: "HOD
-   and CEO approv only") — ceo's next is now null, CEO is the final decision.
-   STAGE_LABELS keeps an 'accounts' entry only so an old email link naming
-   stage=accounts still resolves to a real label instead of breaking. */
+/* REWORKED 2026-10-07 ("Change Stage 6 Approval Flow"): HOD -> Accounts ->
+   CEO, CEO conditional on the bill's own SD Amount to be Refunded — see
+   refunds.service.js's STAGES/_isCeoRequired doc comments. */
 const STAGE_LABELS = { hod: 'HOD', ceo: 'CEO', accounts: 'Accounts' };
 
 /* Every supporting document this entry can carry, in the order they should
@@ -172,8 +171,9 @@ export function RefundReviewPage() {
                 <p className={styles.noDocs}>No documents attached.</p>
               )}
 
-              {/* PRIOR STAGE — HOD's own decision, for context once CEO is
-                  reviewing. */}
+              {/* PRIOR STAGE(S) — every stage before this one's own decision,
+                  for context: Accounts sees HOD's, CEO sees both HOD's and
+                  Accounts'. */}
               {stage !== 'hod' && (
                 <>
                   <p className={styles.sectionLabel}>HOD Decision</p>
@@ -182,6 +182,18 @@ export function RefundReviewPage() {
                       <div className={refundsStyles.field}><span className={refundsStyles.label}>Remarks</span><span>{entry.hodRemarks || '—'}</span></div>
                       <div className={refundsStyles.field}><span className={refundsStyles.label}>Timestamp</span><span>{entry.hodDate || '—'}</span></div>
                       <div className={refundsStyles.field}><span className={refundsStyles.label}>Approver</span><span>{entry.hodApprover || '—'}</span></div>
+                    </div>
+                  </div>
+                </>
+              )}
+              {stage === 'ceo' && (
+                <>
+                  <p className={styles.sectionLabel}>Accounts Decision</p>
+                  <div className={styles.priorStage}>
+                    <div className={refundsStyles.grid3}>
+                      <div className={refundsStyles.field}><span className={refundsStyles.label}>Remarks</span><span>{entry.accountsRemarks || '—'}</span></div>
+                      <div className={refundsStyles.field}><span className={refundsStyles.label}>Timestamp</span><span>{entry.accountsDate || '—'}</span></div>
+                      <div className={refundsStyles.field}><span className={refundsStyles.label}>Approver</span><span>{entry.accountsApprover || '—'}</span></div>
                     </div>
                   </div>
                 </>
