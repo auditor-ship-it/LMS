@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { Modal, Button, RichTextEditor, renderCellValue } from '../../components/ui/index.js';
+import { useState } from 'react';
+import { Modal, Button, renderCellValue } from '../../components/ui/index.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchRenewRemarkThread, postRenewRemark, editRenewRemark, removeRenewRemark } from '../../services/renewDocument.service.js';
+import { submitApprovalDecision } from '../../services/renewDocument.service.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './RenewRemarksModal.module.css';
 
@@ -21,34 +21,43 @@ const EXTRA_FIELDS = [
 ];
 
 /**
- * Renew Approval Pending's row detail + comment thread — explicit request
+ * Renew Approval Pending's row detail + decision — explicit request
  * 2026-10-05 ("click the row and open then remarks comment option"), widened
- * 2026-10-07 ("click the row open and show all data"): the table needs
- * horizontal scrolling to see every column, so this shows the full record
- * vertically first, remarks below it, both in one click.
- *
- * Approve/Reject were briefly added here the same day, then explicitly asked
- * to be removed again ("remove this approval and reject upar remarks comment
- * box") — deciding stays on the table's own row buttons only; this modal is
- * read-only (the record) plus the comment thread.
+ * 2026-10-07 ("click the row open and show all data") to show the full
+ * record, then REWORKED the same day ("remove this and add approval reject
+ * and remaks type option"): the open-ended comment thread (post/edit/delete,
+ * kept indefinitely) is gone, replaced by a single inline decision — type a
+ * remark, click Approve or Reject, it submits immediately right here, same
+ * backend call (submitApprovalDecision) and same remark field the table's
+ * own row buttons' ApprovalDecisionModal uses, just with no second popup.
  *
  * `target` is { item, headers, colIdx } (headers/colIdx = the page's own
  * visibleColIdx — every rate/amount-filtered column, which is MORE than the
  * compact table's own further-trimmed tableColIdx) — null closes the modal
  * (Modal itself unmounts its content then, so state resets for free on the
  * next open via the key prop below).
+ *
+ * `canApprove`/`onDecided` come from ApprovalPendingPage.jsx — the same
+ * `canApprove` (renewApproval permission) gate the table's Approve/Reject
+ * buttons use; onDecided reloads the list and closes this modal on success.
  */
-export function RenewRemarksModal({ item: target, onClose }) {
+export function RenewRemarksModal({ item: target, onClose, canApprove, onDecided }) {
   const containerNo = target?.item?.row?.[0];
   const rowNum = target?.item?._rowNum;
   return (
-    <Modal open={!!target} onClose={onClose} title={target ? `${containerNo} — Details & Remarks` : ''} width="640px">
-      {target && <ModalBody key={`${containerNo}::${rowNum}`} target={target} containerNo={containerNo} rowNum={rowNum} />}
+    <Modal open={!!target} onClose={onClose} title={target ? `${containerNo} — Details` : ''} width="640px">
+      {target && (
+        <ModalBody
+          key={`${containerNo}::${rowNum}`}
+          target={target} containerNo={containerNo} rowNum={rowNum}
+          canApprove={canApprove} onDecided={onDecided}
+        />
+      )}
     </Modal>
   );
 }
 
-function ModalBody({ target, containerNo, rowNum }) {
+function ModalBody({ target, containerNo, rowNum, canApprove, onDecided }) {
   const { item, headers, colIdx } = target;
 
   return (
@@ -79,118 +88,54 @@ function ModalBody({ target, containerNo, rowNum }) {
         })}
       </div>
 
-      <RemarksSection containerNo={containerNo} rowNum={rowNum} />
+      {canApprove ? (
+        <DecisionSection containerNo={containerNo} rowNum={rowNum} onDecided={onDecided} />
+      ) : (
+        <p className={styles.meta}>View only — you do not have Renew Approval permission.</p>
+      )}
     </div>
   );
 }
 
-function RemarksSection({ containerNo, rowNum }) {
-  const [thread, setThread] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+function DecisionSection({ containerNo, rowNum, onDecided }) {
+  const [remarks, setRemarks] = useState('');
+  // 'approved' | 'rejected' while that decision's own request is in flight —
+  // also disables the OTHER button, so one click can't fire both decisions.
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState('');
 
-  const [html, setHtml] = useState('');
-  const [editingId, setEditingId] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [formError, setFormError] = useState('');
-
-  const load = async () => {
-    setLoading(true);
-    setLoadError('');
+  const decide = async (decision) => {
+    setError('');
+    setBusy(decision);
     try {
-      setThread(await fetchRenewRemarkThread(containerNo, rowNum));
+      const result = await submitApprovalDecision({ containerNo, decision, remarks, rowNum });
+      if (result === 'INVALID_STATE') setError('Already decided by someone else.');
+      else onDecided();
     } catch (e) {
-      setLoadError(apiErrorMessage(e));
+      setError(apiErrorMessage(e));
     } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const beginEdit = (r) => {
-    setEditingId(r.id);
-    setHtml(r.html);
-    setFormError('');
-  };
-  const cancelEdit = () => {
-    setEditingId(null);
-    setHtml('');
-    setFormError('');
-  };
-
-  const save = async () => {
-    setFormError('');
-    setBusy(true);
-    try {
-      if (editingId) await editRenewRemark(editingId, html);
-      else await postRenewRemark(containerNo, rowNum, html);
-      setHtml('');
-      setEditingId(null);
-      await load();
-    } catch (e) {
-      setFormError(apiErrorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async (r) => {
-    setLoadError('');
-    setBusy(true);
-    try {
-      await removeRenewRemark(r.id);
-      setThread((cur) => (cur || []).filter((x) => x.id !== r.id));
-    } catch (e) {
-      setLoadError(apiErrorMessage(e));
-    } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   return (
     <div className={styles.remarksSection}>
-      <p className={styles.sectionTitle}>Remarks</p>
-      <div className={styles.thread}>
-        {loading && <p className={styles.meta}>Loading…</p>}
-        {loadError && <p className={styles.error}>{loadError}</p>}
-        {!loading && !loadError && thread && thread.length === 0 && (
-          <p className={styles.meta}>No remarks yet — be the first to add one.</p>
-        )}
-        {thread?.map((r) => (
-          <div className={styles.entry} key={r.id}>
-            <div className={styles.entryBody} dangerouslySetInnerHTML={{ __html: r.html }} />
-            <div className={styles.entryFoot}>
-              <span className={styles.meta}>
-                {[formatActionTimestamp(r.timestamp), r.enteredBy].filter(Boolean).join(' · ')}
-                {r.editedOn && ' · edited'}
-              </span>
-              {/* Always offered; the server rejects anyone who is not the
-                  author (or a roles admin), so the UI does not need to know
-                  who may act — and cannot get it wrong. */}
-              <span className={styles.entryActions}>
-                <button type="button" className={styles.linkAction} onClick={() => beginEdit(r)} disabled={busy}>Edit</button>
-                <button type="button" className={`${styles.linkAction} ${styles.danger}`} onClick={() => remove(r)} disabled={busy}>Delete</button>
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className={styles.composer}>
-        <RichTextEditor
-          value={html}
-          onChange={setHtml}
-          placeholder={editingId ? 'Edit this remark…' : 'Add a remark…'}
-          disabled={busy}
+      <p className={styles.sectionTitle}>Decision</p>
+      <label className={styles.field}>
+        <span className={styles.detailLabel}>Remarks (required to reject)</span>
+        <textarea
+          className={styles.textarea}
+          value={remarks}
+          onChange={(e) => setRemarks(e.target.value)}
+          rows={4}
+          disabled={!!busy}
+          placeholder="Add a remark…"
         />
-        {formError && <p className={styles.error}>{formError}</p>}
-        <div className={styles.composerActions}>
-          {editingId && (
-            <Button type="button" variant="secondary" size="sm" onClick={cancelEdit} disabled={busy}>Cancel edit</Button>
-          )}
-          <Button type="button" size="sm" loading={busy} onClick={save}>{editingId ? 'Save edit' : 'Post remark'}</Button>
-        </div>
+      </label>
+      {error && <p className={styles.error}>{error}</p>}
+      <div className={styles.composerActions}>
+        <Button size="sm" variant="primary" loading={busy === 'approved'} disabled={!!busy} onClick={() => decide('approved')}>Approve</Button>
+        <Button size="sm" variant="danger" loading={busy === 'rejected'} disabled={!!busy} onClick={() => decide('rejected')}>Reject</Button>
       </div>
     </div>
   );

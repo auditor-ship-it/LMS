@@ -145,7 +145,16 @@ export function ApprovalPendingPage() {
         onSubmit={handleDecisionSubmit}
       />
 
-      <RenewRemarksModal item={remarksTarget} onClose={() => setRemarksTarget(null)} />
+      <RenewRemarksModal
+        item={remarksTarget}
+        onClose={() => setRemarksTarget(null)}
+        canApprove={canApprove}
+        onDecided={async () => {
+          setRemarksTarget(null);
+          await reload();
+          invalidate('deployed-sheet');
+        }}
+      />
     </>
   );
 }
