@@ -52,8 +52,10 @@ export function ApprovalPendingPage() {
   const [decisionBusy, setDecisionBusy] = useState(false);
   const [decisionError, setDecisionError] = useState('');
 
-  // Remarks modal — explicit request 2026-10-05 ("click the row and open
-  // then remarks comment option"). { containerNo, rowNum } | null.
+  // Row-detail + remarks modal — explicit request 2026-10-05 ("click the row
+  // and open then remarks comment option"), widened 2026-10-07 ("click the
+  // row open and show all data") to also show the full record, not just the
+  // comment thread. { item, headers, colIdx } | null.
   const [remarksTarget, setRemarksTarget] = useState(null);
 
   const openDecision = (item, decision) => {
@@ -105,7 +107,7 @@ export function ApprovalPendingPage() {
           onRetry={reload}
           emptyMessage="No renewals awaiting approval"
           rowKey={(r) => r.row?.[0]}
-          onRowClick={(item) => setRemarksTarget({ containerNo: item.row?.[0], rowNum: item._rowNum })}
+          onRowClick={(item) => setRemarksTarget({ item, headers, colIdx: visibleColIdx })}
           renderRow={(values, item) => [
             ...tableColIdx.map((ci) => <td key={ci}>{renderCellValue(values[ci])}</td>),
             <td key="sd">{formatActionTimestamp(item.renewalSubmittedDate) || '—'}</td>,

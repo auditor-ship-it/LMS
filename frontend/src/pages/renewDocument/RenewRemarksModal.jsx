@@ -1,30 +1,77 @@
 import { useEffect, useState } from 'react';
-import { Modal, Button, RichTextEditor } from '../../components/ui/index.js';
+import { Modal, Button, RichTextEditor, renderCellValue } from '../../components/ui/index.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchRenewRemarkThread, postRenewRemark, editRenewRemark, removeRenewRemark } from '../../services/renewDocument.service.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './RenewRemarksModal.module.css';
 
+/* The submission/draft fields ApprovalPendingPage.jsx's own table appends
+   after the raw sheet columns — not part of `headers`/`row` (they're
+   computed per-item in expiry.service.js), so listed explicitly here, same
+   order as that table reads left to right. */
+const EXTRA_FIELDS = [
+  ['Submitted Date', (it) => formatActionTimestamp(it.renewalSubmittedDate)],
+  ['Submitted By', (it) => it.submittedBy],
+  ['Draft Renewed Date', (it) => it.draftRenewedDate && formatActionTimestamp(it.draftRenewedDate)],
+  ['Draft Valid Till', (it) => it.draftValidTill && formatActionTimestamp(it.draftValidTill)],
+  ['Draft Signed Copy', (it) => it.draftSignedCopyUrl],
+  ['Draft PO No', (it) => it.draftPoNo],
+  ['Draft PO PDF', (it) => it.draftPoFileUrl],
+  ['Draft Billing Cycle', (it) => it.draftBillingCycle]
+];
+
 /**
- * Renew Approval Pending's own comment thread — explicit request 2026-10-05
- * ("click the row and open then remarks comment option"). Same post/edit/
- * delete shape as Off-Lease's dashboard remarks (OrderBookView.jsx's
- * RemarkCell), as a modal rather than an inline cell since this page is a
- * plain DataGrid, not a record-per-card layout.
+ * Renew Approval Pending's row detail + comment thread — explicit request
+ * 2026-10-05 ("click the row and open then remarks comment option"), widened
+ * 2026-10-07 ("click the row open and show all data"): the table needs
+ * horizontal scrolling to see every column, so this shows the full record
+ * vertically first, remarks below it, both in one click.
  *
- * `item` is { containerNo, rowNum } — null closes the modal (Modal itself
- * unmounts its content then, so the thread/editor state resets for free on
- * the next open via the key prop below).
+ * `target` is { item, headers, colIdx } (headers/colIdx = the page's own
+ * visibleColIdx — every rate/amount-filtered column, which is MORE than the
+ * compact table's own further-trimmed tableColIdx) — null closes the modal
+ * (Modal itself unmounts its content then, so state resets for free on the
+ * next open via the key prop below).
  */
-export function RenewRemarksModal({ item, onClose }) {
+export function RenewRemarksModal({ item: target, onClose }) {
+  const containerNo = target?.item?.row?.[0];
+  const rowNum = target?.item?._rowNum;
   return (
-    <Modal open={!!item} onClose={onClose} title={item ? `Remarks — ${item.containerNo}` : ''} width="560px">
-      {item && <RemarksBody key={`${item.containerNo}::${item.rowNum}`} item={item} />}
+    <Modal open={!!target} onClose={onClose} title={target ? `${containerNo} — Details & Remarks` : ''} width="640px">
+      {target && <ModalBody key={`${containerNo}::${rowNum}`} target={target} containerNo={containerNo} rowNum={rowNum} />}
     </Modal>
   );
 }
 
-function RemarksBody({ item }) {
+function ModalBody({ target, containerNo, rowNum }) {
+  const { item, headers, colIdx } = target;
+
+  return (
+    <div className={styles.wrap}>
+      <div className={styles.detail}>
+        {colIdx.map((ci) => (
+          <div className={styles.detailRow} key={ci}>
+            <span className={styles.detailLabel}>{headers[ci]}</span>
+            <span className={styles.detailValue}>{renderCellValue(item.row?.[ci])}</span>
+          </div>
+        ))}
+        {EXTRA_FIELDS.map(([label, get]) => {
+          const val = get(item);
+          return (
+            <div className={styles.detailRow} key={label}>
+              <span className={styles.detailLabel}>{label}</span>
+              <span className={styles.detailValue}>{renderCellValue(val)}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <RemarksSection containerNo={containerNo} rowNum={rowNum} />
+    </div>
+  );
+}
+
+function RemarksSection({ containerNo, rowNum }) {
   const [thread, setThread] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -38,7 +85,7 @@ function RemarksBody({ item }) {
     setLoading(true);
     setLoadError('');
     try {
-      setThread(await fetchRenewRemarkThread(item.containerNo, item.rowNum));
+      setThread(await fetchRenewRemarkThread(containerNo, rowNum));
     } catch (e) {
       setLoadError(apiErrorMessage(e));
     } finally {
@@ -64,7 +111,7 @@ function RemarksBody({ item }) {
     setBusy(true);
     try {
       if (editingId) await editRenewRemark(editingId, html);
-      else await postRenewRemark(item.containerNo, item.rowNum, html);
+      else await postRenewRemark(containerNo, rowNum, html);
       setHtml('');
       setEditingId(null);
       await load();
@@ -89,7 +136,8 @@ function RemarksBody({ item }) {
   };
 
   return (
-    <div className={styles.wrap}>
+    <div className={styles.remarksSection}>
+      <p className={styles.sectionTitle}>Remarks</p>
       <div className={styles.thread}>
         {loading && <p className={styles.meta}>Loading…</p>}
         {loadError && <p className={styles.error}>{loadError}</p>}
