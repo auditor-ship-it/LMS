@@ -35,6 +35,13 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
   const status = entry[statusField] || 'Pending';
   const priorStages = PRIOR_STAGE_FOR[which] || [];
   const priorKeys = priorStages.flatMap((s) => [`${s}Status`, `${s}Approver`, `${s}Date`, `${s}Remarks`]);
+  // This stage's OWN decision fields (status/approver/timestamp/remarks) join
+  // priorKeys once it's actually been decided — while still Pending there's
+  // nothing to show (the banner already says "Pending"), but once Approved/
+  // Rejected/Skipped, the approver/timestamp/remarks are real audit info the
+  // viewer needs, same as any prior stage's.
+  const ownDecisionKeys = status !== 'Pending' ? [`${which}Status`, `${which}Approver`, `${which}Date`, `${which}Remarks`] : [];
+  const alwaysKeys = [...priorKeys, ...ownDecisionKeys];
   const ownKeys = ['hodStatus', 'hodApprover', 'hodDate', 'hodRemarks', 'accountsStatus', 'accountsApprover', 'accountsDate', 'accountsRemarks', 'ceoStatus', 'ceoApprover', 'ceoDate', 'ceoRemarks'];
 
   /* Decides straight from the buttons — the remarks box is right here, so there
@@ -72,10 +79,11 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
         entry={entry}
         /* Every PRIOR stage's decision (status, approver, timestamp, remarks)
            is shown so whoever's turn it is now has that context — Accounts
-           sees HOD's, CEO sees both HOD's and Accounts' — never this stage's
-           own (or a LATER stage's) decision fields, which don't exist yet. */
-        always={priorKeys}
-        hide={ownKeys.filter((k) => !priorKeys.includes(k))}
+           sees HOD's, CEO sees both HOD's and Accounts'. This stage's own
+           decision fields join them once decided (see ownDecisionKeys above);
+           a LATER stage's fields never show — they don't exist yet. */
+        always={alwaysKeys}
+        hide={ownKeys.filter((k) => !alwaysKeys.includes(k))}
       />
 
       {myTurn && canAct && (
