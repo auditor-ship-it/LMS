@@ -27,29 +27,28 @@ const EXTRA_FIELDS = [
  * horizontal scrolling to see every column, so this shows the full record
  * vertically first, remarks below it, both in one click.
  *
+ * Approve/Reject were briefly added here the same day, then explicitly asked
+ * to be removed again ("remove this approval and reject upar remarks comment
+ * box") — deciding stays on the table's own row buttons only; this modal is
+ * read-only (the record) plus the comment thread.
+ *
  * `target` is { item, headers, colIdx } (headers/colIdx = the page's own
  * visibleColIdx — every rate/amount-filtered column, which is MORE than the
  * compact table's own further-trimmed tableColIdx) — null closes the modal
  * (Modal itself unmounts its content then, so state resets for free on the
  * next open via the key prop below).
  */
-export function RenewRemarksModal({ item: target, onClose, canApprove, onDecide }) {
+export function RenewRemarksModal({ item: target, onClose }) {
   const containerNo = target?.item?.row?.[0];
   const rowNum = target?.item?._rowNum;
   return (
     <Modal open={!!target} onClose={onClose} title={target ? `${containerNo} — Details & Remarks` : ''} width="640px">
-      {target && (
-        <ModalBody
-          key={`${containerNo}::${rowNum}`}
-          target={target} containerNo={containerNo} rowNum={rowNum}
-          canApprove={canApprove} onDecide={onDecide}
-        />
-      )}
+      {target && <ModalBody key={`${containerNo}::${rowNum}`} target={target} containerNo={containerNo} rowNum={rowNum} />}
     </Modal>
   );
 }
 
-function ModalBody({ target, containerNo, rowNum, canApprove, onDecide }) {
+function ModalBody({ target, containerNo, rowNum }) {
   const { item, headers, colIdx } = target;
 
   return (
@@ -79,24 +78,6 @@ function ModalBody({ target, containerNo, rowNum, canApprove, onDecide }) {
           );
         })}
       </div>
-
-      {/* Decide right from here — explicit request 2026-10-07 ("approval and
-          reject and remarks option pls"), with the same consequence note
-          ApprovalDecisionModal itself shows once opened: Approve applies the
-          Renew Update fields above onto the real record, Reject leaves the
-          record untouched and sends it back for correction. Opens that same
-          modal (via ApprovalPendingPage.jsx's openDecision) — just reachable
-          without closing this one first. Hidden entirely for a view-only
-          caller, same gate the table's own row buttons use. */}
-      {canApprove && (
-        <div className={styles.decideBlock}>
-          <p className={styles.meta}>Approve applies the Renew Update above to this record. Reject does not update it — sent back for correction.</p>
-          <div className={styles.decideRow}>
-            <Button size="sm" variant="primary" onClick={() => onDecide(item, 'approved')}>Approve</Button>
-            <Button size="sm" variant="danger" onClick={() => onDecide(item, 'rejected')}>Reject</Button>
-          </div>
-        </div>
-      )}
 
       <RemarksSection containerNo={containerNo} rowNum={rowNum} />
     </div>
