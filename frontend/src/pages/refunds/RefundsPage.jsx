@@ -8,8 +8,8 @@ import styles from './RefundsPage.module.css';
 function StageBadge({ status }) {
   const s = (status || '').trim();
   const cls = s === 'Approved' ? styles.stageApproved : s === 'Rejected' ? styles.stageRejected : s === 'Pending' ? styles.stagePending : styles.stageDone;
-  // "Not Required" (explicit request 2026-10-07) — CEO on a bill whose
-  // amount doesn't call for it, same neutral tone as the "—" blank state.
+  // "Skipped" (explicit request 2026-10-07) — CEO on a bill whose amount
+  // doesn't call for it, same neutral tone as the "—" blank state.
   return <span className={`${styles.stageBadge} ${cls}`}>{s || '—'}</span>;
 }
 
@@ -42,9 +42,9 @@ const TABLE_HEADERS = [
   'Quarterly Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded',
   // REWORKED 2026-10-07 ("Change Stage 6 Approval Flow"): HOD -> Accounts ->
-  // CEO, CEO conditional on the SD Amount to be Refunded (see
-  // refunds.service.js's STAGES/_isCeoRequired) — the badge below shows
-  // "Not Required" for CEO on a bill whose amount doesn't call for it.
+  // CEO, CEO required only above ₹1,00,000 (see refunds.service.js's
+  // STAGES/_isCeoRequired) — the badge below shows "Skipped" for CEO on a
+  // bill whose amount doesn't call for it.
   'HOD', 'Accounts', 'CEO',
   // Explicit request 2026-10-01 ("add the stage 6 SD refunds"): links a bill
   // to its Off-Lease container — required on every new submission now.
@@ -125,7 +125,7 @@ export function RefundsPage() {
                   <td key="at"><Link url={r.attachmentsUrl} /></td>,
                   <td key="hod"><StageBadge status={r.hodStatus} /></td>,
                   <td key="acc"><StageBadge status={r.accountsStatus} /></td>,
-                  <td key="ceo"><StageBadge status={r.ceoRequired ? r.ceoStatus : 'Not Required'} /></td>,
+                  <td key="ceo"><StageBadge status={r.ceoRequired ? r.ceoStatus : 'Skipped'} /></td>,
                   <td key="cn">{r.containerNo || '—'}</td>,
                   <td key="clnm">{r.clientName || '—'}</td>,
                   <td key="oid">{r.offLeaseId || '—'}</td>

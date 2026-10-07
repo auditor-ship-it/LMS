@@ -613,7 +613,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>CEO</span>
-                          <StatusBadge status={sdRefunds[0]?.ceoRequired ? (sdRefunds[0]?.ceoStatus || 'Pending') : 'Not Required'} />
+                          <StatusBadge status={sdRefunds[0]?.ceoRequired ? (sdRefunds[0]?.ceoStatus || 'Pending') : 'Skipped'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>VR</span>
@@ -700,7 +700,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     <>
                       <p className={styles.savedTitle}>SD Refund — {sdRefunds[0].vendorName || containerNo}</p>
                       <p className={styles.savedHint}>
-                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · Accounts: {sdRefunds[0].accountsStatus || 'Pending'} · CEO: {sdRefunds[0].ceoRequired ? (sdRefunds[0].ceoStatus || 'Pending') : 'Not Required'}
+                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · Accounts: {sdRefunds[0].accountsStatus || 'Pending'} · CEO: {sdRefunds[0].ceoRequired ? (sdRefunds[0].ceoStatus || 'Pending') : 'Skipped'}
                       </p>
                       <p className={styles.savedHint}>
                         {sdFinalApproved(sdRefunds[0])

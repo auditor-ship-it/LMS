@@ -79,33 +79,37 @@ const OFFLEASE_ID_COL = 39;
 
 /* Sequential stage order, REWORKED 2026-10-07 (explicit request — "Change
  * Stage 6 Approval Flow"): HOD (6A) -> Accounts (6B) -> CEO (6C), with CEO
- * CONDITIONAL on the SD Amount to be Refunded. `next` is the stage whose
- * Status gets set to 'Pending' the moment this one is Approved — that's what
- * makes the NEXT stage actionable; nothing else in this file threads that
- * state through, it all falls out of "read whichever stage's Status is
- * currently 'Pending'".
+ * CONDITIONAL on the Amount to Pay. `next` is the stage whose Status gets set
+ * to 'Pending' the moment this one is Approved — that's what makes the NEXT
+ * stage actionable; nothing else in this file threads that state through, it
+ * all falls out of "read whichever stage's Status is currently 'Pending'".
  *
  * accounts.next is 'ceo' here, but decideRefundApproval overrides it to null
- * at decide-time whenever _isCeoRequired(row's SD Amount) is false — CEO is
- * only required when the amount is <= CEO_APPROVAL_THRESHOLD, per the
- * request's exact amount-based condition. hod.next is unconditionally
- * 'accounts' (previously 'ceo', before Accounts was reinserted into the
- * chain); ceo.next stays null — CEO, when it runs at all, is always final.
+ * at decide-time whenever _isCeoRequired(row's Amount to Pay) is false — see
+ * that function's own doc comment for the exact boundary. hod.next is
+ * unconditionally 'accounts' (previously 'ceo', before Accounts was
+ * reinserted into the chain); ceo.next stays null — CEO, when it runs at
+ * all, is always final.
  *
  * HISTORY: Accounts was removed from the chain 2026-10-03 ("HOD and CEO
  * approv only"), then reinserted here 2026-10-07 in a different position
  * (between HOD and CEO, not after CEO) — same column positions throughout,
- * since no data had ever been written to them while removed. */
-const CEO_APPROVAL_THRESHOLD = 100000; // ₹1,00,000 — exactly this amount still requires CEO; only ABOVE it skips CEO.
+ * since no data had ever been written to them while removed. The threshold
+ * DIRECTION was flipped the same day (explicit correction, "Above ₹1 lakh ->
+ * CEO approval REQUIRED; ₹1 lakh or below -> CEO automatically SKIPPED") —
+ * an earlier version of this had it backwards (small amounts requiring CEO,
+ * large ones skipping it). */
+const CEO_APPROVAL_THRESHOLD = 100000; // ₹1,00,000 — AT this amount CEO is skipped; only ABOVE it requires CEO.
 
-/** True when this bill's SD Amount requires CEO sign-off (<= threshold).
+/** True when this bill's Amount to Pay requires CEO sign-off (> threshold).
  *  Evaluated on the ACTUAL NUMERIC amount, never text comparison — per the
  *  request's own "Important" section. An unparseable/blank amount defaults
  *  to CEO REQUIRED (the safer, more-oversight default) rather than silently
- *  skipping a sign-off because the figure couldn't be read. */
-function _isCeoRequired(sdAmountToBeRefunded) {
-  const n = Number(safeStr(sdAmountToBeRefunded).replace(/,/g, '').trim());
-  return !(Number.isFinite(n) && n > CEO_APPROVAL_THRESHOLD);
+ *  skipping a sign-off because the figure couldn't be read — an amount we
+ *  can't read is never known to be small. */
+function _isCeoRequired(amountToPay) {
+  const n = Number(safeStr(amountToPay).replace(/,/g, '').trim());
+  return !(Number.isFinite(n) && n <= CEO_APPROVAL_THRESHOLD);
 }
 
 const STAGES = {
@@ -197,9 +201,10 @@ function _mapRow(r, rowNum) {
    * its own canAct(STAGES[stage].permission) check.
    *
    * REWORKED 2026-10-07: HOD -> Accounts -> CEO (conditional on amount — see
-   * ceoRequired above). A row whose amount is above CEO_APPROVAL_THRESHOLD
-   * is 'done' the moment Accounts approves; CEO's own status is simply never
-   * consulted for such a row (it stays blank forever, by design). */
+   * ceoRequired above). A row whose amount is at or below CEO_APPROVAL_THRESHOLD
+   * is 'done' the moment Accounts approves — decideRefundApproval writes
+   * 'Skipped' into CEO's own status/remarks right then (see its own comment),
+   * so ceoStatus for such a row reads 'Skipped', never blank/'Pending'. */
   let currentStage = 'done';
   if (hodStatus === 'Rejected' || accountsStatus === 'Rejected' || (ceoRequired && ceoStatus === 'Rejected')) currentStage = 'rejected';
   else if (hodStatus !== 'Approved') currentStage = 'hod';
@@ -476,6 +481,14 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     // the CO approval there should be a link... in the same manner how is it
     // working right now like if the HOD approval is done only then it will
     // be added in the C approval").
+    // Auto-skip remark — explicit request 2026-10-07: when Accounts approves
+    // a bill whose Amount to Pay is at/below the threshold, CEO is skipped
+    // entirely, and that must be system-recorded (status + remark), not left
+    // looking like CEO simply never got to it. System-generated, never typed
+    // by a user.
+    const CEO_SKIP_REMARK = `CEO approval automatically skipped because Amount to Pay is ₹${CEO_APPROVAL_THRESHOLD.toLocaleString('en-IN')} or below.`;
+    const isCeoSkip = stage === 'accounts' && decision === 'approved' && !nextStage;
+
     let nextLink = null;
     if (decision === 'approved' && nextStage) {
       updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[nextStage].statusCol)}${rowNum}`, values: [['Pending']] });
@@ -483,6 +496,11 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
       if (nextLink) {
         updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[nextStage].reviewLinkCol)}${rowNum}`, values: [[nextLink]] });
       }
+    } else if (isCeoSkip) {
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.statusCol)}${rowNum}`, values: [['Skipped']] });
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.remarksCol)}${rowNum}`, values: [[CEO_SKIP_REMARK]] });
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.dateCol)}${rowNum}`, values: [[stamp]] });
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.approverCol)}${rowNum}`, values: [['System']] });
     }
 
     await batchUpdateValues(updates);
@@ -500,6 +518,11 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     if (decision === 'approved' && nextStage) {
       updatedRow[STAGES[nextStage].statusCol] = 'Pending';
       if (nextLink) updatedRow[STAGES[nextStage].reviewLinkCol] = nextLink;
+    } else if (isCeoSkip) {
+      updatedRow[STAGES.ceo.statusCol] = 'Skipped';
+      updatedRow[STAGES.ceo.remarksCol] = CEO_SKIP_REMARK;
+      updatedRow[STAGES.ceo.dateCol] = stamp;
+      updatedRow[STAGES.ceo.approverCol] = 'System';
     }
 
     try {
@@ -570,10 +593,10 @@ function _approvalStatusPill(status) {
   if (s === 'Approved') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#dcfce7;color:#16a34a;font-weight:bold;font-size:12px;">&#9989; Approved</span>';
   if (s === 'Rejected') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#fee2e2;color:#dc2626;font-weight:bold;font-size:12px;">&#10060; Rejected</span>';
   if (s === 'Pending') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#fef3c7;color:#b45309;font-weight:bold;font-size:12px;">&#9203; Pending</span>';
-  // "Not Required" — explicit request 2026-10-07, for CEO on a bill whose
-  // amount doesn't call for it, rather than leaving that row looking like an
+  // "Skipped" — explicit request 2026-10-07, for CEO on a bill whose amount
+  // is at/below the threshold, rather than leaving that row looking like an
   // indefinitely-stuck "—".
-  if (s === 'Not Required') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#f1f5f9;color:#64748b;font-weight:bold;font-size:12px;">Not Required</span>';
+  if (s === 'Skipped') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#f1f5f9;color:#64748b;font-weight:bold;font-size:12px;">Skipped</span>';
   return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#f1f5f9;color:#64748b;font-weight:bold;font-size:12px;">&mdash;</span>';
 }
 
@@ -628,14 +651,18 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
   ];
 
   // REWORKED 2026-10-07: HOD -> Accounts -> CEO order, CEO row marked
-  // "Not Required" (rather than left looking perpetually "Pending") for a
-  // bill whose amount doesn't call for it — see entry.ceoRequired.
+  // "Skipped" (rather than left looking perpetually "Pending") for a bill
+  // whose amount doesn't call for it — see entry.ceoRequired. Once Accounts
+  // actually approves such a bill, decideRefundApproval writes 'Skipped' +
+  // the system remark straight into entry.ceoStatus/ceoRemarks; before that
+  // point (still at HOD/Accounts), those columns are still blank, so this
+  // falls back to a generic explanatory line.
   const approvalRows = [
     ['HOD', entry.hodStatus, entry.hodDate, entry.hodRemarks],
     ['Accounts', entry.accountsStatus, entry.accountsDate, entry.accountsRemarks],
     entry.ceoRequired
       ? ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks]
-      : ['CEO', 'Not Required', '-', `Amount above ₹${CEO_APPROVAL_THRESHOLD.toLocaleString('en-IN')}`]
+      : ['CEO', 'Skipped', entry.ceoDate || '-', entry.ceoRemarks || `Amount to Pay is ₹${CEO_APPROVAL_THRESHOLD.toLocaleString('en-IN')} or below`]
   ];
   const requiredStageLabels = ['HOD', 'Accounts', ...(entry.ceoRequired ? ['CEO'] : [])].join(', ');
 
