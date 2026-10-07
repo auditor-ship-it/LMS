@@ -33,17 +33,23 @@ const EXTRA_FIELDS = [
  * (Modal itself unmounts its content then, so state resets for free on the
  * next open via the key prop below).
  */
-export function RenewRemarksModal({ item: target, onClose }) {
+export function RenewRemarksModal({ item: target, onClose, canApprove, onDecide }) {
   const containerNo = target?.item?.row?.[0];
   const rowNum = target?.item?._rowNum;
   return (
     <Modal open={!!target} onClose={onClose} title={target ? `${containerNo} — Details & Remarks` : ''} width="640px">
-      {target && <ModalBody key={`${containerNo}::${rowNum}`} target={target} containerNo={containerNo} rowNum={rowNum} />}
+      {target && (
+        <ModalBody
+          key={`${containerNo}::${rowNum}`}
+          target={target} containerNo={containerNo} rowNum={rowNum}
+          canApprove={canApprove} onDecide={onDecide}
+        />
+      )}
     </Modal>
   );
 }
 
-function ModalBody({ target, containerNo, rowNum }) {
+function ModalBody({ target, containerNo, rowNum, canApprove, onDecide }) {
   const { item, headers, colIdx } = target;
 
   return (
@@ -55,6 +61,14 @@ function ModalBody({ target, containerNo, rowNum }) {
             <span className={styles.detailValue}>{renderCellValue(item.row?.[ci])}</span>
           </div>
         ))}
+      </div>
+      {/* Explicit request 2026-10-07 ("this old data add the header renew
+          update") — the fields above are the container's existing record;
+          everything below is what THIS submission is asking to change it
+          to, so they need their own heading rather than reading as one
+          undivided block. */}
+      <p className={styles.sectionTitle}>Renew Update</p>
+      <div className={styles.detail}>
         {EXTRA_FIELDS.map(([label, get]) => {
           const val = get(item);
           return (
@@ -65,6 +79,24 @@ function ModalBody({ target, containerNo, rowNum }) {
           );
         })}
       </div>
+
+      {/* Decide right from here — explicit request 2026-10-07 ("approval and
+          reject and remarks option pls"), with the same consequence note
+          ApprovalDecisionModal itself shows once opened: Approve applies the
+          Renew Update fields above onto the real record, Reject leaves the
+          record untouched and sends it back for correction. Opens that same
+          modal (via ApprovalPendingPage.jsx's openDecision) — just reachable
+          without closing this one first. Hidden entirely for a view-only
+          caller, same gate the table's own row buttons use. */}
+      {canApprove && (
+        <div className={styles.decideBlock}>
+          <p className={styles.meta}>Approve applies the Renew Update above to this record. Reject does not update it — sent back for correction.</p>
+          <div className={styles.decideRow}>
+            <Button size="sm" variant="primary" onClick={() => onDecide(item, 'approved')}>Approve</Button>
+            <Button size="sm" variant="danger" onClick={() => onDecide(item, 'rejected')}>Reject</Button>
+          </div>
+        </div>
+      )}
 
       <RemarksSection containerNo={containerNo} rowNum={rowNum} />
     </div>

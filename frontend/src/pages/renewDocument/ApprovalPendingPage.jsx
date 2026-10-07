@@ -145,7 +145,15 @@ export function ApprovalPendingPage() {
         onSubmit={handleDecisionSubmit}
       />
 
-      <RenewRemarksModal item={remarksTarget} onClose={() => setRemarksTarget(null)} />
+      <RenewRemarksModal
+        item={remarksTarget}
+        onClose={() => setRemarksTarget(null)}
+        canApprove={canApprove}
+        onDecide={(item, decision) => {
+          setRemarksTarget(null);
+          openDecision(item, decision);
+        }}
+      />
     </>
   );
 }
