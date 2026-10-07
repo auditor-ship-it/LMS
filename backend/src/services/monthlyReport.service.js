@@ -34,7 +34,7 @@ import { getRenewalLogReport } from './expiry.service.js';
 import { getOffLeaseDashboardData } from './offlease.service.js';
 import { sendMail } from './email.service.js';
 import { getCollection } from './mongo.service.js';
-import { parseDmyTime } from '../utils/format.js';
+import { parseDmyTime, dmyTime } from '../utils/format.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -104,19 +104,38 @@ function inRange(timestampString, start, end) {
   return d >= start && d <= end;
 }
 
+/** Human-readable "dd/MM/yyyy HH:mm:ss" for display — explicit request
+ *  2026-10-07: the raw stored value showed as a bare ISO string
+ *  ("2026-09-23T10:26:40.557Z") in the actual test send for any row still
+ *  holding one of the older pre-dmyTime formats (see parseAnyTimestamp's own
+ *  doc comment) — re-formats through the same Date this file already parsed
+ *  for the month filter, so every row displays consistently regardless of
+ *  which raw shape it was stored in. */
+function displayTimestamp(s) {
+  const d = parseAnyTimestamp(s);
+  return d ? dmyTime(d) : (s || '');
+}
+
 /** Every Renewal Log row approved within [start, end]. */
 async function collectRenewRows(start, end) {
   const { data } = await getRenewalLogReport(null);
   return data
     .filter((r) => inRange(r.timestamp, start, end))
     .map((r) => ({
-      timestamp: r.timestamp,
+      timestamp: displayTimestamp(r.timestamp),
       container: r.container,
       clientName: r.clientName,
-      poNo: r.poNo,
-      validTill: r.validTill,
-      updatedBy: r.updatedBy,
       saleExec: r.saleExec,
+      poNo: r.poNo,
+      // Explicit request 2026-10-07 ("po agreement all data show") — every
+      // field getRenewalLogReport actually returns, not just a subset.
+      poFile: r.poFile,
+      agreementFile: r.agreementFile,
+      validTill: r.validTill,
+      oldPoNo: r.oldPoNo,
+      oldPoFile: r.oldPoFile,
+      oldAgreementFile: r.oldAgreementFile,
+      updatedBy: r.updatedBy,
       // Every Renewal Log row IS an approval — see this file's header note.
       approvalStatus: 'Approved'
     }));
@@ -147,10 +166,20 @@ async function collectOffLeaseRows(start, end) {
     // not array order, so a later stage's remark wins over an earlier one.
     const withRemark = [...(it.stages || [])].reverse().find((s) => s.done && s.remark);
     rows.push({
+      // Explicit request 2026-10-07 ("offlease stage 1 intimation data
+      // show") — the Stage 1 Intimation's own identity fields (size/type/
+      // location, same ones getOffLeaseContainerDetail's Stage 1 block
+      // shows), not just container/client.
       offLeaseDate: it.intimationDate,
       container: it.container,
       leaseId: it.leaseId,
+      clientCode: it.clientCode,
       clientName: it.clientName,
+      size: it.size,
+      type: it.type,
+      location: it.location,
+      deployedDate: it.deployedDate,
+      validUpto: it.validUpto,
       raisedBy: it.raisedBy,
       currentStage: it.currentStage,
       remark: withRemark?.remark || ''
@@ -161,24 +190,34 @@ async function collectOffLeaseRows(start, end) {
 
 function money(v) { return v == null || v === '' ? '' : v; }
 
+const isUrl = (s) => /^https?:\/\//i.test(String(s || ''));
+
 function buildReportEmail({ label, renewRows, offLeaseRows }) {
   const subject = `Monthly Renew & Off-Lease Report – ${label}`;
   const total = renewRows.length + offLeaseRows.length;
 
   const th = (s) => `<th style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-size:12.5px;text-align:left;white-space:nowrap;">${s}</th>`;
-  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:12.5px;">${s === '' || s == null ? '-' : s}</td>`;
+  // A PO/Agreement file cell is a Drive URL — same "clickable link, not the
+  // raw URL text" convention every other email in this codebase uses
+  // (offlease.service.js's checklist photo cells, expiry.service.js's
+  // renewal notification table).
+  const td = (s) => {
+    const str = s === '' || s == null ? '' : String(s);
+    const content = str === '' ? '-' : (isUrl(str) ? `<a href="${str}">Open</a>` : str);
+    return `<td style="padding:8px 12px;border:1px solid #ddd;font-size:12.5px;">${content}</td>`;
+  };
 
   const renewTable = renewRows.length
     ? `<table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:20px;">
-        <tr>${th('Renewed / Approved On')}${th('Container No')}${th('Client Name')}${th('Sale Person')}${th('PO No')}${th('Valid Till')}${th('Approval Status')}${th('Updated By')}</tr>
-        ${renewRows.map((r) => `<tr>${td(r.timestamp)}${td(r.container)}${td(r.clientName)}${td(r.saleExec)}${td(r.poNo)}${td(r.validTill)}${td(r.approvalStatus)}${td(r.updatedBy)}</tr>`).join('')}
+        <tr>${th('Renewed / Approved On')}${th('Container No')}${th('Client Name')}${th('Sale Person')}${th('PO No')}${th('PO File')}${th('Agreement File')}${th('Valid Till')}${th('Approval Status')}${th('Updated By')}${th('Old PO No')}${th('Old PO File')}${th('Old Agreement File')}</tr>
+        ${renewRows.map((r) => `<tr>${td(r.timestamp)}${td(r.container)}${td(r.clientName)}${td(r.saleExec)}${td(r.poNo)}${td(r.poFile)}${td(r.agreementFile)}${td(r.validTill)}${td(r.approvalStatus)}${td(r.updatedBy)}${td(r.oldPoNo)}${td(r.oldPoFile)}${td(r.oldAgreementFile)}</tr>`).join('')}
       </table>`
     : `<p style="font-family:Arial,sans-serif;">No renewals were approved in ${label}.</p>`;
 
   const offLeaseTable = offLeaseRows.length
     ? `<table style="border-collapse:collapse;font-family:Arial,sans-serif;">
-        <tr>${th('Off-Lease Date')}${th('Container No')}${th('Lease ID')}${th('Client Name')}${th('Raised By')}${th('Current Status')}${th('Remarks')}</tr>
-        ${offLeaseRows.map((r) => `<tr>${td(r.offLeaseDate)}${td(r.container)}${td(r.leaseId)}${td(r.clientName)}${td(r.raisedBy)}${td(r.currentStage)}${td(r.remark)}</tr>`).join('')}
+        <tr>${th('Off-Lease Date')}${th('Container No')}${th('Lease ID')}${th('Client Code')}${th('Client Name')}${th('Size')}${th('Type')}${th('Location')}${th('Deployed Date')}${th('Valid Upto')}${th('Raised By')}${th('Current Status')}${th('Remarks')}</tr>
+        ${offLeaseRows.map((r) => `<tr>${td(r.offLeaseDate)}${td(r.container)}${td(r.leaseId)}${td(r.clientCode)}${td(r.clientName)}${td(r.size)}${td(r.type)}${td(r.location)}${td(r.deployedDate)}${td(r.validUpto)}${td(r.raisedBy)}${td(r.currentStage)}${td(r.remark)}</tr>`).join('')}
       </table>`
     : `<p style="font-family:Arial,sans-serif;">No off-lease cases were raised in ${label}.</p>`;
 
@@ -200,11 +239,11 @@ function buildReportEmail({ label, renewRows, offLeaseRows }) {
     `Total Renew: ${renewRows.length}`,
     `Total Off-Lease: ${offLeaseRows.length}`,
     `Total Combined Activities: ${total}`, '',
-    'RENEW', ...(renewRows.length
+    'RENEW (see HTML version for PO/Agreement file links)', ...(renewRows.length
       ? renewRows.map((r) => `${r.timestamp} | ${r.container} | ${r.clientName} | ${r.saleExec} | PO ${money(r.poNo)} | Valid Till ${r.validTill} | ${r.approvalStatus} | ${r.updatedBy}`)
       : [`No renewals were approved in ${label}.`]),
     '', 'OFF-LEASE', ...(offLeaseRows.length
-      ? offLeaseRows.map((r) => `${r.offLeaseDate} | ${r.container} | ${r.leaseId} | ${r.clientName} | Raised by ${r.raisedBy} | ${r.currentStage}${r.remark ? ` | ${r.remark}` : ''}`)
+      ? offLeaseRows.map((r) => `${r.offLeaseDate} | ${r.container} | ${r.leaseId} | ${r.clientName} | ${[r.size, r.type].filter(Boolean).join(' ')} | ${r.location} | Raised by ${r.raisedBy} | ${r.currentStage}${r.remark ? ` | ${r.remark}` : ''}`)
       : [`No off-lease cases were raised in ${label}.`])
   ].join('\n');
 
