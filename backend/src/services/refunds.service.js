@@ -456,7 +456,15 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     const { rows } = await getSheetData(REFUNDS_SHEET);
     const row = rows[rowNum - 2];
     if (!row) throw notFound(`Refund entry row ${rowNum} not found`);
-    if (safeStr(row[cfg.statusCol]) !== 'Pending') return 'INVALID_STATE';
+    // Whose turn it is comes from the SAME chain-of-Approved-statuses logic
+    // the frontend uses (_mapRow's currentStage), not a separate literal
+    // 'Pending' marker on this one column — BUG FOUND AND FIXED 2026-10-07:
+    // a row whose next-stage column was left blank instead of explicitly
+    // 'Pending' (e.g. one touched by an older server process mid-rollout)
+    // showed the right Approve/Reject screen in the UI (currentStage already
+    // treats "blank" the same as "not yet Approved") but then failed here
+    // with a false "already decided" — this makes the two checks agree.
+    if (_mapRow(row, rowNum).currentStage !== stage) return 'INVALID_STATE';
 
     // Dynamic next-stage: HOD always hands off to Accounts, CEO (when it
     // runs) is always final, but Accounts hands off to CEO ONLY when this
