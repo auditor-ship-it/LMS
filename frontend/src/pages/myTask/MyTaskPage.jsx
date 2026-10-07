@@ -60,13 +60,16 @@ const CARD_DEFS = [
   { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage5', label: 'Off-Lease Stage 5: Final Billing', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  // ADDED 2026-10-05 (explicit request) — matches the three new Off-Lease
-  // dashboard scorecards (PipelineDashboard.jsx): Stage 6 (SD Refunds,
-  // internal 11) plus its own 6A (HOD) / 6B (CEO) approval gates, same
-  // owners as the dashboard cards' footnotes.
+  // ADDED 2026-10-05 (explicit request) — matches the Off-Lease dashboard
+  // scorecards (PipelineDashboard.jsx): Stage 6 (SD Refunds, internal 11)
+  // plus its own approval gates, same owners as the dashboard cards'
+  // footnotes. REWORKED 2026-10-07: HOD (6A) -> Accounts (6B) -> CEO (6C),
+  // CEO conditional on the SD Amount to be Refunded — see
+  // refunds.service.js's _isCeoRequired.
   { key: 'olStage11', label: 'Off-Lease Stage 6: SD Refunds', owner: 'Christopher', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'sdRefundsHod', label: 'Off-Lease Stage 6A: HOD Approval', owner: 'Pushpalata', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
-  { key: 'sdRefundsCeo', label: 'Off-Lease Stage 6B: CEO Approval', owner: 'Akash Sir', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
+  { key: 'sdRefundsAccounts', label: 'Off-Lease Stage 6B: Accounts Approval', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
+  { key: 'sdRefundsCeo', label: 'Off-Lease Stage 6C: CEO Approval', owner: 'Akash Sir', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
   // RENAMED 2026-09-29 (explicit request): 'KAM' -> 'FMS Closed', matching
   // stages.js — and stages.js's own owner field for this stage was renamed
   // 'Sales' -> 'FMS Closed' the same request, so `owner` is dropped here

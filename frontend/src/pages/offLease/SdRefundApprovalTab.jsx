@@ -11,13 +11,26 @@ import styles from '../refunds/RefundsPage.module.css';
 /* Mirrors RefundsApprovalPage.jsx's own STAGES map — same deliberate
    duplication that file's own comment already explains (small per-page
    duplication over a premature shared module). This component only ever
-   handles 'hod' or 'ceo', fixed by whichever Off-Lease tab (6A/6B) renders
-   it — never a user-chosen tab the way RefundsApprovalPage.jsx's own
-   HOD/CEO switcher is. */
+   handles 'hod', 'accounts' or 'ceo', fixed by whichever Off-Lease tab
+   (6A/6B/6C) renders it — never a user-chosen tab the way
+   RefundsApprovalPage.jsx's own switcher is.
+   REWORKED 2026-10-07: HOD -> Accounts -> CEO, CEO conditional on the bill's
+   own SD Amount — see nextStageFor below and refunds.service.js's
+   _isCeoRequired. */
 const STAGE_META = {
-  hod: { label: 'HOD', permission: 'refundsApprovalHod', next: 'ceo' },
+  hod: { label: 'HOD', permission: 'refundsApprovalHod', next: 'accounts' },
+  accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', next: 'ceo' },
   ceo: { label: 'CEO', permission: 'refundsApprovalCeo', next: null }
 };
+
+/** The stage AFTER `stage` for THIS row — accounts.next is conditional on
+ *  the row's own ceoRequired flag. Mirrors refunds.service.js's
+ *  decideRefundApproval exactly (same reasoning as
+ *  RefundsApprovalPage.jsx's identical helper). */
+function nextStageFor(stage, row) {
+  if (stage === 'accounts') return row?.ceoRequired ? 'ceo' : null;
+  return STAGE_META[stage].next;
+}
 
 function Link({ url }) {
   if (!url) return <span>—</span>;
@@ -31,15 +44,18 @@ const BASE_HEADERS = [
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];
+const ACCOUNTS_AUDIT_HEADERS = ['Accounts Remarks', 'Accounts Timestamp', 'Accounts Approver Email'];
 
 /**
- * Off-Lease's own "Stage 6A (HOD)" / "Stage 6B (CEO)" tabs — explicit
- * request 2026-10-05: HOD/CEO approval for SD Refunds (Stage 6) shown as
- * real Off-Lease tabs, same place as every other stage, not only reachable
- * via the separate "SD Refunds Approval" sidebar page (kept alongside this,
- * explicit request — same approvals, two doors to the same room).
+ * Off-Lease's own "Stage 6A (HOD)" / "Stage 6B (Accounts)" / "Stage 6C
+ * (CEO)" tabs — explicit request 2026-10-05, reworked 2026-10-07 to insert
+ * Accounts and make CEO conditional: HOD/Accounts/CEO approval for SD
+ * Refunds (Stage 6) shown as real Off-Lease tabs, same place as every other
+ * stage, not only reachable via the separate "SD Refunds Approval" sidebar
+ * page (kept alongside this, explicit request — same approvals, two doors
+ * to the same room).
  *
- * `tab` is fixed ('hod' or 'ceo') by which Off-Lease tab rendered this —
+ * `tab` is fixed ('hod', 'accounts' or 'ceo') by which Off-Lease tab rendered this —
  * there is no internal tab-switcher here the way RefundsApprovalPage.jsx has
  * one, since Off-Lease's own tab strip already is that switcher.
  * `onCountChange` reports this tab's own pending count back up to
@@ -75,6 +91,7 @@ export function SdRefundApprovalTab({ tab, onCountChange }) {
   const headers = [
     ...BASE_HEADERS,
     ...(tab !== 'hod' ? HOD_AUDIT_HEADERS : []),
+    ...(tab === 'ceo' ? ACCOUNTS_AUDIT_HEADERS : []),
     'Container No', 'Client Name', 'Off-Lease ID'
   ];
 
@@ -84,9 +101,10 @@ export function SdRefundApprovalTab({ tab, onCountChange }) {
 
   const openDecision = (row, decision) => {
     setDecisionError('');
+    const nextStage = nextStageFor(tab, row);
     setDecisionTarget({
       rowNum: row._rowNum, stage: tab, decision, invoiceNumber: row.invoiceNumber,
-      nextStage: meta.next, isFinalStage: !meta.next
+      nextStage, isFinalStage: !nextStage
     });
   };
   const handleDecisionSubmit = async (remarks) => {
@@ -147,6 +165,11 @@ export function SdRefundApprovalTab({ tab, onCountChange }) {
               <td key="hr">{r.hodRemarks || '—'}</td>,
               <td key="hd">{r.hodDate || '—'}</td>,
               <td key="ha">{r.hodApprover || '—'}</td>
+            ] : []),
+            ...(tab === 'ceo' ? [
+              <td key="acr">{r.accountsRemarks || '—'}</td>,
+              <td key="acd">{r.accountsDate || '—'}</td>,
+              <td key="aca">{r.accountsApprover || '—'}</td>
             ] : []),
             <td key="cn">{r.containerNo || '—'}</td>,
             <td key="clnm">{r.clientName || '—'}</td>,

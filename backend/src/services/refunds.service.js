@@ -6,8 +6,9 @@
  * this codebase's other append-only logs (offleaseRemarks/offleaseMoveHistory/
  * stage9): write straight to Sheets, then appendMongoMirrorRow patches the
  * Mongo mirror instantly. Unlike those pure logs, a submitted row is no
- * longer untouched afterward — the sequential HOD -> CEO -> Accounts
- * approval workflow below (explicit request, same day) updates that SAME
+ * longer untouched afterward — the sequential HOD -> Accounts -> CEO
+ * (CEO conditional on the SD Amount to be Refunded — see STAGES' own doc
+ * comment, reworked 2026-10-07) approval workflow below updates that SAME
  * row's own approval columns in place as each stage decides, the same
  * row-by-position ("row_N") pattern expiry.service.js's decideRenewalApproval
  * already uses for the Renew & Document approval workflow.
@@ -76,23 +77,45 @@ const CONTAINER_NO_COL = 37;
 const CLIENT_NAME_COL = 38;
 const OFFLEASE_ID_COL = 39;
 
-/* Sequential stage order: hod -> ceo. `next` is the stage whose Status gets
- * set to 'Pending' the moment this one is Approved — that's what makes the
- * NEXT stage actionable; nothing else in this file threads that state
- * through, it all falls out of "read whichever stage's Status is currently
- * 'Pending'".
+/* Sequential stage order, REWORKED 2026-10-07 (explicit request — "Change
+ * Stage 6 Approval Flow"): HOD (6A) -> Accounts (6B) -> CEO (6C), with CEO
+ * CONDITIONAL on the Amount to Pay. `next` is the stage whose Status gets set
+ * to 'Pending' the moment this one is Approved — that's what makes the NEXT
+ * stage actionable; nothing else in this file threads that state through, it
+ * all falls out of "read whichever stage's Status is currently 'Pending'".
  *
- * Accounts REMOVED from the chain 2026-10-03 (explicit request: "HOD and CEO
- * approv only") — ceo.next is now null, so CEO approving is the final
- * decision (triggers markOffLeaseSdRefundApproved immediately, same as
- * Accounts used to). The `accounts` entry/columns stay defined (never
- * written to going forward) purely so old code referencing STAGES.accounts
- * or these column indices doesn't break — there was no live data in this
- * sheet when the chain was shortened, so there's nothing to migrate. */
+ * accounts.next is 'ceo' here, but decideRefundApproval overrides it to null
+ * at decide-time whenever _isCeoRequired(row's Amount to Pay) is false — see
+ * that function's own doc comment for the exact boundary. hod.next is
+ * unconditionally 'accounts' (previously 'ceo', before Accounts was
+ * reinserted into the chain); ceo.next stays null — CEO, when it runs at
+ * all, is always final.
+ *
+ * HISTORY: Accounts was removed from the chain 2026-10-03 ("HOD and CEO
+ * approv only"), then reinserted here 2026-10-07 in a different position
+ * (between HOD and CEO, not after CEO) — same column positions throughout,
+ * since no data had ever been written to them while removed. The threshold
+ * DIRECTION was flipped the same day (explicit correction, "Above ₹1 lakh ->
+ * CEO approval REQUIRED; ₹1 lakh or below -> CEO automatically SKIPPED") —
+ * an earlier version of this had it backwards (small amounts requiring CEO,
+ * large ones skipping it). */
+const CEO_APPROVAL_THRESHOLD = 100000; // ₹1,00,000 — AT this amount CEO is skipped; only ABOVE it requires CEO.
+
+/** True when this bill's Amount to Pay requires CEO sign-off (> threshold).
+ *  Evaluated on the ACTUAL NUMERIC amount, never text comparison — per the
+ *  request's own "Important" section. An unparseable/blank amount defaults
+ *  to CEO REQUIRED (the safer, more-oversight default) rather than silently
+ *  skipping a sign-off because the figure couldn't be read — an amount we
+ *  can't read is never known to be small. */
+function _isCeoRequired(amountToPay) {
+  const n = Number(safeStr(amountToPay).replace(/,/g, '').trim());
+  return !(Number.isFinite(n) && n <= CEO_APPROVAL_THRESHOLD);
+}
+
 const STAGES = {
-  hod: { label: 'HOD', permission: 'refundsApprovalHod', statusCol: 22, remarksCol: 23, dateCol: 24, approverCol: 25, reviewLinkCol: 34, next: 'ceo' },
+  hod: { label: 'HOD', permission: 'refundsApprovalHod', statusCol: 22, remarksCol: 23, dateCol: 24, approverCol: 25, reviewLinkCol: 34, next: 'accounts' },
   ceo: { label: 'CEO', permission: 'refundsApprovalCeo', statusCol: 26, remarksCol: 27, dateCol: 28, approverCol: 29, reviewLinkCol: 35, next: null },
-  accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', statusCol: 30, remarksCol: 31, dateCol: 32, approverCol: 33, reviewLinkCol: 36, next: null }
+  accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', statusCol: 30, remarksCol: 31, dateCol: 32, approverCol: 33, reviewLinkCol: 36, next: 'ceo' }
 };
 
 /** Widens the live sheet's header row to match REFUNDS_HEADERS whenever the
@@ -162,19 +185,31 @@ function _mapRow(r, rowNum) {
   const hodStatus = safeStr(r[STAGES.hod.statusCol]);
   const ceoStatus = safeStr(r[STAGES.ceo.statusCol]);
   const accountsStatus = safeStr(r[STAGES.accounts.statusCol]);
+  /* CEO threshold reads column 8 ("Amount to Pay"), not the legacy column 16
+   * ("SD Amount to be Refunded") — that old column was retired 2026-10-01
+   * (RefundSubmitForm.jsx) when the submission form stopped collecting it;
+   * the form's "SD Amount to be Refunded *" field is actually bound to
+   * amountToPay (col 8) today, so that's the real, populated figure. Column
+   * 16 stays permanently blank on every row submitted since, which made
+   * _isCeoRequired's blank-defaults-to-required fallback silently force
+   * every bill through CEO review regardless of amount — BUG FOUND AND FIXED
+   * 2026-10-07 while verifying a live submission above the threshold. */
+  const ceoRequired = _isCeoRequired(r[8]);
 
   /* Which stage (if any) is actionable right now — the frontend uses this to
    * decide whose Approve/Reject buttons to show on a given row, alongside
    * its own canAct(STAGES[stage].permission) check.
    *
-   * Stops at 'ceo' — Accounts removed from the chain 2026-10-03 (see STAGES'
-   * own doc comment). accountsStatus is still read/returned below for any
-   * historical row, but no longer decides currentStage: a row with
-   * ceoStatus === 'Approved' is 'done', full stop. */
+   * REWORKED 2026-10-07: HOD -> Accounts -> CEO (conditional on amount — see
+   * ceoRequired above). A row whose amount is at or below CEO_APPROVAL_THRESHOLD
+   * is 'done' the moment Accounts approves — decideRefundApproval writes
+   * 'Skipped' into CEO's own status/remarks right then (see its own comment),
+   * so ceoStatus for such a row reads 'Skipped', never blank/'Pending'. */
   let currentStage = 'done';
-  if (hodStatus === 'Rejected' || ceoStatus === 'Rejected') currentStage = 'rejected';
+  if (hodStatus === 'Rejected' || accountsStatus === 'Rejected' || (ceoRequired && ceoStatus === 'Rejected')) currentStage = 'rejected';
   else if (hodStatus !== 'Approved') currentStage = 'hod';
-  else if (ceoStatus !== 'Approved') currentStage = 'ceo';
+  else if (accountsStatus !== 'Approved') currentStage = 'accounts';
+  else if (ceoRequired && ceoStatus !== 'Approved') currentStage = 'ceo';
 
   return {
     _rowNum: rowNum,
@@ -194,12 +229,16 @@ function _mapRow(r, rowNum) {
     piFileUrl: safeStr(r[13]),
     department: safeStr(r[14]),
     ledgerHead: safeStr(r[15]),
-    sdAmountToBeRefunded: safeStr(r[16]),
+    sdAmountToBeRefunded: safeStr(r[8]),
     sdCalculation: safeStr(r[17]),
     cancelledChequeUrl: safeStr(r[18]),
     clientEmailConfirmationUrl: safeStr(r[19]),
     clientLedgerUrl: safeStr(r[20]),
     attachmentsUrl: safeStr(r[21]),
+    // Explicit request 2026-10-07 — the frontend needs to know whether CEO
+    // even applies to THIS bill, to show/hide Stage 6C and its chip/card
+    // rather than leaving it looking perpetually "future".
+    ceoRequired,
     containerNo: safeStr(r[CONTAINER_NO_COL]),
     clientName: safeStr(r[CLIENT_NAME_COL]),
     offLeaseId: safeStr(r[OFFLEASE_ID_COL]),
@@ -258,6 +297,7 @@ export async function getRefundStageCounts() {
   const entries = rows.map((r, i) => _mapRow(r, i + 2)).filter((r) => r.invoiceNumber || r.vendorName);
   return {
     hod: entries.filter((r) => r.currentStage === 'hod').length,
+    accounts: entries.filter((r) => r.currentStage === 'accounts').length,
     ceo: entries.filter((r) => r.currentStage === 'ceo').length
   };
 }
@@ -418,6 +458,13 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     if (!row) throw notFound(`Refund entry row ${rowNum} not found`);
     if (safeStr(row[cfg.statusCol]) !== 'Pending') return 'INVALID_STATE';
 
+    // Dynamic next-stage: HOD always hands off to Accounts, CEO (when it
+    // runs) is always final, but Accounts hands off to CEO ONLY when this
+    // bill's actual SD Amount requires it — see _isCeoRequired/STAGES' own
+    // doc comment. Decided here, at decide-time, against the live row just
+    // read, never against a stale/cached amount.
+    const nextStage = (stage === 'accounts' && !_isCeoRequired(row[8])) ? null : cfg.next;
+
     const stamp = dmyTime(new Date());
     const status = decision === 'approved' ? 'Approved' : 'Rejected';
     const updates = [
@@ -434,13 +481,26 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     // the CO approval there should be a link... in the same manner how is it
     // working right now like if the HOD approval is done only then it will
     // be added in the C approval").
+    // Auto-skip remark — explicit request 2026-10-07: when Accounts approves
+    // a bill whose Amount to Pay is at/below the threshold, CEO is skipped
+    // entirely, and that must be system-recorded (status + remark), not left
+    // looking like CEO simply never got to it. System-generated, never typed
+    // by a user.
+    const CEO_SKIP_REMARK = `CEO approval automatically skipped because Amount to Pay is ₹${CEO_APPROVAL_THRESHOLD.toLocaleString('en-IN')} or below.`;
+    const isCeoSkip = stage === 'accounts' && decision === 'approved' && !nextStage;
+
     let nextLink = null;
-    if (decision === 'approved' && cfg.next) {
-      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[cfg.next].statusCol)}${rowNum}`, values: [['Pending']] });
-      nextLink = _mintRefundReviewLink(rowNum, cfg.next);
+    if (decision === 'approved' && nextStage) {
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[nextStage].statusCol)}${rowNum}`, values: [['Pending']] });
+      nextLink = _mintRefundReviewLink(rowNum, nextStage);
       if (nextLink) {
-        updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[cfg.next].reviewLinkCol)}${rowNum}`, values: [[nextLink]] });
+        updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[nextStage].reviewLinkCol)}${rowNum}`, values: [[nextLink]] });
       }
+    } else if (isCeoSkip) {
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.statusCol)}${rowNum}`, values: [['Skipped']] });
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.remarksCol)}${rowNum}`, values: [[CEO_SKIP_REMARK]] });
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.dateCol)}${rowNum}`, values: [[stamp]] });
+      updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.approverCol)}${rowNum}`, values: [['System']] });
     }
 
     await batchUpdateValues(updates);
@@ -455,29 +515,35 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     updatedRow[cfg.remarksCol] = remarks || '';
     updatedRow[cfg.dateCol] = stamp;
     updatedRow[cfg.approverCol] = callerEmail || '';
-    if (decision === 'approved' && cfg.next) {
-      updatedRow[STAGES[cfg.next].statusCol] = 'Pending';
-      if (nextLink) updatedRow[STAGES[cfg.next].reviewLinkCol] = nextLink;
+    if (decision === 'approved' && nextStage) {
+      updatedRow[STAGES[nextStage].statusCol] = 'Pending';
+      if (nextLink) updatedRow[STAGES[nextStage].reviewLinkCol] = nextLink;
+    } else if (isCeoSkip) {
+      updatedRow[STAGES.ceo.statusCol] = 'Skipped';
+      updatedRow[STAGES.ceo.remarksCol] = CEO_SKIP_REMARK;
+      updatedRow[STAGES.ceo.dateCol] = stamp;
+      updatedRow[STAGES.ceo.approverCol] = 'System';
     }
 
     try {
       if (decision === 'rejected') {
         await _sendRefundStageEmail('rejected', stage, updatedRow, rowNum, { remarks });
-      } else if (cfg.next) {
-        await _sendRefundStageEmail('pending', cfg.next, updatedRow, rowNum, { reviewLink: nextLink });
+      } else if (nextStage) {
+        await _sendRefundStageEmail('pending', nextStage, updatedRow, rowNum, { reviewLink: nextLink });
       } else {
         await _sendRefundStageEmail('completed', stage, updatedRow, rowNum);
       }
     } catch (e) { console.error('[REFUND-APPROVAL-EMAIL]', e.message); }
 
     // Off-Lease Stage 6 (SD Refunds) unblock — explicit request 2026-10-01.
-    // `!cfg.next` means this WAS the Accounts stage and it just got approved
-    // (the final decision in the sequence); only then is the refund actually
-    // done. Best-effort inside markOffLeaseSdRefundApproved itself — never
-    // lets an Off-Lease write failure undo an already-recorded approval.
-    if (decision === 'approved' && !cfg.next) {
+    // `!nextStage` means this WAS the final required stage for this bill's
+    // amount bracket (Accounts, when CEO isn't required; CEO, when it is)
+    // and it just got approved — only then is the refund actually done.
+    // Best-effort inside markOffLeaseSdRefundApproved itself — never lets an
+    // Off-Lease write failure undo an already-recorded approval.
+    if (decision === 'approved' && !nextStage) {
       const containerNo = safeStr(updatedRow[CONTAINER_NO_COL]).trim();
-      if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || 'Accounts'}`);
+      if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || cfg.label}`);
     }
 
     return 'OK';
@@ -527,6 +593,10 @@ function _approvalStatusPill(status) {
   if (s === 'Approved') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#dcfce7;color:#16a34a;font-weight:bold;font-size:12px;">&#9989; Approved</span>';
   if (s === 'Rejected') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#fee2e2;color:#dc2626;font-weight:bold;font-size:12px;">&#10060; Rejected</span>';
   if (s === 'Pending') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#fef3c7;color:#b45309;font-weight:bold;font-size:12px;">&#9203; Pending</span>';
+  // "Skipped" — explicit request 2026-10-07, for CEO on a bill whose amount
+  // is at/below the threshold, rather than leaving that row looking like an
+  // indefinitely-stuck "—".
+  if (s === 'Skipped') return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#f1f5f9;color:#64748b;font-weight:bold;font-size:12px;">Skipped</span>';
   return '<span style="display:inline-block;padding:3px 10px;border-radius:12px;background:#f1f5f9;color:#64748b;font-weight:bold;font-size:12px;">&mdash;</span>';
 }
 
@@ -580,10 +650,21 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
     ['Submitted By', entry.userEmail]
   ];
 
+  // REWORKED 2026-10-07: HOD -> Accounts -> CEO order, CEO row marked
+  // "Skipped" (rather than left looking perpetually "Pending") for a bill
+  // whose amount doesn't call for it — see entry.ceoRequired. Once Accounts
+  // actually approves such a bill, decideRefundApproval writes 'Skipped' +
+  // the system remark straight into entry.ceoStatus/ceoRemarks; before that
+  // point (still at HOD/Accounts), those columns are still blank, so this
+  // falls back to a generic explanatory line.
   const approvalRows = [
     ['HOD', entry.hodStatus, entry.hodDate, entry.hodRemarks],
-    ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks]
+    ['Accounts', entry.accountsStatus, entry.accountsDate, entry.accountsRemarks],
+    entry.ceoRequired
+      ? ['CEO', entry.ceoStatus, entry.ceoDate, entry.ceoRemarks]
+      : ['CEO', 'Skipped', entry.ceoDate || '-', entry.ceoRemarks || `Amount to Pay is ₹${CEO_APPROVAL_THRESHOLD.toLocaleString('en-IN')} or below`]
   ];
+  const requiredStageLabels = ['HOD', 'Accounts', ...(entry.ceoRequired ? ['CEO'] : [])].join(', ');
 
   let subject, intro;
   if (kind === 'pending') {
@@ -594,7 +675,7 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
     intro = `${stageLabel} rejected this refund bill.${extra.remarks ? ` Remarks: ${extra.remarks}` : ''}`;
   } else {
     subject = `Refund Fully Approved – ${entry.invoiceNumber || 'Unknown Invoice'}`;
-    intro = 'This refund bill has been approved at every stage (HOD, CEO).';
+    intro = `This refund bill has been approved at every required stage for its amount (${requiredStageLabels}).`;
   }
 
   const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;

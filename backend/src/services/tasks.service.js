@@ -66,11 +66,13 @@ const MY_TASK_KEY_META = {
   // Off-Lease dashboard's own Stage 7 card (PipelineDashboard.jsx).
   olStage8: ['Off-Lease Stage 7: Payment Status', 'olStage8'],
   // ADDED 2026-10-05 (explicit request) — internal stage 11 (SD Refunds,
-  // display Stage 6) plus its HOD/CEO approval gates, matching the three
-  // new Off-Lease dashboard scorecards added the same week.
+  // display Stage 6) plus its approval gates, matching the Off-Lease
+  // dashboard scorecards. REWORKED 2026-10-07: HOD (6A) -> Accounts (6B) ->
+  // CEO (6C), CEO conditional on the SD Amount to be Refunded.
   olStage11: ['Off-Lease Stage 6: SD Refunds', 'olStage11'],
   sdRefundsHod: ['Off-Lease Stage 6A: HOD Approval', 'sdRefundsHod'],
-  sdRefundsCeo: ['Off-Lease Stage 6B: CEO Approval', 'sdRefundsCeo']
+  sdRefundsAccounts: ['Off-Lease Stage 6B: Accounts Approval', 'sdRefundsAccounts'],
+  sdRefundsCeo: ['Off-Lease Stage 6C: CEO Approval', 'sdRefundsCeo']
 };
 
 /**
@@ -107,7 +109,7 @@ export async function getMyTasks(user, force) {
       pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
       expiring7: 0, expired: 0, renewPending: 0, renewApprovalPending: 0,
       olStage1: 0, olStage1Hold: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
-      olStage11: 0, sdRefundsHod: 0, sdRefundsCeo: 0,
+      olStage11: 0, sdRefundsHod: 0, sdRefundsAccounts: 0, sdRefundsCeo: 0,
       /* Which cards the caller should see, or null for "show everything" (the
        * pre-existing, still-default behaviour for anyone not in this map).
        *
@@ -163,12 +165,13 @@ export async function getMyTasks(user, force) {
        source OffLeasePage.jsx's own Hold tab reads. */
     try { out.olStage1Hold = ((await getOffLeaseData(1, { filter: 'hold' }, user)).data || []).length; } catch (e) { /* noop */ }
 
-    /* Stage 6A/6B — SD Refunds is a separate backend system (own sheet, own
-       currentStage field, see refunds.service.js), so its own fetch rather
-       than part of getOffLeaseStageCounts above. */
+    /* Stage 6A/6B/6C — SD Refunds is a separate backend system (own sheet,
+       own currentStage field, see refunds.service.js), so its own fetch
+       rather than part of getOffLeaseStageCounts above. */
     try {
-      const { hod, ceo } = await getRefundStageCounts();
+      const { hod, accounts, ceo } = await getRefundStageCounts();
       out.sdRefundsHod = hod;
+      out.sdRefundsAccounts = accounts;
       out.sdRefundsCeo = ceo;
     } catch (e) { /* noop */ }
 

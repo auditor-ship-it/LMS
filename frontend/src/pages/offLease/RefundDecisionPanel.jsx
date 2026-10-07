@@ -5,29 +5,44 @@ import { submitRefundApprovalDecision } from '../../services/refunds.service.js'
 import { SdRefundDetails } from '../stages/StageDetailModal.jsx';
 import styles from './ContainerDetailPage.module.css';
 
+const STAGE_LABELS = { hod: 'HOD', accounts: 'Accounts', ceo: 'CEO' };
+const PRIOR_STAGE_FOR = { accounts: ['hod'], ceo: ['hod', 'accounts'] };
+
 /**
- * Stage 6A (HOD) / 6B (CEO) for ONE record, inline on the record page: the SD
- * Refund that was submitted, and — when it is this stage's turn and the caller
- * holds the permission — Approve / Reject with the same remarks modal and the
- * same decision call the Off-Lease approval queue uses.
+ * Stage 6A (HOD) / 6B (Accounts) / 6C (CEO) for ONE record, inline on the
+ * record page: the SD Refund that was submitted, and — when it is this
+ * stage's turn and the caller holds the permission — Approve / Reject with
+ * the same remarks modal and the same decision call the Off-Lease approval
+ * queue uses.
  *
- * `which` is 'hod' or 'ceo'. The buttons only show while the refund is waiting
- * on THIS stage (entry.currentStage === which) and `canAct` is true; otherwise
- * the panel is read-only and says why.
+ * `which` is 'hod', 'accounts' or 'ceo'. The buttons only show while the
+ * refund is waiting on THIS stage (entry.currentStage === which) and
+ * `canAct` is true; otherwise the panel is read-only and says why.
  */
 export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
   const [remarks, setRemarks] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const label = which === 'hod' ? 'HOD' : 'CEO';
+  const label = STAGE_LABELS[which] || which;
 
   if (!entry) {
     return <section className={styles.panel}><p className={styles.empty}>No SD refund has been submitted for this record yet.</p></section>;
   }
 
   const myTurn = entry.currentStage === which;
-  const status = (which === 'hod' ? entry.hodStatus : entry.ceoStatus) || 'Pending';
+  const statusField = which === 'hod' ? 'hodStatus' : which === 'accounts' ? 'accountsStatus' : 'ceoStatus';
+  const status = entry[statusField] || 'Pending';
+  const priorStages = PRIOR_STAGE_FOR[which] || [];
+  const priorKeys = priorStages.flatMap((s) => [`${s}Status`, `${s}Approver`, `${s}Date`, `${s}Remarks`]);
+  // This stage's OWN decision fields (status/approver/timestamp/remarks) join
+  // priorKeys once it's actually been decided — while still Pending there's
+  // nothing to show (the banner already says "Pending"), but once Approved/
+  // Rejected/Skipped, the approver/timestamp/remarks are real audit info the
+  // viewer needs, same as any prior stage's.
+  const ownDecisionKeys = status !== 'Pending' ? [`${which}Status`, `${which}Approver`, `${which}Date`, `${which}Remarks`] : [];
+  const alwaysKeys = [...priorKeys, ...ownDecisionKeys];
+  const ownKeys = ['hodStatus', 'hodApprover', 'hodDate', 'hodRemarks', 'accountsStatus', 'accountsApprover', 'accountsDate', 'accountsRemarks', 'ceoStatus', 'ceoApprover', 'ceoDate', 'ceoRemarks'];
 
   /* Decides straight from the buttons — the remarks box is right here, so there
      is no pop-up in between. A rejection needs a reason (it is sent to the
@@ -62,13 +77,13 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
       <h3 className={styles.panelTitle}>{label} approval — {status}</h3>
       <SdRefundDetails
         entry={entry}
-        /* HOD's decision (status, approver email, timestamp, remarks) is shown
-           only on the CEO panel — the CEO needs it, the HOD panel does not. Neither
-           panel shows the CEO's own decision fields. */
-        always={which === 'ceo' ? ['hodStatus', 'hodApprover', 'hodDate', 'hodRemarks'] : []}
-        hide={which === 'hod'
-          ? ['hodStatus', 'hodApprover', 'hodDate', 'hodRemarks', 'ceoStatus', 'ceoApprover', 'ceoDate', 'ceoRemarks']
-          : ['ceoStatus', 'ceoApprover', 'ceoDate', 'ceoRemarks']}
+        /* Every PRIOR stage's decision (status, approver, timestamp, remarks)
+           is shown so whoever's turn it is now has that context — Accounts
+           sees HOD's, CEO sees both HOD's and Accounts'. This stage's own
+           decision fields join them once decided (see ownDecisionKeys above);
+           a LATER stage's fields never show — they don't exist yet. */
+        always={alwaysKeys}
+        hide={ownKeys.filter((k) => !alwaysKeys.includes(k))}
       />
 
       {myTurn && canAct && (
@@ -81,7 +96,7 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
               value={remarks}
               onChange={(e) => { setRemarks(e.target.value); if (error) setError(''); }}
               rows={3}
-              placeholder={which === 'hod' ? 'Add a remark for the CEO / submitter…' : 'Add a remark for the submitter…'}
+              placeholder={which === 'hod' ? 'Add a remark for Accounts / the submitter…' : which === 'accounts' ? 'Add a remark for the CEO / submitter…' : 'Add a remark for the submitter…'}
               style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: '1.5px solid var(--line)', borderRadius: 'var(--r-md)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', resize: 'vertical' }}
             />
           </label>
@@ -97,7 +112,9 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
       )}
       {!myTurn && status === 'Pending' && (
         <p className={styles.empty}>
-          {which === 'ceo' ? 'Waiting for HOD approval first.' : 'This refund has already moved past HOD.'}
+          {priorStages.length
+            ? `Waiting for ${priorStages.map((s) => STAGE_LABELS[s]).join(' then ')} approval first.`
+            : `This refund has already moved past ${label}.`}
         </p>
       )}
 

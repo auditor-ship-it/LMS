@@ -58,13 +58,14 @@ export function PipelineDashboard({ onOpenTab }) {
      a different number than the nav item right next to it. */
   const { data: taskCounts, loading: taskCountsLoading, reload: reloadTaskCounts } = useAsync(fetchMyTasks, []);
   usePolling(() => reloadTaskCounts({ silent: true }));
-  /* Stage 6A (HOD) / Stage 6B (CEO) scorecards — explicit request 2026-10-05.
-     SD Refunds is a separate backend system entirely (own sheet, own
-     currentStage field — see refunds.service.js's own header comment), so
-     this is its own fetch, not part of kpis.byStage above. Only fetched at
-     all if the caller can act on at least one of the two, same gate the
-     cards themselves use below. */
-  const canSeeRefundApprovals = canAct('refundsApprovalHod') || canAct('refundsApprovalCeo');
+  /* Stage 6A (HOD) / 6B (Accounts) / 6C (CEO) scorecards — explicit request
+     2026-10-05, reworked 2026-10-07 to insert Accounts and make CEO
+     conditional on amount. SD Refunds is a separate backend system entirely
+     (own sheet, own currentStage field — see refunds.service.js's own header
+     comment), so this is its own fetch, not part of kpis.byStage above. Only
+     fetched at all if the caller can act on at least one of the three, same
+     gate the cards themselves use below. */
+  const canSeeRefundApprovals = canAct('refundsApprovalHod') || canAct('refundsApprovalAccounts') || canAct('refundsApprovalCeo');
   const { data: refundsData, reload: reloadRefunds } = useAsync(
     () => (canSeeRefundApprovals ? fetchRefunds() : Promise.resolve({ data: [] })),
     [canSeeRefundApprovals]
@@ -72,6 +73,7 @@ export function PipelineDashboard({ onOpenTab }) {
   usePolling(() => reloadRefunds({ silent: true }));
   const refundRows = refundsData?.data || [];
   const hodPendingCount = refundRows.filter((r) => r.currentStage === 'hod').length;
+  const accountsPendingCount = refundRows.filter((r) => r.currentStage === 'accounts').length;
   const ceoPendingCount = refundRows.filter((r) => r.currentStage === 'ceo').length;
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
@@ -137,10 +139,10 @@ export function PipelineDashboard({ onOpenTab }) {
        "1" while its own click-through showed 0 records — the one container
        behind that count was pending here too, just not as its "primary"
        stage. */
-    /* 6A / 6B: the records whose SD Refund is waiting on HOD / CEO. That status
-       lives in the refunds sheet, not on the off-lease row, so match by
-       container number — the same match the 6A/6B chips use. */
-    else if (stageFilter === 'hod' || stageFilter === 'ceo') {
+    /* 6A / 6B / 6C: the records whose SD Refund is waiting on HOD / Accounts /
+       CEO. That status lives in the refunds sheet, not on the off-lease row,
+       so match by container number — the same match the 6A/6B/6C chips use. */
+    else if (stageFilter === 'hod' || stageFilter === 'accounts' || stageFilter === 'ceo') {
       const waiting = new Set(refundRows.filter((r) => r.currentStage === stageFilter).map((r) => String(r.containerNo || '').trim().toUpperCase()));
       out = out.filter((it) => waiting.has(String(it.container || '').trim().toUpperCase()));
     } else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
@@ -174,9 +176,11 @@ export function PipelineDashboard({ onOpenTab }) {
         ? 'On hold'
         : stageFilter === 'hod'
           ? 'Stage 6A · HOD approval pending'
-          : stageFilter === 'ceo'
-            ? 'Stage 6B · CEO approval pending'
-            : stageFilter != null
+          : stageFilter === 'accounts'
+            ? 'Stage 6B · Accounts approval pending'
+            : stageFilter === 'ceo'
+              ? 'Stage 6C · CEO approval pending'
+              : stageFilter != null
           ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
           : '';
 
@@ -265,14 +269,15 @@ export function PipelineDashboard({ onOpenTab }) {
           footnote="Christopher"
           active={stageFilter === 11} onClick={() => toggleFilter(11)}
         />
-        {/* Stage 6A (HOD) / Stage 6B (CEO) — explicit request 2026-10-05.
-            Jumps straight to the matching Off-Lease tab (onOpenTab, same
-            mechanism the "Approve"/"Open" buttons in the table below already
-            use) rather than this dashboard's own stageFilter/table, since
-            SD Refunds records aren't part of that OL_SHEET-based table at
-            all. Each card only renders for a caller who can act on that
-            stage, same gate SdRefundApprovalTab itself falls back to a "no
-            permission" message for — hiding the card entirely here is
+        {/* Stage 6A (HOD) / 6B (Accounts) / 6C (CEO) — explicit request
+            2026-10-05, reworked 2026-10-07 to insert Accounts and make CEO
+            conditional on the SD Amount to be Refunded (see
+            refunds.service.js's _isCeoRequired). Filters this dashboard's own
+            table by cross-referencing container number against the refunds
+            sheet (see the `filtered` useMemo above), same as every other KPI
+            card here. Each card only renders for a caller who can act on
+            that stage, same gate SdRefundApprovalTab itself falls back to a
+            "no permission" message for — hiding the card entirely here is
             nicer than a dead-end click. */}
         {canAct('refundsApprovalHod') && (
           <StatCard size="sm"
@@ -281,9 +286,16 @@ export function PipelineDashboard({ onOpenTab }) {
             active={stageFilter === 'hod'} onClick={() => toggleFilter('hod')}
           />
         )}
+        {canAct('refundsApprovalAccounts') && (
+          <StatCard size="sm"
+            icon="clock" label="Stage 6B · Accounts Approval" value={accountsPendingCount} loading={loading} tint="approval"
+            footnote="Shivani"
+            active={stageFilter === 'accounts'} onClick={() => toggleFilter('accounts')}
+          />
+        )}
         {canAct('refundsApprovalCeo') && (
           <StatCard size="sm"
-            icon="clock" label="Stage 6B · CEO Approval" value={ceoPendingCount} loading={loading} tint="approval"
+            icon="clock" label="Stage 6C · CEO Approval" value={ceoPendingCount} loading={loading} tint="approval"
             footnote="Akash Sir"
             active={stageFilter === 'ceo'} onClick={() => toggleFilter('ceo')}
           />

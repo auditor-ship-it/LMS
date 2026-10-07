@@ -69,6 +69,7 @@ import { refreshStage3FormCache } from '../services/stage3Form.service.js';
 import { warmFmsCache } from '../services/stage8.service.js';
 import { checkPendingClientToClientMoves } from '../services/offlease.service.js';
 import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js';
+import { sendMonthlyReport } from '../services/monthlyReport.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -92,7 +93,17 @@ export function registerCronJobs() {
      leaseExpiryDigest.service.js for the grouping/send logic. */
   cron.schedule('0 9 * * *', safeRun('leaseExpiryDigest', () => sendLeaseExpiryDigest()));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM)');
+  /* 1st of every month, 6:00 AM — explicit request 2026-10-07: the complete
+     PREVIOUS calendar month's Renew + Off-Lease activity, to Pushpa Shetty
+     and Shivani Dhall. A single value in the day-of-month field, not a
+     range/step — see this file's own header note on why range+step cron
+     syntax is unsafe here; a single value has no such ambiguity. Idempotency
+     (skip if this month was already sent) is handled inside
+     monthlyReport.service.js, not here — this schedule alone can't protect
+     against a manual re-trigger or a restart landing on the same day. */
+  cron.schedule('0 6 1 * *', safeRun('monthlyRenewOffLeaseReport', () => sendMonthlyReport()));
+
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM)');
 }
 
 /**

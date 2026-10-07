@@ -32,16 +32,22 @@ import styles from './OffLeasePage.module.css';
    request) from "Stage 1.2" to "Stage 1A" — no position change. */
 const APPROVAL_TAB = { key: 'approval', label: 'Stage 1A (Pushpa)', countKey: 'approval' };
 
-/* Stage 6A (HOD) / Stage 6B (CEO) — explicit request 2026-10-05: the same
-   HOD/CEO approval RefundsApprovalPage.jsx already does, surfaced as real
-   Off-Lease tabs too (both kept — explicit request). Not numbered stages of
-   their own (no OL_SHEET columns, no countKey into getOffLeaseStageCounts) —
-   same "synthetic tab sitting between two real stages" shape as APPROVAL_TAB
-   above, just for Stage 6/SD Refunds instead of Stage 1. Their counts come
-   from SdRefundApprovalTab's own fetch (see its onCountChange), tracked in
-   OffLeasePage's own state below, not from the counts object. */
+/* Stage 6A (HOD) / 6B (Accounts) / 6C (CEO) — explicit request 2026-10-05,
+   REWORKED 2026-10-07 ("Change Stage 6 Approval Flow") to insert Accounts
+   between HOD and CEO and renumber CEO to 6C: the same HOD/Accounts/CEO
+   approval RefundsApprovalPage.jsx already does, surfaced as real Off-Lease
+   tabs too. Not numbered stages of their own (no OL_SHEET columns, no
+   countKey into getOffLeaseStageCounts) — same "synthetic tab sitting
+   between two real stages" shape as APPROVAL_TAB above, just for Stage 6/SD
+   Refunds instead of Stage 1. Their counts come from SdRefundApprovalTab's
+   own fetch (see its onCountChange), tracked in OffLeasePage's own state
+   below, not from the counts object. 6C (CEO) stays in the strip even for a
+   bill where CEO isn't required by amount — SdRefundApprovalTab's own queue
+   for that stage is simply empty for such bills; see refunds.service.js's
+   _isCeoRequired. */
 const SD_REFUNDS_HOD_TAB = { key: 'sdRefundsHod', label: 'Stage 6A (HOD)', countKey: 'sdRefundsHod' };
-const SD_REFUNDS_CEO_TAB = { key: 'sdRefundsCeo', label: 'Stage 6B (CEO)', countKey: 'sdRefundsCeo' };
+const SD_REFUNDS_ACCOUNTS_TAB = { key: 'sdRefundsAccounts', label: 'Stage 6B (Accounts)', countKey: 'sdRefundsAccounts' };
+const SD_REFUNDS_CEO_TAB = { key: 'sdRefundsCeo', label: 'Stage 6C (CEO)', countKey: 'sdRefundsCeo' };
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -60,7 +66,7 @@ const TABS = [
     // Internal 11 is SD Refunds, display 6 — 6A/6B slot in right after it,
     // before internal 8 (Payment Status, display 7) which follows next in
     // STAGES' own order (WORKFLOW = [1, 6, 7, 3, 5, 11, 8]).
-    if (s.number === 11) return [tab, SD_REFUNDS_HOD_TAB, SD_REFUNDS_CEO_TAB];
+    if (s.number === 11) return [tab, SD_REFUNDS_HOD_TAB, SD_REFUNDS_ACCOUNTS_TAB, SD_REFUNDS_CEO_TAB];
     return [tab];
   })
 ];
@@ -86,15 +92,16 @@ export function OffLeasePage() {
        still exist in TABS, so the dashboard's "Open" button can still land
        on one. */
     if (/^stage\d+$/.test(t.key)) return false;
-    // Explicit request 2026-10-05: 1A / 6A / 6B are hidden from the strip too.
-    if (t.key === 'approval' || t.key === 'sdRefundsHod' || t.key === 'sdRefundsCeo') return false;
+    // Explicit request 2026-10-05: 1A / 6A / 6B / 6C are hidden from the strip too.
+    if (t.key === 'approval' || t.key === 'sdRefundsHod' || t.key === 'sdRefundsAccounts' || t.key === 'sdRefundsCeo') return false;
     if (t.key === 'dashboard') return canAct('offleasedashboard');
     if (t.key === 'lookup') return canAct('offleaselookup');
-    // Stage 6A/6B only shown to callers who could actually act on that
+    // Stage 6A/6B/6C only shown to callers who could actually act on that
     // approval stage — same gate SdRefundApprovalTab itself falls back to a
     // "no permission" message for, but hiding the tab entirely here is
     // nicer than showing an empty/denied tab in the strip.
     if (t.key === 'sdRefundsHod') return canAct('refundsApprovalHod');
+    if (t.key === 'sdRefundsAccounts') return canAct('refundsApprovalAccounts');
     if (t.key === 'sdRefundsCeo') return canAct('refundsApprovalCeo');
     return true;
   }), [canAct]);
@@ -114,7 +121,7 @@ export function OffLeasePage() {
   // is a different backend system entirely (see SD_REFUNDS_HOD_TAB's own doc
   // comment); SdRefundApprovalTab reports its count up via onCountChange the
   // moment it loads/changes.
-  const [sdRefundCounts, setSdRefundCounts] = useState({ sdRefundsHod: 0, sdRefundsCeo: 0 });
+  const [sdRefundCounts, setSdRefundCounts] = useState({ sdRefundsHod: 0, sdRefundsAccounts: 0, sdRefundsCeo: 0 });
   const counts = { ...(countsData || {}), ...sdRefundCounts };
   // Badges reflect a container becoming eligible in the background (an
   // external Gate-In form submission, an FMS update) without a manual
@@ -173,6 +180,11 @@ export function OffLeasePage() {
       {canAct('refundsApprovalHod') && (
         <div style={{ display: tab === 'sdRefundsHod' ? 'block' : 'none' }}>
           <SdRefundApprovalTab tab="hod" onCountChange={(n) => setSdRefundCounts((c) => ({ ...c, sdRefundsHod: n }))} />
+        </div>
+      )}
+      {canAct('refundsApprovalAccounts') && (
+        <div style={{ display: tab === 'sdRefundsAccounts' ? 'block' : 'none' }}>
+          <SdRefundApprovalTab tab="accounts" onCountChange={(n) => setSdRefundCounts((c) => ({ ...c, sdRefundsAccounts: n }))} />
         </div>
       )}
       {canAct('refundsApprovalCeo') && (

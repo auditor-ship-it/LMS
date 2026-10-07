@@ -12,16 +12,25 @@ import styles from './RefundsPage.module.css';
    RefundApprovalModal.jsx already carry, not shared into one file, matching
    this codebase's convention of small per-page duplication over a premature
    shared module for a 3-entry map.
-   Accounts REMOVED from the active chain 2026-10-03 (explicit request: "HOD
-   and CEO approv only") — ceo.next is null, so CEO is the final decision.
-   The `accounts` entry itself stays here (never reachable via availableTabs
-   below) only so an old email link naming stage=accounts still resolves to
-   a real label instead of "Unknown approval stage". */
+   REWORKED 2026-10-07 ("Change Stage 6 Approval Flow"): HOD -> Accounts ->
+   CEO, with CEO conditional on the bill's own SD Amount to be Refunded —
+   accounts.next is 'ceo' here, but nextStageFor() below overrides it to null
+   per-row using that row's own `ceoRequired` (computed backend-side,
+   _isCeoRequired — never re-derived from the amount client-side), exactly
+   mirroring decideRefundApproval's own decide-time override. */
 const STAGES = {
-  hod: { label: 'HOD', permission: 'refundsApprovalHod', next: 'ceo' },
+  hod: { label: 'HOD', permission: 'refundsApprovalHod', next: 'accounts' },
   ceo: { label: 'CEO', permission: 'refundsApprovalCeo', next: null },
-  accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', next: null }
+  accounts: { label: 'Accounts', permission: 'refundsApprovalAccounts', next: 'ceo' }
 };
+
+/** The stage AFTER `stage` for THIS row — accounts.next is conditional on
+ *  the row's own ceoRequired flag, everything else is the static STAGES
+ *  map. Mirrors refunds.service.js's decideRefundApproval exactly. */
+function nextStageFor(stage, row) {
+  if (stage === 'accounts') return row?.ceoRequired ? 'ceo' : null;
+  return STAGES[stage].next;
+}
 
 function Link({ url }) {
   if (!url) return <span>—</span>;
@@ -49,11 +58,17 @@ const BASE_HEADERS = [
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];
+const ACCOUNTS_AUDIT_HEADERS = ['Accounts Remarks', 'Accounts Timestamp', 'Accounts Approver Email'];
 
 function tableHeadersForTab(tab) {
   return [
     ...BASE_HEADERS,
+    // HOD's tab has neither (it's first); Accounts' tab shows HOD's own
+    // decision; CEO's tab shows BOTH HOD's and Accounts' — same "show every
+    // prior stage's audit trail, not just the immediately-previous one"
+    // reasoning as the review card's own prior-stage section below.
     ...(tab !== 'hod' ? HOD_AUDIT_HEADERS : []),
+    ...(tab === 'ceo' ? ACCOUNTS_AUDIT_HEADERS : []),
     'Container No', 'Client Name', 'Off-Lease ID'
   ];
 }
@@ -69,7 +84,7 @@ function tableHeadersForTab(tab) {
  */
 export function RefundsApprovalPage() {
   const { canAct } = usePermission();
-  const availableTabs = ['hod', 'ceo'].filter((s) => canAct(STAGES[s].permission));
+  const availableTabs = ['hod', 'accounts', 'ceo'].filter((s) => canAct(STAGES[s].permission));
   const canApprove = availableTabs.length > 0;
 
   const { data, loading, error, reload } = useAsync(() => (canApprove ? fetchRefunds() : Promise.resolve({ headers: [], data: [] })), [canApprove]);
@@ -97,9 +112,10 @@ export function RefundsApprovalPage() {
 
   const openDecision = (row, stage, decision) => {
     setDecisionError('');
+    const nextStage = nextStageFor(stage, row);
     setDecisionTarget({
       rowNum: row._rowNum, stage, decision, invoiceNumber: row.invoiceNumber,
-      nextStage: STAGES[stage].next, isFinalStage: !STAGES[stage].next
+      nextStage, isFinalStage: !nextStage
     });
   };
   const handleDecisionSubmit = async (remarks) => {
@@ -124,7 +140,7 @@ export function RefundsApprovalPage() {
 
   return (
     <>
-      <PageHeader title="Refunds Approval" subtitle="HOD / CEO approval queue" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
+      <PageHeader title="Refunds Approval" subtitle="HOD / Accounts / CEO approval queue" actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>} />
 
       {!canApprove ? (
         <Card><div className={styles.viewOnly}>You don't have any Refunds approval permission. Ask an admin to grant it via Roles & Access.</div></Card>
@@ -164,13 +180,21 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>Submitted By</span><span>{reviewRow.userEmail}</span></div>
                     </div>
 
-                    {/* HOD's own decision — shown once CEO is reviewing, so
-                        they have the prior stage's context. */}
+                    {/* Every PRIOR stage's own decision — shown so whoever is
+                        reviewing now has that context: Accounts sees HOD's,
+                        CEO sees both HOD's and Accounts'. */}
                     {reviewStage !== 'hod' && (
                       <div className={styles.grid3} style={{ marginTop: 14 }}>
                         <div className={styles.field}><span className={styles.label}>HOD Remarks</span><span>{reviewRow.hodRemarks || '—'}</span></div>
                         <div className={styles.field}><span className={styles.label}>HOD Timestamp</span><span>{reviewRow.hodDate || '—'}</span></div>
                         <div className={styles.field}><span className={styles.label}>HOD Approver Email</span><span>{reviewRow.hodApprover || '—'}</span></div>
+                      </div>
+                    )}
+                    {reviewStage === 'ceo' && (
+                      <div className={styles.grid3} style={{ marginTop: 14 }}>
+                        <div className={styles.field}><span className={styles.label}>Accounts Remarks</span><span>{reviewRow.accountsRemarks || '—'}</span></div>
+                        <div className={styles.field}><span className={styles.label}>Accounts Timestamp</span><span>{reviewRow.accountsDate || '—'}</span></div>
+                        <div className={styles.field}><span className={styles.label}>Accounts Approver Email</span><span>{reviewRow.accountsApprover || '—'}</span></div>
                       </div>
                     )}
 
@@ -230,6 +254,11 @@ export function RefundsApprovalPage() {
                     <td key="hr">{r.hodRemarks || '—'}</td>,
                     <td key="hd">{r.hodDate || '—'}</td>,
                     <td key="ha">{r.hodApprover || '—'}</td>
+                  ] : []),
+                  ...(effectiveTab === 'ceo' ? [
+                    <td key="acr">{r.accountsRemarks || '—'}</td>,
+                    <td key="acd">{r.accountsDate || '—'}</td>,
+                    <td key="aca">{r.accountsApprover || '—'}</td>
                   ] : []),
                   <td key="cn">{r.containerNo || '—'}</td>,
                   <td key="clnm">{r.clientName || '—'}</td>,
