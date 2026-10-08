@@ -29,6 +29,14 @@ const BAND_OPTIONS = [
   { value: 'upcoming', label: 'Upcoming', icon: 'clock', tint: 'warn' }
 ];
 
+// The Ageing filter dropdown — explicit request 2026-10-08 ("add the warning
+// filter"): adds a direct "Warning" option alongside Overdue/Upcoming, same
+// as the Upcoming scorecard's own Warning footnote button already filters to
+// (band === 'warning', already supported by the filtering logic below) —
+// just reachable straight from the dropdown too now. Scorecards above still
+// render from BAND_OPTIONS only, unchanged — this doesn't add a third card.
+const BAND_FILTER_OPTIONS = [...BAND_OPTIONS, { value: 'warning', label: 'Warning' }];
+
 const BAND_LABEL = { overdue: 'Overdue', critical: 'Critical', warning: 'Warning', safe: 'Safe' };
 
 /** Backend only classifies "overdue" as one band (days < 0) — the 30d/60d
@@ -495,7 +503,7 @@ export function LeaseExpiryPage() {
               <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
               <FilterBar
                 filters={[
-                  { key: 'band', label: 'Ageing', options: BAND_OPTIONS, value: band, onChange: handleBandChange },
+                  { key: 'band', label: 'Ageing', options: BAND_FILTER_OPTIONS, value: band, onChange: handleBandChange },
                   ...(salePersonColIdx >= 0 && salePersonOptions.length
                     ? [{ key: 'salePerson', label: 'Sale Person', options: salePersonOptions, value: salePerson, onChange: handleSalePersonChange }]
                     : [])
