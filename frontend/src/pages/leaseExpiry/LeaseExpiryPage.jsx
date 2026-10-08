@@ -30,12 +30,13 @@ const BAND_OPTIONS = [
 ];
 
 // The Ageing filter dropdown — explicit request 2026-10-08 ("add the warning
-// filter"): adds a direct "Warning" option alongside Overdue/Upcoming, same
-// as the Upcoming scorecard's own Warning footnote button already filters to
-// (band === 'warning', already supported by the filtering logic below) —
-// just reachable straight from the dropdown too now. Scorecards above still
-// render from BAND_OPTIONS only, unchanged — this doesn't add a third card.
-const BAND_FILTER_OPTIONS = [...BAND_OPTIONS, { value: 'warning', label: 'Warning' }];
+// filter", then "add the critical"): adds Warning and Critical options
+// alongside Overdue/Upcoming, same bands the Upcoming scorecard's own
+// footnote buttons already filter to (band === 'warning'/'critical', already
+// supported by the filtering logic below) — just reachable straight from the
+// dropdown too now. Scorecards above still render from BAND_OPTIONS only,
+// unchanged — this doesn't add extra cards.
+const BAND_FILTER_OPTIONS = [...BAND_OPTIONS, { value: 'critical', label: 'Critical' }, { value: 'warning', label: 'Warning' }];
 
 const BAND_LABEL = { overdue: 'Overdue', critical: 'Critical', warning: 'Warning', safe: 'Safe' };
 
