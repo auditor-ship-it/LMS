@@ -1,0 +1,21 @@
+name: "🔑 Access — login, role or permission"
+description: Login problems or a request for a role / approver right.
+title: "[ACCESS] "
+labels: ["type:access", "human-only"]
+body:
+  - type: input
+    id: user
+    attributes:
+      label: User name and email
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: What access is needed and why
+    validations:
+      required: true
+  - type: input
+    id: approver
+    attributes:
+      label: Approved by (process owner)
