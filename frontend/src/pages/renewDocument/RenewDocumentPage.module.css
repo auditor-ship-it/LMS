@@ -47,6 +47,14 @@
 .bulkCount { font-size: 13px; font-weight: 700; color: var(--text); margin-right: auto; }
 
 .clickCell { cursor: pointer; }
+
+/* Same table format as Lease Expiry's / Verify Lease's lists (explicit
+   request 2026-10-08): roomier rows + zebra striping. Shared between this
+   page and ApprovalPendingPage.jsx, which both import this module. */
+.vTable th,
+.vTable td { padding: 14px 16px; }
+.vTable tbody tr:nth-child(even) td { background: var(--surface-2); }
+.vTable tbody tr:nth-child(even):hover td { background: var(--line); }
 .backBtn { margin-bottom: 16px; }
 
 .detailCard {

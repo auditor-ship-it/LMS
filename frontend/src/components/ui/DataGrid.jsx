@@ -37,7 +37,15 @@ export function DataGrid({
      sticky at the top of the wrap. Without a vertical scrollport, sticky
      headers never activate (overflow-x alone still creates a scroll
      container that traps sticky within an ever-growing wrap). */
-  bodyMaxHeight
+  bodyMaxHeight,
+  /* Opt-in, one entry per `headers` column (any CSS width, e.g. '160px' or
+     '2fr' won't work here — table <col> takes a length/percentage, not a
+     fr unit — so use px or %). Only meaningful with a caller that also sets
+     table-layout: fixed (e.g. via `className`): fixed layout otherwise
+     divides the table equally across every column regardless of content,
+     which starves a column like "Customer Name" to the same width as
+     "PO PDF". Omit to leave sizing exactly as before (equal division). */
+  colWidths
 }) {
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
   // The real header row stays visible while loading — it's context the user
@@ -54,6 +62,17 @@ export function DataGrid({
       style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}
     >
       <table className={`${styles.table} ${className}`}>
+        {colWidths && (
+          <colgroup>
+            {/* Fixed px, not '1%': under table-layout: fixed a column this
+                narrow has no room left once a caller pads every cell (see
+                e.g. LeaseExpiryPage's own wrapTable rule) — the checkbox
+                itself overflowed into the next column's text at '1%'. */}
+            {selectable && <col style={{ width: '44px' }} />}
+            {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
+            {renderActions && <col style={{ width: '44px' }} />}
+          </colgroup>
+        )}
         <thead>
           <tr>
             {selectable && (

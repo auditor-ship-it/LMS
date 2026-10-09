@@ -176,22 +176,48 @@
    being overdue — names which one, since the band alone (Safe) doesn't say. */
 .validSourceNote { font-size: 10.5px; font-weight: 600; color: var(--text-3); white-space: nowrap; }
 
-/* Fits every column within the screen width — no horizontal scrollbar.
-   table-layout: fixed divides the width evenly across columns; unlike the
-   ellipsis-truncation approach, long values wrap to a second line within the
-   cell instead of being hidden — rows just get taller when needed. */
+.backBtn { margin-bottom: 16px; }
+
+/* Redone against a reference UI, explicit request 2026-10-08: one line per
+   row (ellipsis, not wrap — a cut-off value is still there on hover via the
+   cell's own `title`, and a click always opens the full detail), generous
+   row height, no vertical rules — a calmer, airier table than the bordered
+   grid tried first. table-layout: fixed still keeps the whole thing inside
+   the card's width with no horizontal scrollbar. */
 .wrapTable { table-layout: fixed; width: 100%; }
 .wrapTable th,
-.wrapTable td {
-  white-space: normal;
-  word-break: break-word;
-}
-.backBtn { margin-bottom: 16px; }
+.wrapTable td { padding: 14px 16px; }
+/* The select checkbox's own cell (always first, when present) is narrow and
+   holds nothing but the checkbox — the same 16px side padding every other
+   (text-bearing) cell gets left it no room, overflowing the checkbox into
+   Container No's text. */
+.wrapTable th:first-child,
+.wrapTable td:first-child { padding-left: 10px; padding-right: 10px; }
+.truncateCell { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Container No carries more weight than the rest — it's the row's identity,
+   same as every detail/record page in this app leads with it. Targeted
+   directly on the cell (not :first-child) because the row-select checkbox,
+   when present, is the actual first <td>. */
+.containerCell { font-weight: 700; }
+/* Zebra striping — explicit request 2026-10-08, back after it was dropped
+   in the reference-matched pass. */
+.wrapTable tbody tr:nth-child(even) td { background: var(--surface-2); }
+.wrapTable tbody tr:nth-child(even):hover td { background: var(--line); }
+
+/* Explicit request 2026-10-08: no underline — bold labels only. The coloured
+   tone is still passed into ColHeader (tone-coded with the detail panel's
+   groups), but every tone now just renders bold text; no per-tone rule
+   needed. */
+.colHeader { font-weight: 800; }
 
 .detailCard {
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  overflow: hidden;
+  /* NOT overflow: hidden — that would make .detailFooter's `position: sticky`
+     below stick to the top of this (non-scrolling) box instead of to the
+     page's own scroll, pinning it at the wrong spot instead of following the
+     viewport. The header/footer round their own corners instead to still
+     look clipped. */
 }
 .detailHeader {
   display: flex;
@@ -202,27 +228,89 @@
   padding: 16px 18px;
   background: var(--surface-2);
   border-bottom: 1px solid var(--line);
+  border-radius: var(--r-md) var(--r-md) 0 0;
 }
 .detailTitle { font-family: var(--f-display); font-size: 17px; font-weight: 800; color: var(--text); margin: 0; }
 
-.detailGrid {
+/* One card per field group (Identity / Dates & Validity / Documents / Sales
+   / Other) — explicit request 2026-10-08: readable, categorized, colour-
+   coded, rather than one long flat grid of every column in sheet order.
+   Side by side (not stacked) so grouping doesn't add scroll height — on a
+   normal screen this fits in about the same vertical space the old single
+   grid did. */
+.groupRow {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px 20px;
-  padding: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  /* align-items: start — the actual bug behind "awkward": grid's default
+     (stretch) forced every card to match the tallest one in its row, so a
+     3-field Documents card and a 1-field Sales card both stretched into a
+     half-empty box next to a packed 7-field Identity card. Each card now
+     sizes to its own content. */
+  align-items: start;
+  gap: 10px;
+  padding: 14px;
 }
-.detailField { display: flex; flex-direction: column; gap: 3px; }
-.detailLabel { font-family: var(--f-mono); font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-3); }
-.detailValue { font-size: 13px; color: var(--text); font-weight: 600; }
+.group { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.groupLabel {
+  padding: 6px 12px;
+  font-family: var(--f-display);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.toneBlue .groupLabel { background: color-mix(in srgb, var(--accent) 10%, var(--surface)); color: var(--accent); }
+.toneAmber .groupLabel { background: var(--warn-bg); color: var(--warn-text, #92610c); }
+.toneViolet .groupLabel { background: color-mix(in srgb, #8b5cf6 12%, var(--surface)); color: #6d28d9; }
+.toneGreen .groupLabel { background: var(--success-bg); color: var(--success-text, var(--success)); }
+.toneNeutral .groupLabel { background: var(--surface-2); color: var(--text-2); }
 
+/* Two fields per row (explicit request 2026-10-08: real dividers, not the
+   dashed rule tried before) — a solid line under each full row, so a 7-field
+   group is 4 rows tall instead of 7, not one column of hairline-separated
+   fields. */
+.detailGrid { display: flex; flex-direction: column; padding: 4px 14px; }
+.fieldRow { display: flex; gap: 16px; padding: 9px 0; border-top: 1px solid var(--line); }
+.fieldRow:first-child { padding-top: 9px; border-top: none; }
+.detailField { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-left: 14px; border-left: 1px solid var(--line); }
+.detailField:first-child { padding-left: 0; border-left: none; }
+.detailLabel { font-family: var(--f-mono); font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-3); }
+.detailValue { font-size: 12.5px; color: var(--text); font-weight: 600; word-break: break-word; }
+
+/* Sticky — the action buttons (Renew/Off-Lease/Renew via Sales CRM) stay
+   pinned to the bottom of the viewport while the fields above scroll, rather
+   than requiring a scroll down past every group just to reach them. */
 .detailFooter {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
   padding: 14px 18px;
   border-top: 1px solid var(--line);
+  border-radius: 0 0 var(--r-md) var(--r-md);
   background: var(--surface-2);
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  box-shadow: 0 -4px 10px rgba(15, 23, 42, 0.06);
 }
 .viewOnlyIcon { font-size: 12.5px; font-weight: 600; color: var(--text-3); }
+
+/* The status note — an icon pill + text, filling the left side of the
+   footer the buttons don't use, instead of plain text crowded up against
+   them with nothing to tell the two apart. */
+.footerNote { display: flex; min-width: 0; }
+.footerNoteInner { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.footerNoteIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+}

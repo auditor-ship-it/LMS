@@ -54,6 +54,60 @@ function overdueMagnitudeBucket(item) {
 // Kept out of the compact table view and shown only in the row detail panel.
 const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle|po)$/i;
 
+/* The detail panel's fields, grouped by what they're about rather than shown
+   as one flat grid — explicit request 2026-10-08. Matched by header text
+   (case-insensitive), same column-agnostic approach DETAIL_ONLY_HEADERS
+   above already uses, since the sheet's own header set/order isn't fixed
+   here. A header that matches nothing lands in "Other" rather than being
+   dropped, so a newly added column is never silently hidden. */
+const FIELD_GROUPS = [
+  { key: 'identity', label: 'Identity', tone: 'blue', test: /^(container no|order no|customer name|size|type|location|city)$/i },
+  { key: 'dates', label: 'Dates & Validity', tone: 'amber', test: /^(deployed date|agreement valid upto|po validity|billing cycle|days left)$/i },
+  { key: 'documents', label: 'Documents', tone: 'violet', test: /(pdf|^po$)/i },
+  { key: 'sales', label: 'Sales', tone: 'green', test: /^sale person$/i }
+];
+function fieldGroupFor(header) {
+  const h = String(header || '').trim();
+  return FIELD_GROUPS.find((g) => g.test.test(h))?.key || 'other';
+}
+/** Group key ('identity'/'dates'/...) -> its tone ('blue'/'amber'/...). */
+function toneForHeader(header) {
+  const h = String(header || '').trim();
+  return FIELD_GROUPS.find((g) => g.test.test(h))?.tone || 'neutral';
+}
+
+/* A table header cell tinted by its field group — same tones as the detail
+   panel's cards (blue/amber/violet/green/neutral), so the list and the
+   record view read as one colour language rather than two different ones. */
+/* Container No, when a row carries more than one (comma-joined, no space —
+   the same container recurring across orders) — "TITU9230980,TITU9231099"
+   reads as one run-together token with nowhere sane to wrap. Explicit
+   request 2026-10-08: this column is never truncated (unlike the rest of the
+   row — see .truncateCell / tableColWidths), so this just adds a space after
+   the comma for readability; the full value is always on screen, not only
+   via the cell's `title`. */
+function ContainerCell({ value }) {
+  const s = value == null ? '' : String(value).trim();
+  return s ? s.replace(/,(?=\S)/g, ', ') : '—';
+}
+
+/** The detail footer's status line — an icon in a soft circle + text, instead
+ *  of plain grey text sitting next to the action buttons with no visual
+ *  weight of its own. */
+function FooterNote({ icon, text }) {
+  return (
+    <span className={styles.footerNoteInner}>
+      <span className={styles.footerNoteIcon}><Icon name={icon} size="sm" /></span>
+      {text}
+    </span>
+  );
+}
+
+function ColHeader({ label, tone }) {
+  const cap = tone.charAt(0).toUpperCase() + tone.slice(1);
+  return <span className={`${styles.colHeader} ${styles[`hdr${cap}`]}`}>{label}</span>;
+}
+
 /**
  * Lease Expiry — deployed containers approaching/past their lease expiry
  * date. Backed by GET /expiry?filter=pending — `band`/`daysLeft` are
@@ -136,6 +190,24 @@ export function LeaseExpiryPage() {
     [visibleColIdx, headers]
   );
   const tableHeaders = tableColIdx.map((i) => headers[i]);
+  /* Proportions (table-layout: fixed treats these as ratios of the table's
+     own width, not literal minimums — see DataGrid's own colWidths doc
+     comment), not literal pixel budgets: Container No and Customer Name get
+     real room instead of the same 1/13th share as "PO PDF". Explicit
+     request 2026-10-08 — Container No was ellipsis-truncating even at 11
+     characters once there were enough other columns. */
+  const tableColWidths = useMemo(() => [
+    ...tableColIdx.map((ci) => {
+      const h = String(headers[ci] || '').trim().toLowerCase();
+      if (h === 'container no') return '170px';
+      if (h === 'customer name') return '200px';
+      return '110px';
+    }),
+    '90px', // Ageing
+    '110px', // Days Left
+    '130px', // Renewal Status
+    '140px' // Remarks
+  ], [tableColIdx, headers]);
 
   /* Located by header text, not a fixed index -- "Sale Person" is a
      CRM-resolved column expiry.service.js adds to the displayed headers,
@@ -542,8 +614,15 @@ export function LeaseExpiryPage() {
 
             <DataGrid
               className={styles.wrapTable}
+              colWidths={tableColWidths}
               bodyMaxHeight="min(62vh, calc(100vh - 340px))"
-              headers={[...tableHeaders, 'Ageing', 'Days Left', 'Renewal Status', 'Remarks']}
+              headers={[
+                ...tableColIdx.map((ci) => <ColHeader key={ci} label={headers[ci]} tone={toneForHeader(headers[ci])} />),
+                <ColHeader key="ageing" label="Ageing" tone="amber" />,
+                <ColHeader key="days" label="Days Left" tone="amber" />,
+                <ColHeader key="renewal" label="Renewal Status" tone="blue" />,
+                <ColHeader key="remarks" label="Remarks" tone="neutral" />
+              ]}
               rows={pageRows}
               rowKey={(r) => r._idx}
               loading={loading}
@@ -556,12 +635,17 @@ export function LeaseExpiryPage() {
               emptyMessage="No pending lease expiries"
               renderRow={(values, item) => [
                 ...tableColIdx.map((ci) => (
-                  <td key={ci} className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
-                    {renderCellValue(values[ci])}
+                  <td
+                    key={ci}
+                    className={`${styles.clickCell}${ci === 0 ? ` ${styles.containerCell}` : ` ${styles.truncateCell}`}`}
+                    title={String(values[ci] ?? '').trim() || undefined}
+                    onClick={() => setSelectedIdx(item._idx)}
+                  >
+                    {ci === 0 ? <ContainerCell value={values[ci]} /> : renderCellValue(values[ci])}
                   </td>
                 )),
                 <td key="band" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
-                  <StatusBadge status={BAND_LABEL[item.band] || '—'} />
+                  <StatusBadge dot status={BAND_LABEL[item.band] || '—'} />
                 </td>,
                 <td key="days" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
                   {formatDays(item.daysLeft)}
@@ -570,7 +654,7 @@ export function LeaseExpiryPage() {
                   )}
                 </td>,
                 <td key="renewalStatus" className={styles.clickCell} onClick={() => setSelectedIdx(item._idx)}>
-                  {item.actionStatus ? <StatusBadge status={item.actionStatus} /> : '—'}
+                  {item.actionStatus ? <StatusBadge dot status={item.actionStatus} /> : '—'}
                 </td>,
                 <td key="remark" className={`${styles.clickCell} ${styles.remarkTd}`} onClick={() => setSelectedIdx(item._idx)}>
                   {item.remark
@@ -666,22 +750,52 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, onBack
           </div>
         </div>
 
-        <div className={styles.detailGrid}>
-          {visibleColIdx.map((ci) => (
-            <div key={ci} className={styles.detailField}>
-              <div className={styles.detailLabel}>{headers[ci] || `Column ${ci + 1}`}</div>
-              <div className={styles.detailValue}>{renderCellValue(item.row[ci])}</div>
-            </div>
-          ))}
-          <div className={styles.detailField}>
-            <div className={styles.detailLabel}>Days Left</div>
-            <div className={styles.detailValue}>
-              {formatDays(item.daysLeft)}
-              {validSourceNote(item.validSource) && (
-                <span className={styles.validSourceNote}> &middot; {validSourceNote(item.validSource)}</span>
-              )}
-            </div>
-          </div>
+        <div className={styles.groupRow}>
+          {FIELD_GROUPS.concat([{ key: 'other', label: 'Other', tone: 'neutral' }]).map((g) => {
+            const entries = visibleColIdx
+              .filter((ci) => fieldGroupFor(headers[ci]) === g.key)
+              .map((ci) => ({ key: ci, label: headers[ci] || `Column ${ci + 1}`, value: renderCellValue(item.row[ci]) }));
+            // "Days Left" isn't a sheet column — it's computed — so it joins
+            // the Dates group here rather than via fieldGroupFor's text match.
+            if (g.key === 'dates') {
+              entries.push({
+                key: 'daysLeft',
+                label: 'Days Left',
+                value: (
+                  <>
+                    {formatDays(item.daysLeft)}
+                    {validSourceNote(item.validSource) && (
+                      <span className={styles.validSourceNote}> &middot; {validSourceNote(item.validSource)}</span>
+                    )}
+                  </>
+                )
+              });
+            }
+            if (!entries.length) return null;
+            // Two fields per row, with a divider line under each full row —
+            // half the height of one column, and the divider always spans
+            // the row's full width (a per-field divider alone reads oddly
+            // once two sit side by side).
+            const fieldRows = [];
+            for (let i = 0; i < entries.length; i += 2) fieldRows.push(entries.slice(i, i + 2));
+            return (
+              <div key={g.key} className={`${styles.group} ${styles[`tone${g.tone[0].toUpperCase()}${g.tone.slice(1)}`]}`}>
+                <div className={styles.groupLabel}>{g.label}</div>
+                <div className={styles.detailGrid}>
+                  {fieldRows.map((row, i) => (
+                    <div key={i} className={styles.fieldRow}>
+                      {row.map((f) => (
+                        <div key={f.key} className={styles.detailField}>
+                          <div className={styles.detailLabel}>{f.label}</div>
+                          <div className={styles.detailValue}>{f.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         <div className={styles.remarkBlock}>
@@ -690,25 +804,27 @@ function LeaseExpiryDetail({ item, headers, visibleColIdx, total, canAct, onBack
 
         <div className={styles.detailFooter}>
           {canAct ? (
-            <div className={styles.actionsCell}>
-              {inProgress ? (
-                <span className={styles.viewOnlyIcon}>Sent for renewal — continue from Renew &amp; Document</span>
-              ) : dueSoon ? (
-                <Button size="lg" variant="primary" onClick={onRenew}>Renew</Button>
-              ) : (
-                <span className={styles.viewOnlyIcon}>Not due yet — Renew reappears within 15 days of expiry ({formatDays(item.daysLeft)} left)</span>
-              )}
-              <Button size="lg" variant="secondary" onClick={onOffLease}>Off-Lease</Button>
-              {/* Separate from the internal Renew above — this opens the
-                  Sales CRM's OWN renewal-entry form (Grade/Rate/Type/
-                  Product/Addendum) for the salesperson to log the deal
-                  there. Available regardless of the 15-day/in-progress
-                  gating above: a company can legitimately be re-negotiated
-                  well ahead of the container's own expiry window. */}
-              {onRenewViaSalesCrm && (
-                <Button size="lg" variant="secondary" onClick={onRenewViaSalesCrm}>Renew via Sales CRM</Button>
-              )}
-            </div>
+            <>
+              <div className={styles.footerNote}>
+                {inProgress && <FooterNote icon="check-circle" text="Sent for renewal — continue from Renew & Document" />}
+                {!inProgress && !dueSoon && (
+                  <FooterNote icon="clock" text={`Not due yet — Renew reappears within 15 days of expiry (${formatDays(item.daysLeft)} left)`} />
+                )}
+              </div>
+              <div className={styles.actionsCell}>
+                {!inProgress && dueSoon && <Button size="lg" variant="primary" onClick={onRenew}>Renew</Button>}
+                <Button size="lg" variant="secondary" onClick={onOffLease}>Off-Lease</Button>
+                {/* Separate from the internal Renew above — this opens the
+                    Sales CRM's OWN renewal-entry form (Grade/Rate/Type/
+                    Product/Addendum) for the salesperson to log the deal
+                    there. Available regardless of the 15-day/in-progress
+                    gating above: a company can legitimately be re-negotiated
+                    well ahead of the container's own expiry window. */}
+                {onRenewViaSalesCrm && (
+                  <Button size="lg" variant="secondary" onClick={onRenewViaSalesCrm}>Renew via Sales CRM</Button>
+                )}
+              </div>
+            </>
           ) : (
             <span className={styles.viewOnlyIcon}>View Only</span>
           )}

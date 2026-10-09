@@ -13,3 +13,9 @@
 .warn { background: var(--warn-bg); color: var(--warn); }
 .info { background: var(--info-bg); color: var(--info); }
 .neutral { background: var(--surface-2); color: var(--text-2); }
+
+/* dot variant — softer pill (lighter background, no bold weight) with a small
+   leading status dot, closer to the lighter "Pending"/"Success" pills a
+   dense order-style table reads best with. */
+.dotted { font-weight: 600; background: color-mix(in srgb, currentColor 14%, var(--surface)); }
+.dot { width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; flex: none; }
