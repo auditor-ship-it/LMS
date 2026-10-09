@@ -30,6 +30,16 @@
 }
 
 .clickCell { cursor: pointer; }
+
+/* Same table format as Lease Expiry's list (explicit request 2026-10-08):
+   roomier rows + zebra striping, for the same calmer, easier-to-track-across
+   read on a table of pending records. No column-width/truncation changes
+   here — this table's values are short enough that the wrap/ellipsis issue
+   Lease Expiry hit doesn't apply. */
+.vTable th,
+.vTable td { padding: 14px 16px; }
+.vTable tbody tr:nth-child(even) td { background: var(--surface-2); }
+.vTable tbody tr:nth-child(even):hover td { background: var(--line); }
 .backBtn { margin-bottom: 16px; }
 
 .detailCard {

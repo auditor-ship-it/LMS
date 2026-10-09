@@ -451,6 +451,7 @@ export function RenewDocumentPage() {
             )}
 
             <DataGrid
+              className={styles.vTable}
               /* No 'Action' header here: DataGrid appends its own 'Actions'
                  column whenever renderActions is passed. Adding one manually
                  gave two headers for one cell, so the button sat under

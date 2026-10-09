@@ -170,6 +170,7 @@ export function VerifyLeasePage() {
             </div>
             <p className={styles.hint}>{filtered.length} of {items.length} pending verification{items.length === 1 ? '' : 's'} · click a row for details</p>
             <DataGrid
+              className={styles.vTable}
               headers={tableHeaders}
               rows={pageRows}
               loading={loading}

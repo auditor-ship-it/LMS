@@ -13,9 +13,18 @@ const EXTRA_FIELDS = [
   ['Submitted Date', (it) => formatActionTimestamp(it.renewalSubmittedDate)],
   ['Submitted By', (it) => it.submittedBy],
   ['Draft Renewed Date', (it) => it.draftRenewedDate && formatActionTimestamp(it.draftRenewedDate)],
+  /* REVERTED 2026-10-09, same day: falling back to the record's existing
+     "Agreement Valid Upto" when the draft had no valid-till of its own
+     looked right in the abstract but was actively wrong on a real row — the
+     OLD agreement's expiry can predate the NEW term's own Draft Renewed
+     Date (a renewal submitted after the old term already lapsed), so the
+     fallback displayed a "valid till" date earlier than the term it was
+     supposedly describing. Blank means exactly what it says: not entered
+     yet. */
   ['Draft Valid Till', (it) => it.draftValidTill && formatActionTimestamp(it.draftValidTill)],
   ['Draft Signed Copy', (it) => it.draftSignedCopyUrl],
   ['Draft PO No', (it) => it.draftPoNo],
+  ['Draft PO Validity', (it) => it.draftPoValidity],
   ['Draft PO PDF', (it) => it.draftPoFileUrl],
   ['Draft Billing Cycle', (it) => it.draftBillingCycle]
 ];

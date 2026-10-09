@@ -100,7 +100,8 @@ export function ApprovalPendingPage() {
 
       <Card>
         <DataGrid
-          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO PDF', 'Draft Billing Cycle']}
+          className={styles.vTable}
+          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO Validity', 'Draft PO PDF', 'Draft Billing Cycle']}
           rows={rows}
           loading={loading}
           error={error}
@@ -121,6 +122,7 @@ export function ApprovalPendingPage() {
             // just never rendered here.
             <td key="dsc">{renderCellValue(item.draftSignedCopyUrl)}</td>,
             <td key="dpo">{item.draftPoNo || '—'}</td>,
+            <td key="dpoval">{item.draftPoValidity || '—'}</td>,
             <td key="dpopdf">{renderCellValue(item.draftPoFileUrl)}</td>,
             <td key="dbc">{item.draftBillingCycle || '—'}</td>
           ]}

@@ -26,9 +26,17 @@ const LABEL = {
   'documents pending': 'Renew Pending'
 };
 
-export function StatusBadge({ status }) {
+/** `dot`: a small leading status dot instead of a filled pill — opt-in (default
+ *  off) so every existing caller keeps its current look; pass it where that
+ *  reads better against a dense table row. */
+export function StatusBadge({ status, dot = false }) {
   const key = String(status || '').trim().toLowerCase();
   const color = MAP[key] || 'neutral';
   const label = LABEL[key] || status || '—';
-  return <span className={`${styles.badge} ${styles[color]}`}>{label}</span>;
+  return (
+    <span className={`${styles.badge} ${styles[color]} ${dot ? styles.dotted : ''}`}>
+      {dot && <i className={styles.dot} aria-hidden="true" />}
+      {label}
+    </span>
+  );
 }
