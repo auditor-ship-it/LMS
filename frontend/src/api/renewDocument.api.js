@@ -16,20 +16,20 @@ export const getRenewDocumentData = (filter = 'documents') =>
  *  Renew & Document's own Pending list, until Pushpa Shetty decides. See
  *  completeDocStage's own doc comment on the backend. */
 export const completeRenewalDocStage = ({
-  containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum
+  containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue
 }) =>
   apiClient.post('/expiry/renewal/complete-document-stage', {
-    containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum
+    containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue
   }).then((r) => r.data.result);
 
 /** POST /api/expiry/renewal/save-document-draft — "Save": persists whatever
  *  was entered as a draft, the record stays in Documents Pending, nothing
  *  required. See saveRenewalDraft's doc comment on the backend. */
 export const saveRenewalDraft = ({
-  containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum
+  containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue
 }) =>
   apiClient.post('/expiry/renewal/save-document-draft', {
-    containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum
+    containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue
   }).then((r) => r.data.result);
 
 /** GET /api/expiry?filter=approval — renewals submitted, awaiting Pushpa

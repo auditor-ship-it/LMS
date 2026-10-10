@@ -10,6 +10,7 @@ const MAP = {
   completed: 'ok',
   paid: 'ok',
   rejected: 'bad',
+  'sent back': 'warn',
   overdue: 'bad',
   disputed: 'bad',
   renewed: 'info',

@@ -25,6 +25,7 @@ const EXTRA_FIELDS = [
   ['Draft Signed Copy', (it) => it.draftSignedCopyUrl],
   ['Draft PO No', (it) => it.draftPoNo],
   ['Draft PO Validity', (it) => it.draftPoValidity],
+  ['Draft PO Value', (it) => it.draftPoValue],
   ['Draft PO PDF', (it) => it.draftPoFileUrl],
   ['Draft Billing Cycle', (it) => it.draftBillingCycle]
 ];
@@ -114,6 +115,14 @@ function DecisionSection({ containerNo, rowNum, onDecided }) {
   const [error, setError] = useState('');
 
   const decide = async (decision) => {
+    // Send Back (the 'rejected' decision — it reopens the record in Renew &
+    // Document's own Pending list, not a terminal rejection) NEEDS a remark:
+    // it's the submitter's only way to know what to fix. The label always
+    // said "required to reject"; nothing actually enforced it until now.
+    if (decision === 'rejected' && !remarks.trim()) {
+      setError('Add a remark saying why this is being sent back.');
+      return;
+    }
     setError('');
     setBusy(decision);
     try {
@@ -131,11 +140,11 @@ function DecisionSection({ containerNo, rowNum, onDecided }) {
     <div className={styles.remarksSection}>
       <p className={styles.sectionTitle}>Decision</p>
       <label className={styles.field}>
-        <span className={styles.detailLabel}>Remarks (required to reject)</span>
+        <span className={styles.detailLabel}>Remarks (required to send back)</span>
         <textarea
           className={styles.textarea}
           value={remarks}
-          onChange={(e) => setRemarks(e.target.value)}
+          onChange={(e) => { setRemarks(e.target.value); if (error) setError(''); }}
           rows={4}
           disabled={!!busy}
           placeholder="Add a remark…"
@@ -144,7 +153,11 @@ function DecisionSection({ containerNo, rowNum, onDecided }) {
       {error && <p className={styles.error}>{error}</p>}
       <div className={styles.composerActions}>
         <Button size="sm" variant="primary" loading={busy === 'approved'} disabled={!!busy} onClick={() => decide('approved')}>Approve</Button>
-        <Button size="sm" variant="danger" loading={busy === 'rejected'} disabled={!!busy} onClick={() => decide('rejected')}>Reject</Button>
+        {/* Secondary, not danger — same colour convention Off-Lease's own
+            Send Back uses: this reopens the record for correction, it
+            doesn't terminate anything (unlike a true Reject elsewhere in
+            this app). */}
+        <Button size="sm" variant="secondary" loading={busy === 'rejected'} disabled={!!busy} onClick={() => decide('rejected')}>Send Back</Button>
       </div>
     </div>
   );

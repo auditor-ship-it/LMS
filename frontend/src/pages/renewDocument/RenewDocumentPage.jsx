@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PageHeader, Card, Button, StatCard, SearchBar, Pagination, DataGrid, renderCellValue } from '../../components/ui/index.js';
+import { PageHeader, Card, Button, StatCard, SearchBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -202,6 +202,7 @@ export function RenewDocumentPage() {
         remarks: item.draftRemarks || '',
         poNo: item.draftPoNo || '',
         poValidity: item.draftPoValidity || '',
+        poValue: item.draftPoValue || '',
         billingCycle: item.draftBillingCycle || '',
         submittedDate: item.renewalSubmittedDate || '',
         approvalStatus: item.approvalStatus || '',
@@ -231,6 +232,7 @@ export function RenewDocumentPage() {
       poFileUrl,
       billingCycle: payload.billingCycle,
       poValidity: payload.poValidity,
+      poValue: payload.poValue,
       rowNum
     };
   };
@@ -339,6 +341,7 @@ export function RenewDocumentPage() {
           poFileUrl,
           billingCycle: payload.billingCycle,
           poValidity: payload.poValidity,
+          poValue: payload.poValue,
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
@@ -386,6 +389,7 @@ export function RenewDocumentPage() {
           poFileUrl,
           billingCycle: payload.billingCycle,
           poValidity: payload.poValidity,
+          poValue: payload.poValue,
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE') throw new Error(result);
@@ -456,7 +460,7 @@ export function RenewDocumentPage() {
                  column whenever renderActions is passed. Adding one manually
                  gave two headers for one cell, so the button sat under
                  'Action' and 'Actions' rendered permanently empty. */
-              headers={tableHeaders}
+              headers={[...tableHeaders, 'Status']}
               rows={pageRows}
               loading={loading}
               error={error}
@@ -467,11 +471,19 @@ export function RenewDocumentPage() {
               onToggleRow={toggleRow}
               onToggleAll={toggleAllOnPage}
               rowKey={(r) => r.row?.[0]}
-              renderRow={(values, item) => tableColIdx.map((ci) => (
-                <td key={ci} className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
-                  {renderCellValue(values[ci])}
+              renderRow={(values, item) => [
+                ...tableColIdx.map((ci) => (
+                  <td key={ci} className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
+                    {renderCellValue(values[ci])}
+                  </td>
+                )),
+                // "Sent Back" — explicit request 2026-10-10: visible in the
+                // list itself (what it looked like opening each row to find
+                // out), not only inside the detail modal's own banner.
+                <td key="status" className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
+                  {item.approvalStatus === 'Rejected' ? <StatusBadge status="Sent Back" dot /> : '—'}
                 </td>
-              ))}
+              ]}
               renderActions={(item) => (
                 canActRenew
                   ? <Button size="sm" variant="primary" onClick={() => openDoc(item)}>Update Agreement</Button>

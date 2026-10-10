@@ -126,11 +126,11 @@ export async function sendBackToPending(req, res) {
 
 /** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
 export async function completeRenewalDocStage(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
   res.json({
     result: await expiryService.completeDocStage(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum
+      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
     )
   });
 }
@@ -140,11 +140,11 @@ export async function completeRenewalDocStage(req, res) {
  *  record stays in Documents Pending and nothing required — see
  *  saveRenewalDraft's own doc comment. */
 export async function saveRenewalDraft(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
   res.json({
     result: await expiryService.saveRenewalDraft(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum
+      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
     )
   });
 }
