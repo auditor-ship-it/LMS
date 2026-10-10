@@ -5,7 +5,7 @@ import styles from './Modals.module.css';
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
 
 const EMPTY_FORM = {
-  renewedDate: '', validTill: '', remarks: '', poNo: '', poValidity: '', billingCycle: '',
+  renewedDate: '', validTill: '', remarks: '', poNo: '', poValidity: '', poValue: '', billingCycle: '',
   signedCopy: null, // {base64Data, mimeType, fileName}
   poFile: null
 };
@@ -28,6 +28,7 @@ function formFromDraft(draft) {
     remarks: draft.remarks || '',
     poNo: draft.poNo || '',
     poValidity: toDateInputValue(draft.poValidity),
+    poValue: draft.poValue || '',
     billingCycle: draft.billingCycle || '',
     signedCopy: null,
     poFile: null
@@ -96,12 +97,15 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
           </label>
         )}
 
-        {/* Explicit request 2026-09-29 (approval workflow): Pushpa rejected
-            this one — say why, front and centre, so the submitter isn't
-            wondering why a "completed" Submit is back here to redo. */}
+        {/* Explicit request 2026-09-29 (approval workflow), relabelled
+            2026-10-10 ("Reject" -> "Send Back" — the stored approvalStatus
+            value is still 'Rejected', only the displayed wording changed):
+            Pushpa sent this one back — say why, front and centre, so the
+            submitter isn't wondering why a "completed" Submit is back here
+            to redo. */}
         {!bulk && item?.draft?.approvalStatus === 'Rejected' && (
           <p className={styles.error}>
-            Rejected by Pushpa{item.draft.approvalRemarks ? `: ${item.draft.approvalRemarks}` : ' — no remarks given.'} Fix and Submit again.
+            Sent back by Pushpa{item.draft.approvalRemarks ? `: ${item.draft.approvalRemarks}` : ' — no remarks given.'} Fix and Submit again.
           </p>
         )}
 
@@ -160,10 +164,16 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
           </label>
         </div>
 
-        <label className={styles.field}>
-          <span className={styles.label}>PO Valid Date</span>
-          <input type="date" value={form.poValidity} onChange={set('poValidity')} />
-        </label>
+        <div className={styles.grid2}>
+          <label className={styles.field}>
+            <span className={styles.label}>PO Valid Date</span>
+            <input type="date" value={form.poValidity} onChange={set('poValidity')} />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.label}>PO Value</span>
+            <input type="number" step="any" value={form.poValue} onChange={set('poValue')} placeholder="e.g. 450000" />
+          </label>
+        </div>
 
         <label className={styles.field}>
           <span className={styles.label}>Billing Cycle</span>

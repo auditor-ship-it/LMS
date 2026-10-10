@@ -101,7 +101,7 @@ export function ApprovalPendingPage() {
       <Card>
         <DataGrid
           className={styles.vTable}
-          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO Validity', 'Draft PO PDF', 'Draft Billing Cycle']}
+          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO Validity', 'Draft PO Value', 'Draft PO PDF', 'Draft Billing Cycle']}
           rows={rows}
           loading={loading}
           error={error}
@@ -123,6 +123,7 @@ export function ApprovalPendingPage() {
             <td key="dsc">{renderCellValue(item.draftSignedCopyUrl)}</td>,
             <td key="dpo">{item.draftPoNo || '—'}</td>,
             <td key="dpoval">{item.draftPoValidity || '—'}</td>,
+            <td key="dpoamt">{item.draftPoValue || '—'}</td>,
             <td key="dpopdf">{renderCellValue(item.draftPoFileUrl)}</td>,
             <td key="dbc">{item.draftBillingCycle || '—'}</td>
           ]}
@@ -130,7 +131,12 @@ export function ApprovalPendingPage() {
             canApprove ? (
               <div className={styles.approvalActions}>
                 <Button size="sm" variant="primary" onClick={() => openDecision(item, 'approved')}>Approve</Button>
-                <Button size="sm" variant="danger" onClick={() => openDecision(item, 'rejected')}>Reject</Button>
+                {/* Secondary, not danger — this sends the record back to Renew &
+                    Document's Pending list for correction, it doesn't end the
+                    renewal (same colour convention Off-Lease's own Send Back
+                    uses). The decision value stays 'rejected' — see
+                    ApprovalDecisionModal's own doc comment. */}
+                <Button size="sm" variant="secondary" onClick={() => openDecision(item, 'rejected')}>Send Back</Button>
               </div>
             ) : <span className={styles.viewOnly}>View only</span>
           )}

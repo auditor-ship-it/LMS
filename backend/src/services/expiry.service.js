@@ -504,6 +504,7 @@ export async function getExpiryDataByFilter(filterType, user) {
       item.draftPoFileUrl = safeStr(row[DRAFT_PO_FILE_COL]);
       item.draftBillingCycle = safeStr(row[DRAFT_BILLING_CYCLE_COL]);
       item.draftPoValidity = safeStr(row[DRAFT_PO_VALIDITY_COL]);
+      item.draftPoValue = safeStr(row[DRAFT_PO_VALUE_COL]);
       item.submittedBy = safeStr(row[SUBMITTED_BY_COL]);
     }
     finalData.push(item);
@@ -1094,7 +1095,7 @@ function fmtCellDate(v) {
  *  Agreement/PO PDF columns on SHEETS.DEPLOYED (explicit request: "show
  *  agreement pdf and po pdf offlease"). */
 export function _resolveRenewalColumns(hdrs0) {
-  let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1, poValidityCol = -1;
+  let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1, poValidityCol = -1, poValueCol = -1;
   for (let h = 0; h < hdrs0.length; h++) {
     const hd = String(hdrs0[h] || '').trim().toLowerCase();
     if (agrCol < 0 && hd.indexOf('agreement') !== -1 && hd.indexOf('valid') === -1 &&
@@ -1102,6 +1103,16 @@ export function _resolveRenewalColumns(hdrs0) {
     if (poPdfCol < 0 && hd.indexOf('po') !== -1 && hd.indexOf('pdf') !== -1) poPdfCol = h;
     if (cycleCol < 0 && hd.indexOf('billing') !== -1 && hd.indexOf('cycle') !== -1) cycleCol = h;
     if (poValidityCol < 0 && hd.indexOf('po') !== -1 && hd.indexOf('valid') !== -1) poValidityCol = h;
+    /* PO Value: deliberately excludes any header containing 'draft' — the
+       Draft PO Value column we just added (AY) itself matches 'po'+'value',
+       and without this it could "promote" the draft column into itself
+       rather than genuinely finding no real column. No hardcoded fallback
+       either (unlike the others above): this app has never had a real
+       PO-amount field before, so guessing a column number would risk
+       silently overwriting something unrelated — stays -1 (promotion
+       skipped) until a real "PO ... Value/Amount" column actually exists. */
+    if (poValueCol < 0 && hd.indexOf('draft') === -1 && hd.indexOf('po') !== -1 &&
+      (hd.indexOf('value') !== -1 || hd.indexOf('amount') !== -1)) poValueCol = h;
   }
   for (let h2 = 0; h2 < hdrs0.length; h2++) {
     const hd2 = String(hdrs0[h2] || '').trim().toLowerCase();
@@ -1112,7 +1123,7 @@ export function _resolveRenewalColumns(hdrs0) {
   if (poPdfCol < 0) poPdfCol = 11; // col L fallback
   if (cycleCol < 0) cycleCol = 14; // col O fallback
   if (poValidityCol < 0) poValidityCol = 12; // col M fallback
-  return { agrCol, poCol, poPdfCol, cycleCol, poValidityCol };
+  return { agrCol, poCol, poPdfCol, cycleCol, poValidityCol, poValueCol };
 }
 
 /** Appended 2026-09-28, explicit request — a persistent "when was this
@@ -1149,6 +1160,13 @@ const DRAFT_PO_FILE_COL = 45;       // AT
 const DRAFT_BILLING_CYCLE_COL = 46; // AU
 const DRAFT_PO_VALIDITY_COL = 47;   // AV
 const SUBMITTED_BY_COL = 48;        // AW — who clicked Submit, read back by decideRenewalApproval for the Renewal Log's "Updated By"
+// Deployed column 49 (AX) is DEPLOYED_EMAIL_ID_COL (see its own export below)
+// — AY is the next free column. Explicit request 2026-10-10: shown
+// everywhere (table, detail modal, form) unlike every other Rate/Amount-
+// style field in this app (isRateOrAmountHeader hides those system-wide) —
+// a deliberate exception for this one field, scoped to the specific views
+// that read item.draftPoValue by name, not the generic all-headers dump.
+const DRAFT_PO_VALUE_COL = 50;      // AY
 
 const APPROVAL_COL_HEADERS = {
   [APPROVAL_STATUS_COL]: 'Approval Status',
@@ -1159,7 +1177,8 @@ const APPROVAL_COL_HEADERS = {
   [DRAFT_PO_FILE_COL]: 'Draft PO File URL',
   [DRAFT_BILLING_CYCLE_COL]: 'Draft Billing Cycle',
   [DRAFT_PO_VALIDITY_COL]: 'Draft PO Validity',
-  [SUBMITTED_BY_COL]: 'Submitted By'
+  [SUBMITTED_BY_COL]: 'Submitted By',
+  [DRAFT_PO_VALUE_COL]: 'Draft PO Value'
 };
 async function _ensureApprovalColumnsHeader(hdrs0) {
   const missing = Object.keys(APPROVAL_COL_HEADERS).map(Number).filter((c) => !safeStr(hdrs0[c]).trim());
@@ -1220,7 +1239,7 @@ export async function _ensureDeployedEmailIdHeader() {
  * RENEWAL_SUBMITTED_DATE_COL is stamped, same column Submit also stamps —
  * whichever action ran most recently is what that column shows.
  */
-export async function saveRenewalDraft(containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow) {
+export async function saveRenewalDraft(containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -1246,6 +1265,7 @@ export async function saveRenewalDraft(containerNo, renewedDate, validTill, sign
     if (poFileUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_FILE_COL)}${targetRow}`, values: [[poFileUrl]] });
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_BILLING_CYCLE_COL)}${targetRow}`, values: [[billingCycle]] });
     if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[fmtCellDate(poValidity)]] });
+    if (poValue) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALUE_COL)}${targetRow}`, values: [[poValue]] });
     updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[dmyTime(new Date())]] });
 
     await batchUpdateValues(updates);
@@ -1278,7 +1298,7 @@ export async function saveRenewalDraft(containerNo, renewedDate, validTill, sign
  * awaitingApproval split) — from the submitter's point of view, indistinguishable
  * from "removed from Pending", which is what the request asked for.
  */
-export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow) {
+export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -1311,6 +1331,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_FILE_COL)}${targetRow}`, values: [[poFileUrl || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_BILLING_CYCLE_COL)}${targetRow}`, values: [[billingCycle || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[poValidity ? fmtCellDate(poValidity) : '']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALUE_COL)}${targetRow}`, values: [[poValue || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[stamp]] },
       // A resubmission after a prior Rejection clears that old decision out —
       // it no longer describes the request now being made.
@@ -1411,7 +1432,7 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     }
 
     // Approved — promote the staged draft into the real columns.
-    const { agrCol, poCol, poPdfCol, cycleCol, poValidityCol } = _resolveRenewalColumns(hdrs0);
+    const { agrCol, poCol, poPdfCol, cycleCol, poValidityCol, poValueCol } = _resolveRenewalColumns(hdrs0);
     const [oldAgrCell, oldPoNoCell, oldPoPdfCell] = await Promise.all([
       getRange(SHEETS.DEPLOYED, `${colLetter(agrCol)}${targetRow}:${colLetter(agrCol)}${targetRow}`),
       getRange(SHEETS.DEPLOYED, `${colLetter(poCol)}${targetRow}:${colLetter(poCol)}${targetRow}`),
@@ -1426,12 +1447,17 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     const poFileUrl = safeStr(matchedRow[DRAFT_PO_FILE_COL]);
     const billingCycle = safeStr(matchedRow[DRAFT_BILLING_CYCLE_COL]);
     const poValidity = safeStr(matchedRow[DRAFT_PO_VALIDITY_COL]);
+    const poValue = safeStr(matchedRow[DRAFT_PO_VALUE_COL]);
 
     if (signedCopyUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(agrCol)}${targetRow}`, values: [[signedCopyUrl]] });
     if (poNo) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poCol)}${targetRow}`, values: [[poNo]] });
     if (poFileUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poPdfCol)}${targetRow}`, values: [[poFileUrl]] });
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(cycleCol)}${targetRow}`, values: [[billingCycle]] });
     if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poValidityCol)}${targetRow}`, values: [[poValidity]] });
+    // poValueCol is -1 (no real column found) on most sheets today — see
+    // _resolveRenewalColumns' own doc comment; this simply does nothing
+    // until one exists.
+    if (poValue && poValueCol >= 0) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poValueCol)}${targetRow}`, values: [[poValue]] });
     if (validTillDraft) {
       updates.push({ range: `'${SHEETS.DEPLOYED}'!H${targetRow}`, values: [[validTillDraft]] });
       updates.push({ range: `'${SHEETS.DEPLOYED}'!X${targetRow}`, values: [[validTillDraft]] });
