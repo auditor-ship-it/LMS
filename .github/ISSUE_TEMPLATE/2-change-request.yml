@@ -1,0 +1,40 @@
+name: "💡 Change request (SCR) — new feature or process change"
+description: System Change Request. Nothing is built until the process owner approves.
+title: "[SCR] "
+labels: ["type:scr", "needs-owner-approval"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What must change
+      description: The exact step, field, rule or screen.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The problem or business reason.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who and what else is affected — steps, TATs, approvals, KPIs, other apps.
+  - type: textarea
+    id: solution
+    attributes:
+      label: Suggested solution
+  - type: input
+    id: poc
+    attributes:
+      label: POC (requester / owner)
+    validations:
+      required: true
+  - type: checkboxes
+    id: money
+    attributes:
+      label: Does this touch money, approvals, limits, permissions or Tally?
+      options:
+        - label: "Yes — this is a Class 3 change (human-led, process owner sign-off required)"

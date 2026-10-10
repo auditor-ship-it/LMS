@@ -1,0 +1,12 @@
+# Code owners — reviewers requested automatically on PRs.
+# Replace @auditor-ship-it with a team (e.g. @crystal-org/lease-devs) once the
+# GitHub organisation exists. Class 3 paths must always have a senior owner.
+* @auditor-ship-it
+# Class 3 — approvals, refunds, auth, sheet writers, deploy
+/backend/src/controllers/approve.controller.js @auditor-ship-it
+/backend/src/controllers/refunds.controller.js @auditor-ship-it
+/backend/src/services/refunds.service.js @auditor-ship-it
+/backend/src/middlewares/ @auditor-ship-it
+/backend/src/config/ @auditor-ship-it
+/backend/src/jobs/ @auditor-ship-it
+/.github/ @auditor-ship-it
