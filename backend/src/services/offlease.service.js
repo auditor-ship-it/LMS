@@ -5444,6 +5444,22 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   const leaseInfo = await _findLeaseInfoForContainer(want);
   res.orderNos = leaseInfo.orders.join(', ');
 
+  /* SOURCE, same decision as getOffLeaseCardEnrichment (2026-10-01, see that
+     function's own doc comment): the external FMS dispatch sheet (STAGE-9)
+     carries this container's REAL current transportation order, while
+     _findLeaseInfoForContainer's New Lease scan can return a stale/grouped
+     order from the original multi-container lease record (confirmed live:
+     EMCU5367505 — New Lease groups it with 4 other containers under OR444,
+     but STAGE-9's own dispatch row for this exact container is OR414). This
+     page (Container Lookup / Record) was missed when that fix was applied
+     elsewhere, so it kept showing the lease-level value. Best-effort: keep
+     the lease-level orderNos above as the fallback when STAGE-9 has nothing
+     for this container yet. */
+  try {
+    const stage9Orders = await _lookupStage9OrderNos(containerNo, leaseInfo.clientName);
+    if (stage9Orders.length) res.orderNos = stage9Orders.join(', ');
+  } catch (e) { /* best-effort only — keep the lease-level fallback above */ }
+
   /* Read-only lookup: served from the Mongo mirror, with no
      _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to widen
      the sheet before a WRITE — on this path it only added a Sheets round trip
