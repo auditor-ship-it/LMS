@@ -368,9 +368,21 @@ export async function getExpiryDataByFilter(filterType, user) {
     // Status is no longer 'Pending', so it falls straight back into
     // 'documents' here for the submitter to fix and resubmit.
     const awaitingApproval = isDocsPending && String(row[APPROVAL_STATUS_COL] || '').trim().toLowerCase() === 'pending';
+    // Explicit request: 'documents' must show ONLY records still missing
+    // their Agreement or PO copy — not every 'documents pending'-status row
+    // unconditionally. Before this, a row whose Agreement AND PO had both
+    // already been uploaded via Save (draft) but never pushed through
+    // Submit (which is the only thing that used to change the status cell)
+    // stayed on this list — and in the Renew Pending count — forever, since
+    // nothing here checked the actual document fields. Once BOTH are
+    // present, the record now drops off this list and out of the count
+    // immediately, the same moment it's no longer actually missing anything
+    // — "sent back" already exits via isDocsPending turning false (status
+    // cleared by sendExpiryToPending), unchanged.
+    const missingDocs = !safeStr(row[24]).trim() || !safeStr(row[25]).trim();
     if (filterType === 'pending') include = true;
     else if (filterType === 'renewed') include = (wVal && String(wVal).trim().toLowerCase() === 'renewed');
-    else if (filterType === 'documents') include = isDocsPending && !awaitingApproval;
+    else if (filterType === 'documents') include = isDocsPending && !awaitingApproval && missingDocs;
     else if (filterType === 'approval') include = awaitingApproval;
     // off-lease stages removed
     if (!include) continue;
