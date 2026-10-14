@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PageHeader, Card, Button, StatCard, SearchBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
+import { PageHeader, Card, Button, StatCard, SearchBar, FilterBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -21,6 +21,15 @@ const RESULT_CODE_TEXT = {
   MISSING_PO: 'PO number/file required',
   MISSING_AGR: 'signed agreement copy required'
 };
+
+// Status filter — explicit request: the table's own Status column already
+// distinguishes a row rejected-and-returned by Pushpa (approvalStatus ===
+// 'Rejected', shown as "Sent Back") from one never submitted yet (shown as
+// '—'); this just lets that same distinction be filtered on.
+const STATUS_FILTER_OPTIONS = [
+  { value: 'sentBack', label: 'Sent Back' },
+  { value: 'awaitingUpload', label: 'Awaiting Upload' }
+];
 
 /**
  * Runs `fn` for each item ONE AT A TIME, in the same { status, value|reason }
@@ -103,6 +112,7 @@ export function RenewDocumentPage() {
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 250);
+  const [statusFilter, setStatusFilter] = useState('');
   const [selectedContainer, setSelectedContainer] = useState(null);
 
   const [docItem, setDocItem] = useState(null);
@@ -153,9 +163,12 @@ export function RenewDocumentPage() {
 
   const filtered = useMemo(() => {
     const term = debouncedSearch.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
-  }, [rows, debouncedSearch]);
+    let out = rows;
+    if (statusFilter === 'sentBack') out = out.filter((r) => r.approvalStatus === 'Rejected');
+    else if (statusFilter === 'awaitingUpload') out = out.filter((r) => r.approvalStatus !== 'Rejected');
+    if (term) out = out.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
+    return out;
+  }, [rows, debouncedSearch, statusFilter]);
 
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filtered, 10);
 
@@ -169,6 +182,7 @@ export function RenewDocumentPage() {
   );
 
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
+  const handleStatusFilterChange = (v) => { setStatusFilter(v); resetPage(); };
 
   const toggleRow = (key) => setSelectedKeys((prev) => {
     const next = new Set(prev);
@@ -437,6 +451,9 @@ export function RenewDocumentPage() {
           <>
             <div className={styles.toolbar}>
               <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
+              <FilterBar
+                filters={[{ key: 'status', label: 'Status', options: STATUS_FILTER_OPTIONS, value: statusFilter, onChange: handleStatusFilterChange }]}
+              />
             </div>
             {sendBackError && <p className={styles.actionError}>{sendBackError}</p>}
 
