@@ -28,15 +28,21 @@ import { PERMISSION_KEYS, SIDEBAR_KEYS } from '../config/permissions.config.js';
 import { safeStr } from '../utils/format.js';
 import { cacheRemove, cacheGetOrLoad } from '../utils/memoryCache.js';
 import { accessDenied } from '../utils/AppError.js';
+import { getSheetDataFromMongo, patchMongoMirrorRow, upsertMongoMirrorRowByKey, softDeleteMongoMirrorByKey } from './mongoSheetData.service.js';
+import { normalizeKey } from '../config/mongoSheetMapping.js';
 
 /**
- * SHEETS-FIRST (reverted 2026-08-21, actually enforced again 2026-09-16 —
- * see loadTeamPermTable/loadSidebarTable's own comments for the gap this
- * closed). Every read/write in this file goes directly to the live Google
- * Sheet; Mongo is not consulted for reads or writes here at all — Roles &
- * Access is low-traffic admin-only data, so the quota cost of always
- * reading live is negligible, and manual edits to either sheet are visible
- * immediately.
+ * MONGO-FIRST (restored again — see loadTeamPermTable/loadSidebarTable's own
+ * comments for why this is safe this time, unlike the 2026-09-16 regression
+ * that reverted it to live Sheets reads). Permission-CHECKING reads
+ * (loadTeamPermTable/loadSidebarTable) go through the Mongo mirror; every
+ * write below patches that same mirror synchronously before returning, so an
+ * app-driven edit is never stale on the next read. Row-RESOLUTION for writes
+ * (findRowIndexByEmail, the header-widening functions) stays live-Sheets-only
+ * on purpose — same row-number safety invariant auth.service.js's
+ * authFindLive documents for the USER sheet: Mongo's mirror doc order isn't
+ * guaranteed to match the live sheet's row order, so a row number derived
+ * from Mongo could target the wrong row on a live write.
  */
 
 const TEAM_SHEET = SHEETS.TEAM_ACCOUNTS;
@@ -116,6 +122,17 @@ let teamHeaderChecked = false;
  * is "no hardcoded baseline, defaults to false for everyone until explicitly
  * granted" — unlike SIDEBAR_KEYS' "visible until explicitly hidden".
  */
+// KNOWN GAP, not fixed here (out of scope for the Mongo-read migration this
+// file went through): this function and _ensureSidebarHeaderWidth below
+// still read/write the live Sheet ONLY and do not patch the Mongo mirror
+// when backfilling existing rows' new column(s). That was invisible while
+// loadTeamPermTable/loadSidebarTable also read live — now that those read
+// Mongo-first, the NEXT time PERMISSION_KEYS/SIDEBAR_KEYS grows, existing
+// rows' new column could read the wrong default (stale/missing in the
+// mirror) for up to ~5 minutes until the next background reconcile cycle.
+// Not triggered by anything today (no new keys added). Whoever adds the
+// next key should extend these two functions with the same
+// upsertMongoMirrorRowByKey backfill the write functions above use.
 async function _ensureTeamHeaderWidth() {
   if (teamHeaderChecked) return;
   teamHeaderChecked = true;
@@ -222,8 +239,14 @@ export async function ensureRolesSeeded() {
     const teamRows = seed.map((r) => [r.email, '', r.allAccess, ...PERMISSION_KEYS.map((p) => !!r.perms[p.key])]);
     const sidebarRows = seed.map((r) => [r.email, ...SIDEBAR_KEYS.map(() => true)]);
 
-    for (const row of teamRows) await appendRow(TEAM_SHEET, row);
-    for (const row of sidebarRows) await appendRow(SIDEBAR_SHEET, row);
+    for (const row of teamRows) {
+      await appendRow(TEAM_SHEET, row);
+      await upsertMongoMirrorRowByKey(TEAM_SHEET, normalizeKey(TEAM_SHEET, row[0]), row);
+    }
+    for (const row of sidebarRows) {
+      await appendRow(SIDEBAR_SHEET, row);
+      await upsertMongoMirrorRowByKey(SIDEBAR_SHEET, normalizeKey(SIDEBAR_SHEET, row[0]), row);
+    }
 
     seeded = true;
   });
@@ -231,7 +254,13 @@ export async function ensureRolesSeeded() {
 
 const TEAM_CACHE_KEY = 'access_team_v2';
 const SIDEBAR_CACHE_KEY = 'access_sidebar_v2';
-const ROLES_CACHE_TTL = 450; // 7.5 min — widened 2026-08-26 from the original 5 min for a bit more headroom
+// 30s — shortened from 450s (2026-08-26's widening) now that the read
+// underneath is Mongo-first, not live Sheets: 450s was sized to protect the
+// Sheets quota, which no longer applies here. An admin's own edit is already
+// instant regardless of this value (clearRolesCache() below), so this TTL
+// only bounds how fast a direct manual edit to the raw spreadsheet (outside
+// the app) surfaces.
+const ROLES_CACHE_TTL = 30;
 
 export function clearRolesCache() {
   cacheRemove(TEAM_CACHE_KEY);
@@ -242,19 +271,19 @@ export function clearRolesCache() {
 export async function loadTeamPermTable() {
   return cacheGetOrLoad(TEAM_CACHE_KEY, ROLES_CACHE_TTL, async () => {
     await ensureRolesSeeded();
-    // BUG FOUND AND FIXED 2026-09-16: this read used getSheetDataFromMongo
-    // (the 5-minute-lagged reconcile mirror) despite this file's own header
-    // comment insisting every read/write here goes live — a leftover from
-    // the broader Mongo-first migration that swept other services and
-    // apparently touched this one too without updating the comment. The
-    // effect: saveEmailPermission's clearRolesCache() correctly evicted the
-    // in-process cache on every admin edit, but the very next read still
-    // hit a STALE mirror for up to 5 more minutes — an admin revoking access
-    // did not actually take effect immediately, silently contradicting the
-    // whole point of this being the live source of truth. getSheetData is
-    // the live read (same one findRowIndexByEmail below already uses to
-    // resolve a row to WRITE to) — genuinely live now, matching the comment.
-    const { rows } = await getSheetData(TEAM_SHEET);
+    // MONGO-FIRST (restored, safely this time): the 2026-09-16 regression
+    // this comment used to describe happened because the mirror could be up
+    // to 5 minutes stale after an admin edit, even though clearRolesCache()
+    // correctly evicted the cache ABOVE the mirror on every write. That gap
+    // is closed now by patching the mirror itself, synchronously, inside
+    // every write below (saveEmailPermission/saveEmailSidebar/
+    // addTeamAccount/removeTeamAccount/ensureRolesSeeded) — so this read is
+    // never stale after an app-driven edit, only after a direct manual edit
+    // to the raw spreadsheet outside the app (same ~5-min reconcile wait as
+    // every other Mongo-mirrored sheet in this codebase). Row-resolution for
+    // WRITES (findRowIndexByEmail) stays a live Sheets read — see this
+    // file's header comment.
+    const { rows } = await getSheetDataFromMongo(TEAM_SHEET);
     const out = {};
     for (const row of rows) {
       const email = safeStr(row[0]).trim().toLowerCase();
@@ -278,8 +307,9 @@ export async function isKnownTeamAccount(email) {
 export async function loadSidebarTable() {
   return cacheGetOrLoad(SIDEBAR_CACHE_KEY, ROLES_CACHE_TTL, async () => {
     await ensureRolesSeeded();
-    // Same live-read fix as loadTeamPermTable above — see its comment.
-    const { rows } = await getSheetData(SIDEBAR_SHEET);
+    // Same Mongo-first-but-safe pattern as loadTeamPermTable above — see its
+    // comment.
+    const { rows } = await getSheetDataFromMongo(SIDEBAR_SHEET);
     const out = {};
     for (const row of rows) {
       const email = safeStr(row[0]).trim().toLowerCase();
@@ -438,6 +468,11 @@ export async function saveEmailPermission(callerEmail, email, key, value) {
     const targetRow = await findRowIndexByEmail(TEAM_SHEET, email);
     if (targetRow === -1) throw new Error(`Email not found: ${email}`);
     await updateCell(TEAM_SHEET, targetRow, col0, !!value);
+    await patchMongoMirrorRow(
+      TEAM_SHEET, targetRow,
+      [{ range: `'${TEAM_SHEET}'!${colLetter(col0)}${targetRow}`, values: [[!!value]] }],
+      { key: normalizeKey(TEAM_SHEET, email) }
+    );
   });
 
   clearRolesCache();
@@ -455,6 +490,11 @@ export async function saveEmailSidebar(callerEmail, email, key, value) {
     const targetRow = await findRowIndexByEmail(SIDEBAR_SHEET, email);
     if (targetRow === -1) throw new Error(`Email not found: ${email}`);
     await updateCell(SIDEBAR_SHEET, targetRow, 1 + idx, !!value);
+    await patchMongoMirrorRow(
+      SIDEBAR_SHEET, targetRow,
+      [{ range: `'${SIDEBAR_SHEET}'!${colLetter(1 + idx)}${targetRow}`, values: [[!!value]] }],
+      { key: normalizeKey(SIDEBAR_SHEET, email) }
+    );
   });
 
   clearRolesCache();
@@ -471,9 +511,11 @@ export async function addTeamAccount(callerEmail, email, name) {
 
   const tRow = [email, name, false, ...PERMISSION_KEYS.map(() => false)];
   await withSheetLock(TEAM_SHEET, () => appendRow(TEAM_SHEET, tRow));
+  await upsertMongoMirrorRowByKey(TEAM_SHEET, normalizeKey(TEAM_SHEET, email), tRow);
 
   const sRow = [email, ...SIDEBAR_KEYS.map(() => true)];
   await withSheetLock(SIDEBAR_SHEET, () => appendRow(SIDEBAR_SHEET, sRow));
+  await upsertMongoMirrorRowByKey(SIDEBAR_SHEET, normalizeKey(SIDEBAR_SHEET, email), sRow);
 
   clearRolesCache();
   return 'OK';
@@ -488,10 +530,14 @@ export async function removeTeamAccount(callerEmail, email) {
     const targetRow = await findRowIndexByEmail(TEAM_SHEET, email);
     if (targetRow !== -1) { tFound = true; await deleteRows(TEAM_SHEET, [targetRow]); }
   });
+  if (tFound) await softDeleteMongoMirrorByKey(TEAM_SHEET, normalizeKey(TEAM_SHEET, email));
+
+  let sFound = false;
   await withSheetLock(SIDEBAR_SHEET, async () => {
     const targetRow = await findRowIndexByEmail(SIDEBAR_SHEET, email);
-    if (targetRow !== -1) await deleteRows(SIDEBAR_SHEET, [targetRow]);
+    if (targetRow !== -1) { sFound = true; await deleteRows(SIDEBAR_SHEET, [targetRow]); }
   });
+  if (sFound) await softDeleteMongoMirrorByKey(SIDEBAR_SHEET, normalizeKey(SIDEBAR_SHEET, email));
 
   clearRolesCache();
   if (!tFound) throw new Error(`Email not found: ${email}`);

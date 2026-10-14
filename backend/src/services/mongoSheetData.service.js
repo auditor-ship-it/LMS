@@ -220,3 +220,52 @@ export async function appendMongoMirrorRow(sheetName, row) {
     logger.error(`[MIRROR-APPEND] ${sheetName} append failed (non-fatal — scheduled reconcile will catch up within 5 min):`, e?.message || e);
   }
 }
+
+/**
+ * For a NATURAL-KEY (by-key) sheet's brand-new row — just appended live via
+ * appendRow — that has no existing mirror doc yet for patchMongoMirrorRow to
+ * match against (that one only UPDATEs an existing doc by key). Upserts so
+ * it's safe even if a doc for this key somehow already exists (e.g. a prior
+ * soft-deleted row being re-added with the same email).
+ *
+ * Added for roles.service.js's Team Accounts/Sidebar Access (both
+ * naturalKeyColumn:0/Email per mongoSheetMapping.js) — same "live write, then
+ * patch the mirror immediately" convention appendMongoMirrorRow/
+ * patchMongoMirrorRow already use for position-keyed/existing-row sheets.
+ * Best-effort, same as those: the live Sheets append already succeeded by
+ * the time this runs, so a failure here just means the scheduled
+ * reconciliation (up to 5 min later) is what catches the new row up instead
+ * of this call doing it instantly.
+ */
+export async function upsertMongoMirrorRowByKey(sheetName, key, row) {
+  try {
+    const now = new Date();
+    await getCollection(sheetName).updateOne(
+      { key },
+      { $set: { key, row, updatedAt: now, deletedAt: null }, $setOnInsert: { createdAt: now } },
+      { upsert: true }
+    );
+    cacheRemove(`mongo_raw_v1:${sheetName}`);
+  } catch (e) {
+    logger.error(`[MIRROR-UPSERT] ${sheetName} key ${key} upsert failed (non-fatal — scheduled reconcile will catch up within 5 min):`, e?.message || e);
+  }
+}
+
+/**
+ * For a NATURAL-KEY (by-key) sheet's row just removed live via deleteRows —
+ * marks the matching mirror doc deletedAt, same shape the background
+ * reconcile job's own reconcileSheetByKey already uses for a row that
+ * disappeared from the live sheet, so getSheetDataFromMongo's existing
+ * `deletedAt: null` read filter excludes it identically whether the
+ * reconcile job or this immediate patch is what caught the removal.
+ * Best-effort/non-fatal, same as the other mirror-patch helpers above.
+ */
+export async function softDeleteMongoMirrorByKey(sheetName, key) {
+  try {
+    const now = new Date();
+    await getCollection(sheetName).updateOne({ key, deletedAt: null }, { $set: { deletedAt: now, updatedAt: now } });
+    cacheRemove(`mongo_raw_v1:${sheetName}`);
+  } catch (e) {
+    logger.error(`[MIRROR-SOFT-DELETE] ${sheetName} key ${key} soft-delete failed (non-fatal — scheduled reconcile will catch up within 5 min):`, e?.message || e);
+  }
+}
