@@ -667,7 +667,7 @@ export function ContainerMatchPicker({ container, matches, onPick }) {
             key={m.leaseId || m.clientName}
             type="button"
             className={styles.pickerCard}
-            onClick={() => onPick(m.leaseId)}
+            onClick={() => onPick(m.leaseId, m.rowNum)}
           >
             <span className={styles.pickerClient}>{m.clientName || 'Unknown client'}</span>
             <span className={styles.pickerMeta}>

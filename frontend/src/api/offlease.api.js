@@ -45,10 +45,14 @@ export const getOutstanding = (containerNo, clientName) =>
 
 /** GET /api/offlease/:containerNo/detail — container lookup. `leaseId` picks
  *  one record when the container has been off-leased more than once. */
-export const getOffLeaseContainerDetail = (containerNo, leaseId) =>
-  apiClient
-    .get(`/offlease/${encodeURIComponent(containerNo)}/detail`, leaseId ? { params: { leaseId } } : undefined)
+export const getOffLeaseContainerDetail = (containerNo, leaseId, row) => {
+  const params = {};
+  if (leaseId) params.leaseId = leaseId;
+  if (row) params.row = row;
+  return apiClient
+    .get(`/offlease/${encodeURIComponent(containerNo)}/detail`, Object.keys(params).length ? { params } : undefined)
     .then((r) => r.data);
+};
 
 /** POST /api/offlease/tracking — add a deployed container into the Stage 1 queue.
  *  `deployedRow`: the specific Deployed sheet row (item._rowNum from Lease
