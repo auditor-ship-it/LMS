@@ -418,17 +418,15 @@ export async function getContainerDetail(req, res) {
        marks it as derived rather than recorded. */
     /* Stage timers. Stage 1's clock starts when the container entered
        off-lease — its deployed date is the only recorded "arrived here"
-       moment, so it seeds the first budget. */
+       moment, so it seeds the first budget.
+
+       Extracted into slaService.computeContainerSla (Issue #55) so this
+       controller and the SLA-escalation scanner compute the figures the
+       exact same way — `detail` is passed in so computeContainerSla mutates
+       THIS object's stages (via applySla) rather than re-fetching its own
+       copy; see that function's own doc comment. */
     try {
-      /* When the container was flagged Off-Lease on the Deployed sheet — not
-         its deployed date, which is when it went OUT on lease and made every
-         container read as a 600-day breach. */
-      const entryStamp = await offLeaseService.getOffLeaseEntryStamp(req.params.containerNo);
-      const sla = slaService.applySla(detail.stages || [], {
-        entryStamp: entryStamp || detail.deployedDate,
-        approvalStatus: detail.approvalStatus,
-        approvalDate: detail.approvalDate
-      });
+      const sla = await slaService.computeContainerSla(req.params.containerNo, { detail });
       detail.approvalSla = sla.approvalSla;
       detail.delayedCount = sla.delayedCount;
       detail.anyDelayed = sla.anyDelayed;
