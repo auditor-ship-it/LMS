@@ -301,7 +301,7 @@ export async function saveApprovalClientToClient(req, res) {
  *  doc comment). Explicit request 2026-09-11. */
 export async function sendBackFromApproval(req, res) {
   const { remarks, rowNum } = req.body;
-  const message = await offLeaseService.saveOffLeaseSendBackFromApproval(req.params.containerNo, req.user.email, remarks, rowNum);
+  const message = await offLeaseService.saveOffLeaseSendBackFromApprovalFast(req.params.containerNo, req.user.email, remarks, rowNum);
   res.json({ message });
 }
 
