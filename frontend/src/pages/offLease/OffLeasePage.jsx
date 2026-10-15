@@ -655,7 +655,7 @@ function ApprovalDetail({ item, headers, detailColIdx, total, canAct, onBack, on
  * re-runs the lookup scoped to that lease, so the detail and the downloaded
  * report are unambiguously that one record.
  */
-function ContainerMatchPicker({ container, matches, onPick }) {
+export function ContainerMatchPicker({ container, matches, onPick }) {
   return (
     <div className={styles.pickerWrap}>
       <p className={styles.pickerTitle}>

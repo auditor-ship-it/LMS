@@ -14,6 +14,7 @@ import {
   buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices, buildEstimateTotals, APPROVAL_LABEL
 } from './lookupModel.js';
 import { getSdRefundsForContainer } from '../../api/stage.api.js';
+import { ContainerMatchPicker } from './OffLeasePage.jsx';
 import { ApprovalPanel } from './ApprovalPanel.jsx';
 import { RefundDecisionPanel } from './RefundDecisionPanel.jsx';
 import { StageDetailModal } from '../stages/StageDetailModal.jsx';
@@ -96,6 +97,23 @@ export function ContainerDetailPage({ isActive }) {
   if (!container) return <ErrorState message="No container selected" />;
   if (loading) return <LoadingState label="Loading stage data…" />;
   if (error) return <ErrorState message={error} onRetry={reload} />;
+  /* A container off-leased by more than one client has more than one
+     record — without a leaseId to pick one, show the same disambiguation
+     picker the Container Lookup page already uses instead of a misleading
+     "not found" (this WAS found, just ambiguously). Re-navigating with the
+     chosen leaseId re-runs the lookup scoped to that one record. */
+  if (data?.multiple) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.headTop}>{back}</div>
+        <ContainerMatchPicker
+          container={data.container}
+          matches={data.matches}
+          onPick={(leaseId) => navigate(`${ROUTES.OFF_LEASE_RECORD}?container=${encodeURIComponent(container)}&leaseId=${encodeURIComponent(leaseId)}`)}
+        />
+      </div>
+    );
+  }
   if (!ready) return <ErrorState message={data?.message || 'No off-lease record found for this container'} />;
 
   /* Name from the app's own stage table when the API sends none (an older
