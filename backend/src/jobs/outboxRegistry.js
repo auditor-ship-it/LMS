@@ -9,7 +9,8 @@
  */
 import {
   saveOffLeaseStage, saveOffLeaseApprovalAction, saveOffLeaseMoveToStage, saveOffLeaseSendBack,
-  saveOffLeaseHold, saveOffLeaseSendBackToStage1, saveOffLeaseSendRejectedToStage1, saveOffLeaseVoucherRaised
+  saveOffLeaseHold, saveOffLeaseSendBackToStage1, saveOffLeaseSendRejectedToStage1, saveOffLeaseVoucherRaised,
+  saveOffLeaseSendBackFromApproval
 } from '../services/offlease.service.js';
 import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending } from '../services/expiry.service.js';
 
@@ -22,6 +23,7 @@ export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseSendBackToStage1': saveOffLeaseSendBackToStage1,
   'offlease.saveOffLeaseSendRejectedToStage1': saveOffLeaseSendRejectedToStage1,
   'offlease.saveOffLeaseVoucherRaised': saveOffLeaseVoucherRaised,
+  'offlease.saveOffLeaseSendBackFromApproval': saveOffLeaseSendBackFromApproval,
   'expiry.saveExpiryAction': saveExpiryAction,
   'expiry.completeDocumentStage': completeDocumentStage,
   'expiry.saveExpiryRemark': saveExpiryRemark,

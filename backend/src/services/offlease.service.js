@@ -6472,6 +6472,49 @@ export async function saveOffLeaseSendBackFromApproval(containerNo, userEmail, r
   });
 }
 
+/** Mongo-first fast path for Send Back from Approval — same trade-off as
+ *  saveOffLeaseApprovalActionFast just above (whose header-column-resolution
+ *  setup this mirrors line for line): this was the one Off-Lease approval-
+ *  desk action still doing a synchronous live Sheets write, so it failed
+ *  outright instead of queuing whenever the shared Sheets quota circuit
+ *  breaker was already tripped. Writes the same columns
+ *  saveOffLeaseSendBackFromApproval does, straight to the Mongo mirror, then
+ *  queues the real function above to replay onto the live Sheet. */
+export async function saveOffLeaseSendBackFromApprovalFast(containerNo, userEmail, remarks = '', knownRow) {
+  await checkActionPermission('offleaseapproval', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const { headers } = await getSheetDataFromMongo(OL_SHEET);
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+  const curStatus = found.row[stage1StatusCol];
+  if (!curStatus || String(curStatus).trim() === '') {
+    throw new AppError('Stage 1 is not completed yet — nothing pending approval to send back.');
+  }
+
+  const rmk = safeStr(remarks).trim() || `Sent back to Stage 1 on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+  const patch = { [`row.${stage1StatusCol}`]: '', 'row.14': rmk };
+
+  const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  const apTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+  const apUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+  const apRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+  const apStamp = dmyTime(new Date());
+  if (apStatusCol >= 0) patch[`row.${apStatusCol}`] = 'Sent Back';
+  if (apTimestampCol >= 0) patch[`row.${apTimestampCol}`] = apStamp;
+  if (apUserCol >= 0) patch[`row.${apUserCol}`] = userEmail || '';
+  if (apRemarkCol >= 0) patch[`row.${apRemarkCol}`] = rmk;
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseSendBackFromApproval', [containerNo, userEmail, remarks, resolvedRow], { actor: userEmail });
+
+  return 'OK';
+}
+
 /**
  * "Send Back" from Stage 5 (Billing Reconciliation) to Stage 1 — same shape
  * and philosophy as saveOffLeaseSendBackFromApproval above (does not cancel
