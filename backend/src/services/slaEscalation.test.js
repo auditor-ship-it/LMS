@@ -176,20 +176,29 @@ test('TC-L7-5 — resolveRecipients returns null for an unconfigured stage or a 
   assert.equal(resolveRecipients(placeholderRouting, 7, 'backup'), null);
 
   // A real address configured -> resolves normally, with the owner cc'd
-  // once escalation reaches backup/manager.
+  // once escalation reaches backup/manager, and Audit always cc'd.
   const realRouting = { 7: { owner: 'pritam@crystalgroup.in', backup: 'backup7@crystalgroup.in', manager: 'manager7@crystalgroup.in', ceo: null } };
-  assert.deepEqual(resolveRecipients(realRouting, 7, 'owner'), { to: 'pritam@crystalgroup.in', cc: [] });
-  assert.deepEqual(resolveRecipients(realRouting, 7, 'backup'), { to: 'backup7@crystalgroup.in', cc: ['pritam@crystalgroup.in'] });
-  assert.deepEqual(resolveRecipients(realRouting, 7, 'manager'), { to: 'manager7@crystalgroup.in', cc: ['pritam@crystalgroup.in', 'backup7@crystalgroup.in'] });
+  assert.deepEqual(resolveRecipients(realRouting, 7, 'owner'), { to: 'pritam@crystalgroup.in', cc: ['auditor@crystalgroup.in'] });
+  assert.deepEqual(resolveRecipients(realRouting, 7, 'backup'), { to: 'backup7@crystalgroup.in', cc: ['pritam@crystalgroup.in', 'auditor@crystalgroup.in'] });
+  assert.deepEqual(resolveRecipients(realRouting, 7, 'manager'), { to: 'manager7@crystalgroup.in', cc: ['pritam@crystalgroup.in', 'backup7@crystalgroup.in', 'auditor@crystalgroup.in'] });
 });
 
-test('SLA_ROUTING covers every SLA_MS stage key with owner/backup/manager/ceo slots (every address a TODO placeholder today)', () => {
+test('resolveRecipients never double-CCs Audit when the resolved address is auditor@crystalgroup.in itself', () => {
+  const routing = { 7: { owner: 'auditor@crystalgroup.in', backup: 'backup7@crystalgroup.in', manager: 'manager7@crystalgroup.in', ceo: null } };
+  assert.deepEqual(resolveRecipients(routing, 7, 'owner'), { to: 'auditor@crystalgroup.in', cc: [] });
+});
+
+test('SLA_ROUTING covers every SLA_MS stage key with owner/backup/manager/ceo slots (backup/manager still TODO placeholders; stage 8 has no owner at all)', () => {
   for (const key of Object.keys(SLA_MS)) {
     const row = SLA_ROUTING[key];
     assert.ok(row, `SLA_ROUTING is missing stage "${key}"`);
-    assert.ok(isPlaceholderOrMissing(row.owner), `expected a TODO placeholder for stage ${key} owner until real addresses are supplied`);
-    assert.ok(isPlaceholderOrMissing(row.backup));
-    assert.ok(isPlaceholderOrMissing(row.manager));
+    if (String(key) === '8') {
+      assert.ok(isPlaceholderOrMissing(row.owner), 'stage 8 (FMS Closure) has no assigned owner anywhere in the system');
+    } else {
+      assert.ok(!isPlaceholderOrMissing(row.owner), `expected a real owner address for stage ${key}`);
+    }
+    assert.ok(isPlaceholderOrMissing(row.backup), `backup for stage ${key} is still a TODO placeholder until the org chart supplies one`);
+    assert.ok(isPlaceholderOrMissing(row.manager), `manager for stage ${key} is still a TODO placeholder until the org chart supplies one`);
     assert.equal(row.ceo, null, 'CEO level is an open question, not activated this month — see offleaseSla.service.js\'s own doc comment');
   }
 });

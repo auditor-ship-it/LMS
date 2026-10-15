@@ -15,9 +15,13 @@
  * or FMS call; see jobs/index.js's own header for why Sheets read quota is
  * this app's scarcest resource.
  *
- * GATED behind `_runtime_config.featureFlags.slaEscalation` (default OFF).
- * Cheap to call every cycle while off — it logs and returns before listing
- * any containers.
+ * GATED behind `_runtime_config.featureFlags.slaEscalation` — defaults to ON
+ * as of the 2026-10-15 go-live decision (owner-level alerts reach real
+ * people today; backup/manager still fall back to the admin "missing
+ * config" alert at FALLBACK_EMAIL, a real monitored inbox, until those
+ * addresses are supplied). Flip to false in `_runtime_config` to pause
+ * without a redeploy. Cheap to call every cycle while off either way — it
+ * logs and returns before listing any containers.
  *
  * DEDUP: a unique index on `_sla_alerts` over
  * (containerNo, offLeaseId, stage, startedAt, level) is the actual
@@ -66,6 +70,13 @@ import { logger } from '../utils/logger.js';
  * least already reaches a real, checked inbox. */
 const FALLBACK_EMAIL = 'support@crystalgroup.in';
 
+/* Always CC'd on every owner/backup/manager escalation email, so Audit has
+ * visibility into every breach as it happens rather than finding out from
+ * the recipients. Not CC'd on the 75%-reminder (not yet a breach) or the
+ * baseline/config-missing admin alerts (FALLBACK_EMAIL already covers
+ * those). */
+const AUDITOR_EMAIL = 'auditor@crystalgroup.in';
+
 const ALERTS_COLLECTION = '_sla_alerts';
 const FEATURE_FLAGS_COLLECTION = '_runtime_config';
 const FEATURE_FLAGS_ID = 'featureFlags';
@@ -90,7 +101,7 @@ function lookupLink(containerNo, offLeaseId) {
    always present as fallback" convention as runtimeSecrets.js/
    monthlyReport.service.js/offleaseSla.service.js's own getSlaRouting.
 ===================================================================== */
-const FEATURE_FLAG_DEFAULTS = { slaEscalation: false, slaEscalationCeo: false };
+const FEATURE_FLAG_DEFAULTS = { slaEscalation: true, slaEscalationCeo: false };
 
 async function getFeatureFlags() {
   try {
@@ -186,32 +197,64 @@ function stageLabel(stageKey, stageName) {
   return stageName && stageName !== String(stageKey) ? `${stageName} (stage ${stageKey})` : `Stage ${stageKey}`;
 }
 
+/* Color/label for each severity, shared by every HTML email below so the
+ * same breach always reads the same color no matter which template it
+ * appears in: manager = critical/red, backup = escalated/orange,
+ * owner = breach/yellow, reminder = heads-up/blue (not yet a breach). */
+const SEVERITY = {
+  manager: { label: 'CRITICAL', bg: '#dc2626', soft: '#fee2e2' },
+  backup: { label: 'ESCALATED', bg: '#ea580c', soft: '#ffedd5' },
+  owner: { label: 'OVERDUE', bg: '#f59e0b', soft: '#fef3c7' },
+  reminder: { label: 'APPROACHING', bg: '#2563eb', soft: '#dbeafe' }
+};
+
+/* Shared page chrome so every email (single-item or the baseline matrix)
+ * looks like one system rather than three different ad-hoc templates. */
+function emailShell(innerHtml) {
+  return `
+    <div style="font-family: Arial, Helvetica, sans-serif; max-width: 640px; margin: 0 auto;">
+      ${innerHtml}
+      <p style="margin-top: 24px; font-size: 12px; color: #6b7280;">Crystal LMS — automated SLA escalation. Do not reply to this email.</p>
+    </div>
+  `;
+}
+
+function severityBadge(level) {
+  const s = SEVERITY[level] || { label: level, bg: '#6b7280', soft: '#f3f4f6' };
+  return `<span style="display:inline-block; padding: 2px 10px; border-radius: 12px; background:${s.bg}; color:#fff; font-size: 12px; font-weight: bold; letter-spacing: 0.5px;">${s.label}</span>`;
+}
+
 function buildEscalationEmail({ level, container, offLeaseId, clientName, stageName, stageKey, overdueBy }) {
   const link = lookupLink(container, offLeaseId);
   const levelLabel = { owner: 'Owner', backup: 'Backup', manager: 'Manager' }[level] || level;
+  const s = SEVERITY[level] || SEVERITY.owner;
   const subject = `[SLA ${levelLabel === 'Owner' ? 'Breach' : 'Escalation'}] ${stageLabel(stageKey, stageName)} overdue — ${container}`;
   const body = [
     `${stageLabel(stageKey, stageName)} is overdue for container ${container}${offLeaseId ? ` (${offLeaseId})` : ''}.`,
     `Client: ${clientName || '-'}`,
     `Overdue by: ${overdueBy || '-'}`,
-    `Escalation level: ${levelLabel}`,
+    `Escalation level: ${levelLabel} (${s.label})`,
     '',
     `Lookup: ${link}`
   ].join('\n');
-  const html = `
-    <p>${stageLabel(stageKey, stageName)} is overdue for container <strong>${container}</strong>${offLeaseId ? ` (${offLeaseId})` : ''}.</p>
-    <p>
-      Client: ${clientName || '-'}<br/>
-      Overdue by: <strong>${overdueBy || '-'}</strong><br/>
-      Escalation level: <strong>${levelLabel}</strong>
-    </p>
-    <p><a href="${link}">Open in Container Lookup</a></p>
-  `;
+  const html = emailShell(`
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+      <tr><td colspan="2" style="background:${s.bg}; color:#fff; padding: 12px 16px; font-size: 16px; font-weight: bold;">
+        ${stageLabel(stageKey, stageName)} — ${severityBadge(level)}
+      </td></tr>
+      <tr><td style="padding: 8px 16px; color:#6b7280; width:140px;">Container</td><td style="padding: 8px 16px; font-weight:bold;">${container}${offLeaseId ? ` (${offLeaseId})` : ''}</td></tr>
+      <tr style="background:#f9fafb;"><td style="padding: 8px 16px; color:#6b7280;">Client</td><td style="padding: 8px 16px;">${clientName || '-'}</td></tr>
+      <tr><td style="padding: 8px 16px; color:#6b7280;">Overdue by</td><td style="padding: 8px 16px; font-weight:bold; color:${s.bg};">${overdueBy || '-'}</td></tr>
+      <tr style="background:#f9fafb;"><td style="padding: 8px 16px; color:#6b7280;">Escalation level</td><td style="padding: 8px 16px;">${levelLabel}</td></tr>
+      <tr><td colspan="2" style="padding: 12px 16px;"><a href="${link}" style="color:#2563eb;">Open in Container Lookup →</a></td></tr>
+    </table>
+  `);
   return { subject, body, html };
 }
 
 function buildReminderEmail({ container, offLeaseId, clientName, stageName, stageKey }) {
   const link = lookupLink(container, offLeaseId);
+  const s = SEVERITY.reminder;
   const subject = `[SLA Reminder] ${stageLabel(stageKey, stageName)} at 75% of TAT — ${container}`;
   const body = [
     `${stageLabel(stageKey, stageName)} has used 75% of its time budget for container ${container}${offLeaseId ? ` (${offLeaseId})` : ''}.`,
@@ -220,12 +263,17 @@ function buildReminderEmail({ container, offLeaseId, clientName, stageName, stag
     '',
     `Lookup: ${link}`
   ].join('\n');
-  const html = `
-    <p>${stageLabel(stageKey, stageName)} has used 75% of its time budget for container <strong>${container}</strong>${offLeaseId ? ` (${offLeaseId})` : ''}.</p>
-    <p>Client: ${clientName || '-'}</p>
-    <p>This is not yet a breach — a heads-up so it doesn't become one.</p>
-    <p><a href="${link}">Open in Container Lookup</a></p>
-  `;
+  const html = emailShell(`
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+      <tr><td colspan="2" style="background:${s.bg}; color:#fff; padding: 12px 16px; font-size: 16px; font-weight: bold;">
+        ${stageLabel(stageKey, stageName)} — ${severityBadge('reminder')}
+      </td></tr>
+      <tr><td style="padding: 8px 16px; color:#6b7280; width:140px;">Container</td><td style="padding: 8px 16px; font-weight:bold;">${container}${offLeaseId ? ` (${offLeaseId})` : ''}</td></tr>
+      <tr style="background:#f9fafb;"><td style="padding: 8px 16px; color:#6b7280;">Client</td><td style="padding: 8px 16px;">${clientName || '-'}</td></tr>
+      <tr><td colspan="2" style="padding: 8px 16px; color:#1f2937;">75% of the time budget has elapsed. This is not yet a breach — a heads-up so it doesn't become one.</td></tr>
+      <tr style="background:#f9fafb;"><td colspan="2" style="padding: 12px 16px;"><a href="${link}" style="color:#2563eb;">Open in Container Lookup →</a></td></tr>
+    </table>
+  `);
   return { subject, body, html };
 }
 
@@ -245,6 +293,7 @@ export function resolveRecipients(routing, stageKey, level) {
     if (!isPlaceholderOrMissing(row.owner)) cc.push(row.owner);
     if (!isPlaceholderOrMissing(row.backup)) cc.push(row.backup);
   }
+  if (to !== AUDITOR_EMAIL && !cc.includes(AUDITOR_EMAIL)) cc.push(AUDITOR_EMAIL);
   return { to, cc };
 }
 
@@ -337,7 +386,7 @@ export async function runSlaEscalation(now = new Date()) {
           }));
           if (claimed) {
             summary.baselined++;
-            baselineRows.push({ container: item.container, offLeaseId: item.leaseId, clientName: item.clientName, stageName, stageKey, overdueBy: sla.overdueBy });
+            baselineRows.push({ container: item.container, offLeaseId: item.leaseId, clientName: item.clientName, stageName, stageKey, overdueBy: sla.overdueBy, level });
           }
           continue; // first run never sends a per-stage escalation email
         }
@@ -381,7 +430,27 @@ export async function runSlaEscalation(now = new Date()) {
         'SLA escalation is now live. These stages were ALREADY overdue before this feature existed, so they are recorded as a baseline and will NOT trigger an owner/backup/manager email for this existing breach — only a NEW breach (or this same stage starting a fresh cycle) will.',
         '', ...lines
       ].join('\n');
-      const html = `<p>SLA escalation is now live. These stages were ALREADY overdue before this feature existed, so they are recorded as a baseline and will NOT trigger an owner/backup/manager email for this existing breach — only a NEW breach (or this same stage starting a fresh cycle) will.</p><ul>${lines.map((l) => `<li>${l}</li>`).join('')}</ul>`;
+      const rows = baselineRows.map((r) => {
+        const s = SEVERITY[r.level] || SEVERITY.owner;
+        return `<tr style="background:${s.soft};">
+          <td style="padding: 6px 12px; border-bottom:1px solid #fff;">${r.container}${r.offLeaseId ? ` (${r.offLeaseId})` : ''}</td>
+          <td style="padding: 6px 12px; border-bottom:1px solid #fff;">${r.stageName || r.stageKey}</td>
+          <td style="padding: 6px 12px; border-bottom:1px solid #fff; font-weight:bold; color:${s.bg};">${r.overdueBy}</td>
+          <td style="padding: 6px 12px; border-bottom:1px solid #fff;">${severityBadge(r.level)}</td>
+        </tr>`;
+      }).join('');
+      const html = emailShell(`
+        <p>SLA escalation is now live. These stages were <strong>ALREADY overdue</strong> before this feature existed, so they are recorded as a baseline and will <strong>NOT</strong> trigger an owner/backup/manager email for this existing breach — only a NEW breach (or this same stage starting a fresh cycle) will.</p>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin-top: 12px;">
+          <tr style="background:#1f2937; color:#fff;">
+            <th style="padding: 8px 12px; text-align:left;">Container</th>
+            <th style="padding: 8px 12px; text-align:left;">Stage</th>
+            <th style="padding: 8px 12px; text-align:left;">Overdue by</th>
+            <th style="padding: 8px 12px; text-align:left;">Severity</th>
+          </tr>
+          ${rows}
+        </table>
+      `);
       await sendMail({ to: FALLBACK_EMAIL, subject, body, html });
     } catch (e) {
       logger.error('[SLA-ESCALATION] Failed to send baseline summary email (non-fatal):', e?.message || e);

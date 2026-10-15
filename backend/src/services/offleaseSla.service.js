@@ -255,43 +255,53 @@ export const SLA_GRACE_MS = 8 * HOUR;
  *  nothing until a real CEO threshold is designed and classifyBreachLevel
  *  is extended to produce it. */
 export const SLA_ROUTING = {
+  // Owner addresses below (2026-10-14): Christopher's confirmed directly by
+  // the department owner; the rest were looked up against the login/accounts
+  // system by a separate session (this one has no Mongo egress to verify
+  // them itself) and spot-checked against real addresses already on record
+  // in migrate-legacy-permissions.mjs (pushpa.shetty / shivani.dhall match).
+  // backup/manager are NOT in any system (no owner/manager hierarchy is
+  // tracked anywhere) and stay TODO until supplied from the org chart.
   1: {
-    owner: 'TODO-owner-stage1@crystalgroup.in',
+    owner: 'crm@crystalgroup.in',              // Christopher
     backup: 'TODO-backup-stage1@crystalgroup.in',
     manager: 'TODO-manager-stage1@crystalgroup.in',
     ceo: null
   },
   approval: {
-    owner: 'TODO-owner-approval@crystalgroup.in',
+    owner: 'pushpa.shetty@crystalgroup.in',    // Pushpa
     backup: 'TODO-backup-approval@crystalgroup.in',
     manager: 'TODO-manager-approval@crystalgroup.in',
     ceo: null
   },
   6: {
-    owner: 'TODO-owner-stage6@crystalgroup.in',
+    owner: 'kshirod.khatua@crystalgroup.in',   // Kshirod Khatua
     backup: 'TODO-backup-stage6@crystalgroup.in',
     manager: 'TODO-manager-stage6@crystalgroup.in',
     ceo: null
   },
   7: {
-    owner: 'TODO-owner-stage7@crystalgroup.in',
+    owner: 'mum.depot@crystalgroup.in',        // Pritam — shared depot inbox, not personal
     backup: 'TODO-backup-stage7@crystalgroup.in',
     manager: 'TODO-manager-stage7@crystalgroup.in',
     ceo: null
   },
   3: {
-    owner: 'TODO-owner-stage3@crystalgroup.in',
+    owner: 'service@crystalgroup.in',          // Sitaram — shared inbox, not personal
     backup: 'TODO-backup-stage3@crystalgroup.in',
     manager: 'TODO-manager-stage3@crystalgroup.in',
     ceo: null
   },
   5: {
-    owner: 'TODO-owner-stage5@crystalgroup.in',
+    owner: 'shivani.dhall@crystalgroup.in',    // Shivani
     backup: 'TODO-backup-stage5@crystalgroup.in',
     manager: 'TODO-manager-stage5@crystalgroup.in',
     ceo: null
   },
   8: {
+    // Unassigned — no owner exists anywhere (STAGE_OWNERS[8] === 'Unassigned'
+    // too). Left as TODO on purpose: isPlaceholderOrMissing() will route this
+    // to the admin-missing-config alert instead of emailing nobody.
     owner: 'TODO-owner-stage8@crystalgroup.in',
     backup: 'TODO-backup-stage8@crystalgroup.in',
     manager: 'TODO-manager-stage8@crystalgroup.in',
