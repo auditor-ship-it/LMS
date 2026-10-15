@@ -5435,7 +5435,7 @@ async function _buildContainerStageTatMap(row, headers, gfRow, gatedIn, repairSk
  *                    several records returns the candidate list instead of
  *                    silently showing the first.
  */
-export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
+export async function getOffLeaseContainerDetail(containerNo, leaseId, user, knownRow) {
   const want = normKey(containerNo);
   if (!want) return { found: false, message: 'Enter a container number.' };
 
@@ -5494,31 +5494,47 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   const visibleMatches = gate ? matches.filter((m) => gate(safeStr(m.row[5]) || _clientNameFallback(leaseInfo))) : matches;
 
   const wantLease = safeStr(leaseId).trim().toLowerCase();
+  const wantRow = Number(knownRow) || null;
   let picked = visibleMatches[0] || null;
-  if (wantLease) {
-    picked = visibleMatches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
-    if (!picked) return { found: false, message: `No record for ${safeStr(containerNo)} under lease ${safeStr(leaseId)}.` };
-  } else if (visibleMatches.length > 1) {
-    // Let the caller choose which record they mean.
-    return {
-      found: true,
-      container: safeStr(visibleMatches[0].row[0]),
-      multiple: true,
-      matches: visibleMatches.map((m) => {
-        const mClient = safeStr(m.row[5]) || _clientNameFallback(leaseInfo);
-        const mGfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], mClient);
-        return {
-          leaseId: safeStr(m.row[1]),
-          clientName: mClient,
-          clientCode: safeStr(m.row[4]),
-          size: safeStr(m.row[2]),
-          type: safeStr(m.row[3]),
-          deployedDate: formatDateVal(m.row[7]),
-          validUpto: formatDateVal(m.row[8]),
-          currentStage: _classifyOffLeaseStages(headers, m.row, isGatedIn(mGfRow), isRepairNotRequired(mGfRow)).currentStage
-        };
-      })
-    };
+  if (wantRow) {
+    /* Exact-row match takes priority over leaseId — explicit request
+       (TRIU6617353): a container clicked straight from the Off-Lease list
+       already carries this exact record's own sheet row (openRecord in
+       PipelineDashboard.jsx passes ?row=), which uniquely identifies it
+       regardless of whether THIS record's own Lease ID happens to be blank
+       (common for a brand-new, just-raised Stage 1 intimation that hasn't
+       been assigned one yet) — unlike leaseId, a row number is never blank
+       or ambiguous. Falls through to the leaseId/multiple-choice logic
+       below only if the given row doesn't actually match (stale link). */
+    picked = visibleMatches.find((m) => m.rowNum === wantRow) || null;
+  }
+  if (!wantRow || !picked) {
+    if (wantLease) {
+      picked = visibleMatches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
+      if (!picked) return { found: false, message: `No record for ${safeStr(containerNo)} under lease ${safeStr(leaseId)}.` };
+    } else if (visibleMatches.length > 1) {
+      // Let the caller choose which record they mean.
+      return {
+        found: true,
+        container: safeStr(visibleMatches[0].row[0]),
+        multiple: true,
+        matches: visibleMatches.map((m) => {
+          const mClient = safeStr(m.row[5]) || _clientNameFallback(leaseInfo);
+          const mGfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], mClient);
+          return {
+            leaseId: safeStr(m.row[1]),
+            rowNum: m.rowNum,
+            clientName: mClient,
+            clientCode: safeStr(m.row[4]),
+            size: safeStr(m.row[2]),
+            type: safeStr(m.row[3]),
+            deployedDate: formatDateVal(m.row[7]),
+            validUpto: formatDateVal(m.row[8]),
+            currentStage: _classifyOffLeaseStages(headers, m.row, isGatedIn(mGfRow), isRepairNotRequired(mGfRow)).currentStage
+          };
+        })
+      };
+    }
   }
 
   const row = picked ? picked.row : null;

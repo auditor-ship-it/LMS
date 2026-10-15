@@ -357,7 +357,10 @@ export async function getOutstanding(req, res) {
 export async function getContainerDetail(req, res) {
   // ?leaseId= picks one record when a container has been off-leased more than
   // once; without it the service returns the candidate list to choose from.
-  const detail = await offLeaseService.getOffLeaseContainerDetail(req.params.containerNo, req.query.leaseId, req.user);
+  // ?row= (from a direct list-row click, which already knows exactly which
+  // record it means) takes priority over leaseId — see
+  // getOffLeaseContainerDetail's own doc comment.
+  const detail = await offLeaseService.getOffLeaseContainerDetail(req.params.containerNo, req.query.leaseId, req.user, req.query.row);
 
   /* Stage 9 movements are joined HERE rather than inside offlease.service so
      the two services keep pointing one way: stage9 reads offlease (for the

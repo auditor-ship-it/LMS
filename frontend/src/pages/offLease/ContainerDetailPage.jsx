@@ -71,8 +71,8 @@ export function ContainerDetailPage({ isActive }) {
   const [tab, setTab] = useState('overview');
 
   const { data, loading, error, reload } = useAsync(
-    () => (container ? lookupContainer(container, leaseId || undefined) : Promise.resolve(null)),
-    [container, leaseId]
+    () => (container ? lookupContainer(container, leaseId || undefined, row || undefined) : Promise.resolve(null)),
+    [container, leaseId, row]
   );
   const { data: remarks } = useAsync(
     () => (container ? fetchRemarkThread(container, leaseId || undefined) : Promise.resolve([])),
@@ -109,7 +109,12 @@ export function ContainerDetailPage({ isActive }) {
         <ContainerMatchPicker
           container={data.container}
           matches={data.matches}
-          onPick={(leaseId) => navigate(`${ROUTES.OFF_LEASE_RECORD}?container=${encodeURIComponent(container)}&leaseId=${encodeURIComponent(leaseId)}`)}
+          onPick={(pickedLeaseId, pickedRowNum) => {
+            const q = new URLSearchParams({ container });
+            if (pickedLeaseId) q.set('leaseId', pickedLeaseId);
+            if (pickedRowNum) q.set('row', String(pickedRowNum));
+            navigate(`${ROUTES.OFF_LEASE_RECORD}?${q}`);
+          }}
         />
       </div>
     );
