@@ -1044,7 +1044,13 @@ export async function saveExpiryRemarkFast(containerNo, remark, callerEmail, kno
    here: _deployedClientName @681, _logRenewal @701 — see file header note)
 ============================================= */
 const RENEWAL_LOG_SHEET = SHEETS.RENEWAL_LOG;
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File'];
+// Explicit request 2026-10-16 ("pls update the sheet heder and data") — the
+// user pointed out this log had no Renewed Date, PO Valid Date, or Old
+// Valid Till columns (only Old PO No/File and Old Agreement File).
+// Appended at the end, never inserted — insertSheetIfMissing/the
+// curHeaders-extension logic below both already assume append-only growth,
+// same convention as every other positional sheet in this app.
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Valid Till'];
 
 function _deployedClientName(headers, row) {
   try {
@@ -1592,7 +1598,14 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       container: containerNo, clientName,
       poNo, poFileUrl, agreementUrl: signedCopyUrl,
       oldPoNo, oldPoFileUrl: oldPoPdf, oldAgreementUrl: oldAgr,
-      validTill: fmtCellDate(validTillDraft), userEmail: submittedBy, source: 'Renewal Approval (Pushpa)'
+      validTill: fmtCellDate(validTillDraft), userEmail: submittedBy, source: 'Renewal Approval (Pushpa)',
+      // New columns (explicit request 2026-10-16) — the start date entered
+      // on the Documents form (AA, staged by Save/Submit, still present on
+      // matchedRow from the read at the top of this function) and the PO's
+      // own valid-till, plus the Agreement valid-till THIS approval is
+      // about to overwrite (matchedRow[7] — col H, read before any of the
+      // updates above were applied).
+      renewedDate: safeStr(matchedRow[26]), poValidDate: poValidity, oldValidTill: fmtCellDate(matchedRow[7])
     });
 
     return 'Approved — renewal applied';
@@ -1618,7 +1631,8 @@ export async function _logRenewal(info) {
     const logRow = [
       stamp, info.container || '', info.clientName || '', info.poNo || '',
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
+      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || '',
+      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || ''
     ];
     await appendRow(RENEWAL_LOG_SHEET, logRow);
     await appendMongoMirrorRow(RENEWAL_LOG_SHEET, logRow);

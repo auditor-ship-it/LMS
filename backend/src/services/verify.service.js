@@ -282,7 +282,8 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
       container: containerNo, clientName: _deployedClientName(headers, srcRow),
       poNo: '', poFileUrl: '', agreementUrl: agreementUrl || '',
       oldPoNo: '', oldPoFileUrl: '', oldAgreementUrl: oldAgr || '',
-      validTill: newDateString, userEmail, source: 'Update Lease Period'
+      validTill: newDateString, userEmail, source: 'Update Lease Period',
+      oldValidTill: oldValidStr || ''
     });
 
     return 'OK';
@@ -313,7 +314,12 @@ function _deployedClientName(headers, row) {
    history, so every renewal action, including a Complete Document Stage that
    follows an Update Lease Period for the same cycle, gets its own row rather
    than being merged into an earlier one). */
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File'];
+// Explicit request 2026-10-16 ("pls update the sheet heder and data") — 3
+// more columns, appended at the end (never inserted), matching
+// expiry.service.js's identical copy of this header/function (both write
+// paths must agree on this sheet's shape — see this function's own doc
+// comment above).
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Valid Till'];
 
 async function _logRenewal(info) {
   try {
@@ -330,7 +336,11 @@ async function _logRenewal(info) {
     await appendRow(SHEETS.RENEWAL_LOG, [
       stamp, info.container || '', info.clientName || '', info.poNo || '',
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
+      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || '',
+      // This flow (Update Lease Period) has no Renewed Date/PO fields of
+      // its own — only Old Valid Till is available here (oldValidStr,
+      // captured before the overwrite below).
+      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || ''
     ]);
     // Same try/catch as the log write above — a mail failure must not be
     // mistaken for the renewal itself failing, and this only ever fires
