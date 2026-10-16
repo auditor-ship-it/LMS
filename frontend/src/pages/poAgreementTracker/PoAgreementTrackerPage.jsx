@@ -30,6 +30,9 @@ const BAND_TONE = { overdue: 'bad', critical: 'warn', warning: 'info', safe: 'ok
 // dot classes above (.bad/.warn/.info/.ok) set background, which would turn
 // a whole table cell solid red/green; these set color only.
 const BAND_TEXT_TONE = { overdue: 'textBad', critical: 'textWarn', warning: 'textInfo', safe: 'textOk' };
+// Same 4 bands again, as a light cell-background tint for the Agreement
+// coverage bar (a day cell the bar passes through, not just its end date).
+const BAND_RANGE_TONE = { overdue: 'rangeBad', critical: 'rangeWarn', warning: 'rangeInfo', safe: 'rangeOk' };
 
 function daysInMonth(year, month) { return new Date(year, month + 1, 0).getDate(); }
 
@@ -49,6 +52,29 @@ function formatDisplayDate(dateStr) {
 }
 
 /**
+ * The portion of [startStr, endStr] (inclusive) that falls within the given
+ * month, as {from, to} day-of-month numbers — or null if there's no start
+ * date, no overlap with this month, or the dates are the wrong way round
+ * (seen in real data — a stray reversed Agreement Date entry; treated as
+ * untrustworthy rather than drawn as a backwards bar). A span that starts
+ * before or ends after the displayed month is clipped to day 1 / the
+ * month's last day, so it visually continues off either edge.
+ */
+function coverageDaysForMonth(startStr, endStr, year, month) {
+  if (!startStr || !endStr) return null;
+  const start = new Date(`${startStr}T00:00:00`);
+  const end = new Date(`${endStr}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return null;
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month, daysInMonth(year, month));
+  if (end < monthStart || start > monthEnd) return null;
+  return {
+    from: start < monthStart ? 1 : start.getDate(),
+    to: end > monthEnd ? monthEnd.getDate() : end.getDate()
+  };
+}
+
+/**
  * PO & Agreement Tracker — explicit request 2026-10-16: a day-strip view
  * (styled after a reference CRM follow-up tracker) of every deployed
  * container's Agreement Valid Upto / PO Validity dates, one month at a
@@ -57,9 +83,14 @@ function formatDisplayDate(dateStr) {
  * getExpiryDataByFilter('pending', null) — the same unscoped "every
  * deployed container" list Lease Expiry's own digest email already uses).
  *
- * No Agreement-start/PO-start date exists anywhere in this system (checked
- * before building this) — so this plots the expiry/validity date itself as
- * a single point on the day strip, not a start->end coverage bar.
+ * Agreement shows a full green-when-safe coverage BAR from its start date
+ * (joined from the "New lease reff" sheet's own Agreement Date column —
+ * see _agreementStartDateMap, backend/src/services/expiry.service.js) to
+ * its valid-upto date. That start date only exists for containers entered
+ * through that sheet (~15% of today's deployed fleet) — a container
+ * without one falls back to a single end-date dot, same as PO always does:
+ * no PO start date is tracked anywhere in this system, so PO is always a
+ * single point, never a bar.
  */
 export function PoAgreementTrackerPage() {
   const { data, loading, error, reload } = useAsync(fetchPoAgreementTracker, []);
@@ -133,22 +164,30 @@ export function PoAgreementTrackerPage() {
                   const poDay = dayInMonth(c.poDate, displayed.year, displayed.month);
                   const agrBand = bandForDate(c.agreementDate, today);
                   const poBand = bandForDate(c.poDate, today);
+                  const agrRange = coverageDaysForMonth(c.agreementStartDate, c.agreementDate, displayed.year, displayed.month);
                   return (
                     <tr key={c.container}>
                       <td className={styles.colContainer}>{c.container}</td>
                       <td className={styles.colClient}>{c.clientName}</td>
                       <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
                       <td className={`${styles.colDate} ${poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}`}>{formatDisplayDate(c.poDate)}</td>
-                      {dayList.map((d) => (
-                        <td key={d} className={`${styles.dayCell} ${isCurrentMonth && d === today.getDate() ? styles.todayCol : ''}`}>
-                          {agrDay === d && (
-                            <span className={`${styles.dot} ${styles[BAND_TONE[agrBand]]}`} title={`Agreement valid upto ${c.agreementDate}`} />
-                          )}
-                          {poDay === d && (
-                            <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
-                          )}
-                        </td>
-                      ))}
+                      {dayList.map((d) => {
+                        const inRange = agrRange && d >= agrRange.from && d <= agrRange.to;
+                        return (
+                          <td
+                            key={d}
+                            className={`${styles.dayCell} ${isCurrentMonth && d === today.getDate() ? styles.todayCol : ''} ${inRange ? styles[BAND_RANGE_TONE[agrBand]] : ''}`}
+                            title={inRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : undefined}
+                          >
+                            {agrDay === d && (
+                              <span className={`${styles.dot} ${styles[BAND_TONE[agrBand]]}`} title={`Agreement valid upto ${c.agreementDate}`} />
+                            )}
+                            {poDay === d && (
+                              <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   );
                 })}
@@ -163,8 +202,8 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.info}`} />Upcoming (≤30d)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendDivider} />
-          <span className={styles.legendItem}><span className={styles.dot} />Agreement</span>
-          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.dotSquare}`} />PO</span>
+          <span className={styles.legendItem}><span className={styles.dot} />Agreement (end date; shaded bar = covered span, where a start date is on file)</span>
+          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.dotSquare}`} />PO (end date only — no start date tracked)</span>
         </div>
       </Card>
     </>

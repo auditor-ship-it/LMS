@@ -9,7 +9,7 @@
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
 import { safeStr, parseDate } from '../utils/format.js';
-import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter } from './expiry.service.js';
+import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap } from './expiry.service.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -228,13 +228,23 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
  * rather than re-reading/re-parsing the Deployed sheet a second way.
  * Returns only what this page needs; the fuller Lease Expiry row (band,
  * remarks, action status, …) is irrelevant here.
+ *
+ * agreementStartDate (explicit request 2026-10-16, for a green coverage
+ * BAR rather than a single end-date dot): joined from
+ * _agreementStartDateMap() by Order No — item.row[1] is already that
+ * container's resolved Order No, spliced in by getExpiryDataByFilter
+ * itself, so no second order-no resolution is needed here. PO has no
+ * equivalent start date anywhere in this system (confirmed before
+ * building this feature) — poStartDate is always null; the Tracker page
+ * falls back to a single-day marker for PO, never a bar.
  */
 export async function getPoAgreementTrackerData() {
-  const { data } = await getExpiryDataByFilter('pending', null);
+  const [{ data }, agrStartMap] = await Promise.all([getExpiryDataByFilter('pending', null), _agreementStartDateMap()]);
   return {
     containers: data.map((item) => ({
       container: safeStr(item.row[0]),
       clientName: safeStr(item.row[2]),
+      agreementStartDate: agrStartMap[safeStr(item.row[1]).trim()] || null,
       agreementDate: item.agreementDate || null,
       poDate: item.poDate || null
     }))

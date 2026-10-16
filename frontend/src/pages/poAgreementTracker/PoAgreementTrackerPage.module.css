@@ -115,6 +115,14 @@ thead .colContainer, thead .colClient { background: var(--surface-2); }
 .textInfo { color: var(--info); }
 .textOk { color: var(--success); }
 
+/* Agreement coverage-bar cell tint — a day the bar passes through, not just
+   its end date. Lighter than the dot's solid fill so the dot/digit on top
+   stays readable. */
+.rangeBad { background: color-mix(in srgb, var(--error) 16%, transparent); }
+.rangeWarn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.rangeInfo { background: color-mix(in srgb, var(--info) 16%, transparent); }
+.rangeOk { background: color-mix(in srgb, var(--success) 16%, transparent); }
+
 .legend {
   display: flex;
   flex-wrap: wrap;

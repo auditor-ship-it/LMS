@@ -229,6 +229,41 @@ export function _resolveOrderNo(ordMap, containerNo, clientName) {
   return ordMap.map[k] || '';
 }
 
+const AGREEMENT_START_CACHE_KEY = 'agreement_start_map_v1';
+const AGREEMENT_START_TTL_SECS = 300;
+
+/**
+ * Order No -> Agreement START date ("YYYY-MM-DD"), for the PO & Agreement
+ * Tracker's coverage bar — explicit request 2026-10-16. The Deployed sheet
+ * only ever tracked Agreement VALID UPTO (the expiry end), never when the
+ * agreement actually started; this is sourced from "New lease reff"'s own
+ * "Agreement Date" column instead (col N, index 13 — confirmed start/signing
+ * date, not another expiry field, by its header match requiring "date" or
+ * "valid" alongside "agreement"), keyed by Order No (col D, index 3) — same
+ * sheet/columns verify.service.js's own agrMap already reads for Verify
+ * Lease, same reasoning, independent read here rather than a cross-file
+ * import (that map is scoped to verify.service.js's own request lifecycle).
+ * No equivalent PO start date exists anywhere in this system — PO has no
+ * entry in this map and the Tracker falls back to a single-day marker for
+ * it, not a bar.
+ */
+export async function _agreementStartDateMap() {
+  return cacheGetOrLoad(AGREEMENT_START_CACHE_KEY, AGREEMENT_START_TTL_SECS, async () => {
+    const map = {};
+    try {
+      const { rows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE_REFF);
+      for (const raw of rows) {
+        const r = padRow(raw, 15);
+        const orderNo = safeStr(r[3]).trim(); // D = Order No
+        if (!orderNo || map[orderNo]) continue; // first non-blank wins, same convention as _expiryOrderNoMap
+        const d = parseDate(r[13]); // N = Agreement Date
+        if (d) map[orderNo] = _toLocalIsoDate(d);
+      }
+    } catch (e) { /* never break the tracker page — falls back to no bar for every row */ }
+    return map;
+  });
+}
+
 export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
 const DEPLOYED_RAW_TTL_SECS = 30;
 
