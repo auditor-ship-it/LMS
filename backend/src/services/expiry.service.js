@@ -1050,7 +1050,7 @@ const RENEWAL_LOG_SHEET = SHEETS.RENEWAL_LOG;
 // Appended at the end, never inserted — insertSheetIfMissing/the
 // curHeaders-extension logic below both already assume append-only growth,
 // same convention as every other positional sheet in this app.
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Valid Till'];
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date'];
 
 function _deployedClientName(headers, row) {
   try {

@@ -319,7 +319,7 @@ function _deployedClientName(headers, row) {
 // expiry.service.js's identical copy of this header/function (both write
 // paths must agree on this sheet's shape — see this function's own doc
 // comment above).
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Valid Till'];
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date'];
 
 async function _logRenewal(info) {
   try {
@@ -338,7 +338,7 @@ async function _logRenewal(info) {
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
       info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || '',
       // This flow (Update Lease Period) has no Renewed Date/PO fields of
-      // its own — only Old Valid Till is available here (oldValidStr,
+      // its own — only Old Agreement Date is available here (oldValidStr,
       // captured before the overwrite below).
       info.renewedDate || '', info.poValidDate || '', info.oldValidTill || ''
     ]);
