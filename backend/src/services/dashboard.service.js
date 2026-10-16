@@ -229,14 +229,17 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
  * Returns only what this page needs; the fuller Lease Expiry row (band,
  * remarks, action status, …) is irrelevant here.
  *
- * agreementStartDate (explicit request 2026-10-16, for a green coverage
- * BAR rather than a single end-date dot): joined from
- * _agreementStartDateMap() by Order No — item.row[1] is already that
- * container's resolved Order No, spliced in by getExpiryDataByFilter
- * itself, so no second order-no resolution is needed here. PO has no
- * equivalent start date anywhere in this system (confirmed before
- * building this feature) — poStartDate is always null; the Tracker page
- * falls back to a single-day marker for PO, never a bar.
+ * agreementStartDate (explicit request 2026-10-16, for a coverage range
+ * rather than a single end-date tick): prefers item.renewedDate (the
+ * Deployed sheet's own col AA, set on every Save/Submit — reflects the
+ * CURRENT agreement period), falling back to _agreementStartDateMap()'s
+ * New Lease Reff join by Order No for a container never yet renewed
+ * through this app. PO has no equivalent start date tracked anywhere in
+ * this system — the Tracker page's frontend instead treats the
+ * Agreement's OWN valid-till date as the PO's implicit start (explicit
+ * request/example 2026-10-16: a PO commonly picks up coverage right where
+ * the agreement renewal left off), so PO still gets a real range when an
+ * Agreement date exists, a single tick otherwise.
  */
 export async function getPoAgreementTrackerData() {
   const [{ data }, agrStartMap] = await Promise.all([getExpiryDataByFilter('pending', null), _agreementStartDateMap()]);
@@ -244,7 +247,11 @@ export async function getPoAgreementTrackerData() {
     containers: data.map((item) => ({
       container: safeStr(item.row[0]),
       clientName: safeStr(item.row[2]),
-      agreementStartDate: agrStartMap[safeStr(item.row[1]).trim()] || null,
+      // Prefer the Deployed sheet's own Renewed Date (col AA, item.renewedDate
+      // — set on every Save/Submit, so it reflects the CURRENT agreement
+      // period) over the New Lease Reff join, which only covers containers
+      // never yet renewed through this app and can be a stale one-time date.
+      agreementStartDate: item.renewedDate || agrStartMap[safeStr(item.row[1]).trim()] || null,
       agreementDate: item.agreementDate || null,
       poDate: item.poDate || null,
       // Click-through detail (explicit request 2026-10-16) — the actual

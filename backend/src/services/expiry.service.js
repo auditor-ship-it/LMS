@@ -544,6 +544,19 @@ export async function getExpiryDataByFilter(filterType, user) {
     if (filterType === 'pending') {
       item.agreementDate = expDate ? _toLocalIsoDate(expDate) : null;
       item.poDate = poExpDate ? _toLocalIsoDate(poExpDate) : null;
+      // Agreement START date for the PO & Agreement Tracker's coverage
+      // range — explicit request 2026-10-16 (a live example container,
+      // CXRU1249797: Renewed Date 01-08-2026, Valid Till 30-09-2026 ->
+      // Aug+Sep should both tick). col AA ("Renewed Date") is written by
+      // every Save/Submit on the Documents form (saveRenewalDraft/
+      // completeDocStage) and reflects the ACTUAL start of the container's
+      // current agreement period — far better coverage than
+      // _agreementStartDateMap's New Lease Reff join (~15% of containers,
+      // and not necessarily the current renewal cycle). Falls back to that
+      // join in dashboard.service.js only when this is blank (a container
+      // that has never been through a renewal yet).
+      const renewedParsed = parseDate(row[26]);
+      item.renewedDate = renewedParsed ? _toLocalIsoDate(renewedParsed) : null;
       // For the PO & Agreement Tracker page's click-through detail view —
       // explicit request 2026-10-16 ("click the ticket open PO"): the
       // actual Agreement/PO file links, PO No and Billing Cycle, so

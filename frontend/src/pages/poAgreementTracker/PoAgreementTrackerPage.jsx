@@ -211,6 +211,14 @@ export function PoAgreementTrackerPage() {
                   const poMonth = monthOfYear(c.poDate, displayedYear);
                   const agrMonth = monthOfYear(c.agreementDate, displayedYear);
                   const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
+                  // PO has no start date of its own anywhere in this system —
+                  // explicit request/example 2026-10-16 (container CXRU1249797:
+                  // Agreement Aug->Sep, PO valid Oct -> Sep+Oct should both
+                  // tick): a PO's coverage is treated as picking up right where
+                  // the Agreement's own valid-till date leaves off, so it gets a
+                  // real range whenever an Agreement end date exists, not just a
+                  // single tick.
+                  const poRange = coverageMonthsForYear(c.agreementDate, c.poDate, displayedYear);
                   const band = dataView === 'po' ? poBand : agrBand;
                   const toneVar = BAND_COLOR_VAR[band] || BAND_COLOR_VAR.none;
                   return (
@@ -222,17 +230,16 @@ export function PoAgreementTrackerPage() {
                       {monthList.map((m) => {
                         // Agreement view: checked for every month the start-to-
                         // valid-till range covers — but MOST containers have no
-                        // start date on file (only ~15% join to one; see
-                        // _agreementStartDateMap), so agrRange is null for most
-                        // rows; those tick just their valid-till month instead,
-                        // same as PO's own single end-date marker always does.
-                        // PO view: PO never has a start date at all, so it's
-                        // always just the single valid-till month.
+                        // start date on file, so agrRange is null for most rows;
+                        // those tick just their valid-till month instead.
+                        // PO view: ticks the Agreement-end-to-PO-end range when
+                        // both dates exist, else just the single PO valid-till
+                        // month (no Agreement date to pick up coverage from).
                         const inRange = dataView === 'po'
-                          ? poMonth === m
+                          ? (poRange ? (m >= poRange.from && m <= poRange.to) : poMonth === m)
                           : (agrRange ? (m >= agrRange.from && m <= agrRange.to) : agrMonth === m);
                         const title = dataView === 'po'
-                          ? (inRange ? `PO valid upto ${c.poDate}` : undefined)
+                          ? (inRange ? (poRange ? `PO covers ${c.agreementDate} to ${c.poDate}` : `PO valid upto ${c.poDate}`) : undefined)
                           : (inRange ? (agrRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : `Agreement valid upto ${c.agreementDate} (no start date on file)`) : undefined);
                         return (
                           <td
@@ -264,7 +271,7 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendDivider} />
           {dataView === 'po' ? (
-            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = valid-upto month — no PO start date is tracked anywhere in this system)</span>
+            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own valid-upto date to PO valid-upto — just the valid-upto month ticked if no Agreement date exists)</span>
           ) : (
             <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto where a start date is on file — just the valid-upto month ticked otherwise)</span>
           )}
