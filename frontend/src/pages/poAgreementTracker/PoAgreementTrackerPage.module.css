@@ -42,6 +42,16 @@
   cursor: pointer;
 }
 
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .scrollWrap {
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -80,6 +90,8 @@
 .colClient { left: 130px; min-width: 160px; border-right: 1px solid var(--line); }
 thead .colContainer, thead .colClient { background: var(--surface-2); }
 
+.colDate { min-width: 95px; font-weight: 600; }
+
 .dayCell { min-width: 22px; position: relative; }
 .todayCol { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 
@@ -97,6 +109,11 @@ thead .colContainer, thead .colClient { background: var(--surface-2); }
 .warn { background: var(--warn); }
 .info { background: var(--info); }
 .ok { background: var(--success); }
+
+.textBad { color: var(--error); }
+.textWarn { color: var(--warn); }
+.textInfo { color: var(--info); }
+.textOk { color: var(--success); }
 
 .legend {
   display: flex;

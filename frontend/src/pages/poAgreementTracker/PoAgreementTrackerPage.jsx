@@ -26,6 +26,10 @@ function bandForDate(dateStr, today) {
 // than inventing a new color system — overdue=error(red), critical=warn
 // (amber, "due soon"), warning=info(blue, "upcoming"), safe=success(green).
 const BAND_TONE = { overdue: 'bad', critical: 'warn', warning: 'info', safe: 'ok' };
+// Same 4 bands, but as TEXT color for the Agreement/PO Date columns — the
+// dot classes above (.bad/.warn/.info/.ok) set background, which would turn
+// a whole table cell solid red/green; these set color only.
+const BAND_TEXT_TONE = { overdue: 'textBad', critical: 'textWarn', warning: 'textInfo', safe: 'textOk' };
 
 function daysInMonth(year, month) { return new Date(year, month + 1, 0).getDate(); }
 
@@ -35,6 +39,13 @@ function dayInMonth(dateStr, year, month) {
   const [y, m, d] = dateStr.split('-').map(Number);
   if (y !== year || m - 1 !== month) return null;
   return d;
+}
+
+/** "YYYY-MM-DD" -> "DD-MM-YYYY", matching this app's own date display convention elsewhere. */
+function formatDisplayDate(dateStr) {
+  if (!dateStr) return '—';
+  const [y, m, d] = dateStr.split('-');
+  return `${d}-${m}-${y}`;
 }
 
 /**
@@ -55,6 +66,7 @@ export function PoAgreementTrackerPage() {
   const [monthOffset, setMonthOffset] = useState(0);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
+  const [onlyThisMonth, setOnlyThisMonth] = useState(false);
 
   const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const displayed = useMemo(() => {
@@ -68,9 +80,13 @@ export function PoAgreementTrackerPage() {
   const containers = data?.containers || [];
   const filtered = useMemo(() => {
     const term = debouncedSearch.trim().toLowerCase();
-    if (!term) return containers;
-    return containers.filter((c) => c.container.toLowerCase().includes(term) || c.clientName.toLowerCase().includes(term));
-  }, [containers, debouncedSearch]);
+    let out = containers;
+    if (term) out = out.filter((c) => c.container.toLowerCase().includes(term) || c.clientName.toLowerCase().includes(term));
+    if (onlyThisMonth) {
+      out = out.filter((c) => dayInMonth(c.agreementDate, displayed.year, displayed.month) || dayInMonth(c.poDate, displayed.year, displayed.month));
+    }
+    return out;
+  }, [containers, debouncedSearch, onlyThisMonth, displayed]);
 
   return (
     <>
@@ -82,6 +98,10 @@ export function PoAgreementTrackerPage() {
       <Card>
         <div className={styles.toolbar}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search container, client…" />
+          <label className={styles.checkboxLabel}>
+            <input type="checkbox" checked={onlyThisMonth} onChange={(e) => setOnlyThisMonth(e.target.checked)} />
+            Only show containers due this month
+          </label>
           <div className={styles.monthNav}>
             <button type="button" className={styles.navBtn} onClick={() => setMonthOffset((m) => m - 1)} aria-label="Previous month">‹</button>
             <span className={styles.monthLabel}>{MONTH_NAMES[displayed.month]} {displayed.year}</span>
@@ -100,6 +120,8 @@ export function PoAgreementTrackerPage() {
                 <tr>
                   <th className={styles.colContainer}>Container</th>
                   <th className={styles.colClient}>Client</th>
+                  <th className={styles.colDate}>Agreement Date</th>
+                  <th className={styles.colDate}>PO Date</th>
                   {dayList.map((d) => (
                     <th key={d} className={isCurrentMonth && d === today.getDate() ? styles.todayCol : undefined}>{d}</th>
                   ))}
@@ -115,6 +137,8 @@ export function PoAgreementTrackerPage() {
                     <tr key={c.container}>
                       <td className={styles.colContainer}>{c.container}</td>
                       <td className={styles.colClient}>{c.clientName}</td>
+                      <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
+                      <td className={`${styles.colDate} ${poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}`}>{formatDisplayDate(c.poDate)}</td>
                       {dayList.map((d) => (
                         <td key={d} className={`${styles.dayCell} ${isCurrentMonth && d === today.getDate() ? styles.todayCol : ''}`}>
                           {agrDay === d && (
