@@ -10,35 +10,28 @@ import styles from './PoAgreementTrackerPage.module.css';
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/* Same day-count bands as Lease Expiry (expiry.service.js) and its Ageing
-   filter — a date's color here always means the same thing it means there:
-   overdue (past), critical (<=7d), warning (<=30d), else safe. */
+/* Explicit request 2026-10-16 ("only one col green and red only"):
+   simplified to just two bands, past-due or not — dropped the "due
+   soon"/"upcoming" amber/blue middle tiers Lease Expiry itself still uses,
+   since here they read as confusing extra colors rather than useful
+   warning. This is a local, page-only simplification — does not touch
+   expiry.service.js's own 4-band logic used elsewhere in the app. */
 function bandForDate(dateStr, today) {
   if (!dateStr) return null;
   const d = new Date(`${dateStr}T00:00:00`);
   if (Number.isNaN(d.getTime())) return null;
-  const daysUntil = Math.ceil((d - today) / 86400000);
-  if (daysUntil < 0) return 'overdue';
-  if (daysUntil <= 7) return 'critical';
-  if (daysUntil <= 30) return 'warning';
-  return 'safe';
+  return d < today ? 'overdue' : 'safe';
 }
 
-// Reuses the app's 4 semantic status tones (StatusBadge.module.css) rather
-// than inventing a new color system — overdue=error(red), critical=warn
-// (amber, "due soon"), warning=info(blue, "upcoming"), safe=success(green).
-const BAND_TONE = { overdue: 'bad', critical: 'warn', warning: 'info', safe: 'ok' };
-// Same 4 bands, but as TEXT color for the Agreement/PO Date columns — the
-// dot classes above (.bad/.warn/.info/.ok) set background, which would turn
-// a whole table cell solid red/green; these set color only.
-const BAND_TEXT_TONE = { overdue: 'textBad', critical: 'textWarn', warning: 'textInfo', safe: 'textOk' };
+const BAND_TONE = { overdue: 'bad', safe: 'ok' };
+// Same 2 bands, but as TEXT color for the Agreement/PO Date columns — the
+// dot classes above (.bad/.ok) set background, which would turn a whole
+// table cell solid red/green; these set color only.
+const BAND_TEXT_TONE = { overdue: 'textBad', safe: 'textOk' };
 // Year view's month checkboxes are colored inline (border + fill) rather
-// than via CSS class, since a checkbox needs both colors set together —
-// same 4 bands, as actual CSS variable values.
+// than via CSS class, since a checkbox needs both colors set together.
 const BAND_COLOR_VAR = {
   overdue: 'var(--error)',
-  critical: 'var(--warn)',
-  warning: 'var(--info)',
   safe: 'var(--success)',
   none: 'var(--text-3)'
 };
@@ -221,6 +214,20 @@ export function PoAgreementTrackerPage() {
                   const poRange = coverageMonthsForYear(c.agreementDate, c.poDate, displayedYear);
                   const band = dataView === 'po' ? poBand : agrBand;
                   const toneVar = BAND_COLOR_VAR[band] || BAND_COLOR_VAR.none;
+                  const range = dataView === 'po' ? poRange : agrRange;
+                  const singleMonth = dataView === 'po' ? poMonth : agrMonth;
+                  // Explicit example 2026-10-16: "jan feb march po valid [green],
+                  // then april not update renew this month red, but after the
+                  // update green" — once covered.valid-till has actually LAPSED
+                  // (band === 'overdue', i.e. today is past it with no renewal
+                  // filed yet), every month after the last covered one stays
+                  // flagged solid red for the rest of the year, not just left
+                  // blank — a blank box reads as "nothing due here", but the
+                  // real state is "overdue, still unrenewed". The moment a real
+                  // Update Agreement/PO pushes the valid-till date forward, this
+                  // whole row turns 'safe' and these same months go green instead
+                  // (covered, ticked) the next time this data is fetched.
+                  const coveredToMonth = range ? range.to : singleMonth;
                   return (
                     <tr key={c.container} className={styles.clickRow} onClick={() => setSelected(c)}>
                       <td className={styles.colContainer}>{c.container}</td>
@@ -235,12 +242,12 @@ export function PoAgreementTrackerPage() {
                         // PO view: ticks the Agreement-end-to-PO-end range when
                         // both dates exist, else just the single PO valid-till
                         // month (no Agreement date to pick up coverage from).
-                        const inRange = dataView === 'po'
-                          ? (poRange ? (m >= poRange.from && m <= poRange.to) : poMonth === m)
-                          : (agrRange ? (m >= agrRange.from && m <= agrRange.to) : agrMonth === m);
-                        const title = dataView === 'po'
-                          ? (inRange ? (poRange ? `PO covers ${c.agreementDate} to ${c.poDate}` : `PO valid upto ${c.poDate}`) : undefined)
-                          : (inRange ? (agrRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : `Agreement valid upto ${c.agreementDate} (no start date on file)`) : undefined);
+                        const inRange = range ? (m >= range.from && m <= range.to) : singleMonth === m;
+                        const lapsed = !inRange && band === 'overdue' && coveredToMonth !== null && m > coveredToMonth;
+                        const label = dataView === 'po' ? 'PO' : 'Agreement';
+                        const title = inRange
+                          ? (range ? `${label} covers ${dataView === 'po' ? c.agreementDate : c.agreementStartDate} to ${dataView === 'po' ? c.poDate : c.agreementDate}` : `${label} valid upto ${dataView === 'po' ? c.poDate : c.agreementDate}`)
+                          : (lapsed ? `${label} overdue since ${dataView === 'po' ? c.poDate : c.agreementDate} — not yet renewed` : undefined);
                         return (
                           <td
                             key={m}
@@ -248,8 +255,8 @@ export function PoAgreementTrackerPage() {
                             title={title}
                           >
                             <span
-                              className={`${styles.checkbox} ${inRange ? styles.checkboxChecked : ''}`}
-                              style={{ borderColor: toneVar, background: inRange ? toneVar : 'transparent' }}
+                              className={`${styles.checkbox} ${(inRange || lapsed) ? styles.checkboxChecked : ''}`}
+                              style={{ borderColor: toneVar, background: (inRange || lapsed) ? toneVar : 'transparent' }}
                             >
                               {inRange && '✓'}
                             </span>
@@ -266,9 +273,8 @@ export function PoAgreementTrackerPage() {
 
         {!selected && <div className={styles.legend}>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.bad}`} />Overdue</span>
-          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.warn}`} />Due soon (≤7d)</span>
-          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.info}`} />Upcoming (≤30d)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
+          <span className={styles.legendItem}><span className={`${styles.checkbox} ${styles.bad}`} style={{ borderColor: 'var(--error)' }} />Solid red, no tick = overdue, still not renewed</span>
           <span className={styles.legendDivider} />
           {dataView === 'po' ? (
             <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own valid-upto date to PO valid-upto — just the valid-upto month ticked if no Agreement date exists)</span>
