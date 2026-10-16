@@ -42,27 +42,6 @@
   cursor: pointer;
 }
 
-.viewToggle {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: var(--r-full);
-  overflow: hidden;
-}
-.viewBtn, .viewBtnActive {
-  border: none;
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 5px 12px;
-  cursor: pointer;
-}
-.viewBtn:hover { background: var(--surface-2); }
-.viewBtnActive {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 .checkboxLabel {
   display: inline-flex;
   align-items: center;
@@ -150,14 +129,6 @@ thead .colContainer, thead .colClient { background: var(--surface-2); }
 .textWarn { color: var(--warn); }
 .textInfo { color: var(--info); }
 .textOk { color: var(--success); }
-
-/* Agreement coverage-bar cell tint — a day the bar passes through, not just
-   its end date. Lighter than the dot's solid fill so the dot/digit on top
-   stays readable. */
-.rangeBad { background: color-mix(in srgb, var(--error) 16%, transparent); }
-.rangeWarn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
-.rangeInfo { background: color-mix(in srgb, var(--info) 16%, transparent); }
-.rangeOk { background: color-mix(in srgb, var(--success) 16%, transparent); }
 
 .legend {
   display: flex;
