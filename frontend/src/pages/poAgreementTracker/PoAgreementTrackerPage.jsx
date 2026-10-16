@@ -7,6 +7,7 @@ import { fetchPoAgreementTracker } from '../../services/poAgreementTracker.servi
 import styles from './PoAgreementTrackerPage.module.css';
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /* Same day-count bands as Lease Expiry (expiry.service.js) and its Ageing
    filter — a date's color here always means the same thing it means there:
@@ -74,6 +75,27 @@ function coverageDaysForMonth(startStr, endStr, year, month) {
   };
 }
 
+/** Year-view equivalents of dayInMonth/coverageDaysForMonth — month-level
+    instead of day-level, for the "whole year at a glance" view. */
+function monthOfYear(dateStr, year) {
+  if (!dateStr) return null;
+  const [y, m] = dateStr.split('-').map(Number);
+  return y === year ? m - 1 : null;
+}
+function coverageMonthsForYear(startStr, endStr, year) {
+  if (!startStr || !endStr) return null;
+  const start = new Date(`${startStr}T00:00:00`);
+  const end = new Date(`${endStr}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return null;
+  const yearStart = new Date(year, 0, 1);
+  const yearEnd = new Date(year, 11, 31);
+  if (end < yearStart || start > yearEnd) return null;
+  return {
+    from: start < yearStart ? 0 : start.getMonth(),
+    to: end > yearEnd ? 11 : end.getMonth()
+  };
+}
+
 /**
  * PO & Agreement Tracker — explicit request 2026-10-16: a day-strip view
  * (styled after a reference CRM follow-up tracker) of every deployed
@@ -94,7 +116,9 @@ function coverageDaysForMonth(startStr, endStr, year, month) {
  */
 export function PoAgreementTrackerPage() {
   const { data, loading, error, reload } = useAsync(fetchPoAgreementTracker, []);
+  const [viewMode, setViewMode] = useState('day'); // 'day' (one month, by day) | 'year' (whole year, by month)
   const [monthOffset, setMonthOffset] = useState(0);
+  const [yearOffset, setYearOffset] = useState(0);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
   const [onlyThisMonth, setOnlyThisMonth] = useState(false);
@@ -104,8 +128,10 @@ export function PoAgreementTrackerPage() {
     const base = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
     return { year: base.getFullYear(), month: base.getMonth() };
   }, [today, monthOffset]);
+  const displayedYear = today.getFullYear() + yearOffset;
   const numDays = daysInMonth(displayed.year, displayed.month);
   const dayList = useMemo(() => Array.from({ length: numDays }, (_, i) => i + 1), [numDays]);
+  const monthList = useMemo(() => Array.from({ length: 12 }, (_, i) => i), []);
   const isCurrentMonth = displayed.year === today.getFullYear() && displayed.month === today.getMonth();
 
   const containers = data?.containers || [];
@@ -114,10 +140,12 @@ export function PoAgreementTrackerPage() {
     let out = containers;
     if (term) out = out.filter((c) => c.container.toLowerCase().includes(term) || c.clientName.toLowerCase().includes(term));
     if (onlyThisMonth) {
-      out = out.filter((c) => dayInMonth(c.agreementDate, displayed.year, displayed.month) || dayInMonth(c.poDate, displayed.year, displayed.month));
+      out = viewMode === 'year'
+        ? out.filter((c) => monthOfYear(c.agreementDate, displayedYear) !== null || monthOfYear(c.poDate, displayedYear) !== null)
+        : out.filter((c) => dayInMonth(c.agreementDate, displayed.year, displayed.month) || dayInMonth(c.poDate, displayed.year, displayed.month));
     }
     return out;
-  }, [containers, debouncedSearch, onlyThisMonth, displayed]);
+  }, [containers, debouncedSearch, onlyThisMonth, displayed, viewMode, displayedYear]);
 
   return (
     <>
@@ -129,16 +157,29 @@ export function PoAgreementTrackerPage() {
       <Card>
         <div className={styles.toolbar}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search container, client…" />
+          <div className={styles.viewToggle}>
+            <button type="button" className={viewMode === 'day' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setViewMode('day')}>Day view</button>
+            <button type="button" className={viewMode === 'year' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setViewMode('year')}>Year view</button>
+          </div>
           <label className={styles.checkboxLabel}>
             <input type="checkbox" checked={onlyThisMonth} onChange={(e) => setOnlyThisMonth(e.target.checked)} />
-            Only show containers due this month
+            Only show containers due {viewMode === 'year' ? 'this year' : 'this month'}
           </label>
-          <div className={styles.monthNav}>
-            <button type="button" className={styles.navBtn} onClick={() => setMonthOffset((m) => m - 1)} aria-label="Previous month">‹</button>
-            <span className={styles.monthLabel}>{MONTH_NAMES[displayed.month]} {displayed.year}</span>
-            <button type="button" className={styles.navBtn} onClick={() => setMonthOffset((m) => m + 1)} aria-label="Next month">›</button>
-            {monthOffset !== 0 && <button type="button" className={styles.todayBtn} onClick={() => setMonthOffset(0)}>This month</button>}
-          </div>
+          {viewMode === 'day' ? (
+            <div className={styles.monthNav}>
+              <button type="button" className={styles.navBtn} onClick={() => setMonthOffset((m) => m - 1)} aria-label="Previous month">‹</button>
+              <span className={styles.monthLabel}>{MONTH_NAMES[displayed.month]} {displayed.year}</span>
+              <button type="button" className={styles.navBtn} onClick={() => setMonthOffset((m) => m + 1)} aria-label="Next month">›</button>
+              {monthOffset !== 0 && <button type="button" className={styles.todayBtn} onClick={() => setMonthOffset(0)}>This month</button>}
+            </div>
+          ) : (
+            <div className={styles.monthNav}>
+              <button type="button" className={styles.navBtn} onClick={() => setYearOffset((y) => y - 1)} aria-label="Previous year">‹</button>
+              <span className={styles.monthLabel}>{displayedYear}</span>
+              <button type="button" className={styles.navBtn} onClick={() => setYearOffset((y) => y + 1)} aria-label="Next year">›</button>
+              {yearOffset !== 0 && <button type="button" className={styles.todayBtn} onClick={() => setYearOffset(0)}>This year</button>}
+            </div>
+          )}
         </div>
 
         {error && <ErrorState message={error} onRetry={reload} />}
@@ -153,41 +194,68 @@ export function PoAgreementTrackerPage() {
                   <th className={styles.colClient}>Client</th>
                   <th className={styles.colDate}>Agreement Date</th>
                   <th className={styles.colDate}>PO Date</th>
-                  {dayList.map((d) => (
-                    <th key={d} className={isCurrentMonth && d === today.getDate() ? styles.todayCol : undefined}>{d}</th>
-                  ))}
+                  {viewMode === 'day'
+                    ? dayList.map((d) => (
+                        <th key={d} className={isCurrentMonth && d === today.getDate() ? styles.todayCol : undefined}>{d}</th>
+                      ))
+                    : monthList.map((m) => (
+                        <th key={m} className={displayedYear === today.getFullYear() && m === today.getMonth() ? styles.todayCol : undefined}>{MONTH_SHORT[m]}</th>
+                      ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((c) => {
-                  const agrDay = dayInMonth(c.agreementDate, displayed.year, displayed.month);
-                  const poDay = dayInMonth(c.poDate, displayed.year, displayed.month);
                   const agrBand = bandForDate(c.agreementDate, today);
                   const poBand = bandForDate(c.poDate, today);
-                  const agrRange = coverageDaysForMonth(c.agreementStartDate, c.agreementDate, displayed.year, displayed.month);
                   return (
                     <tr key={c.container}>
                       <td className={styles.colContainer}>{c.container}</td>
                       <td className={styles.colClient}>{c.clientName}</td>
                       <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
                       <td className={`${styles.colDate} ${poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}`}>{formatDisplayDate(c.poDate)}</td>
-                      {dayList.map((d) => {
-                        const inRange = agrRange && d >= agrRange.from && d <= agrRange.to;
-                        return (
-                          <td
-                            key={d}
-                            className={`${styles.dayCell} ${isCurrentMonth && d === today.getDate() ? styles.todayCol : ''} ${inRange ? styles[BAND_RANGE_TONE[agrBand]] : ''}`}
-                            title={inRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : undefined}
-                          >
-                            {agrDay === d && (
-                              <span className={`${styles.dot} ${styles[BAND_TONE[agrBand]]}`} title={`Agreement valid upto ${c.agreementDate}`} />
-                            )}
-                            {poDay === d && (
-                              <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
-                            )}
-                          </td>
-                        );
-                      })}
+                      {viewMode === 'day' ? (() => {
+                        const agrDay = dayInMonth(c.agreementDate, displayed.year, displayed.month);
+                        const poDay = dayInMonth(c.poDate, displayed.year, displayed.month);
+                        const agrRange = coverageDaysForMonth(c.agreementStartDate, c.agreementDate, displayed.year, displayed.month);
+                        return dayList.map((d) => {
+                          const inRange = agrRange && d >= agrRange.from && d <= agrRange.to;
+                          return (
+                            <td
+                              key={d}
+                              className={`${styles.dayCell} ${isCurrentMonth && d === today.getDate() ? styles.todayCol : ''} ${inRange ? styles[BAND_RANGE_TONE[agrBand]] : ''}`}
+                              title={inRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : undefined}
+                            >
+                              {agrDay === d && (
+                                <span className={`${styles.dot} ${styles[BAND_TONE[agrBand]]}`} title={`Agreement valid upto ${c.agreementDate}`} />
+                              )}
+                              {poDay === d && (
+                                <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
+                              )}
+                            </td>
+                          );
+                        });
+                      })() : (() => {
+                        const agrMonth = monthOfYear(c.agreementDate, displayedYear);
+                        const poMonth = monthOfYear(c.poDate, displayedYear);
+                        const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
+                        return monthList.map((m) => {
+                          const inRange = agrRange && m >= agrRange.from && m <= agrRange.to;
+                          return (
+                            <td
+                              key={m}
+                              className={`${styles.dayCell} ${displayedYear === today.getFullYear() && m === today.getMonth() ? styles.todayCol : ''} ${inRange ? styles[BAND_RANGE_TONE[agrBand]] : ''}`}
+                              title={inRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : undefined}
+                            >
+                              {agrMonth === m && (
+                                <span className={`${styles.dot} ${styles[BAND_TONE[agrBand]]}`} title={`Agreement valid upto ${c.agreementDate}`} />
+                              )}
+                              {poMonth === m && (
+                                <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
+                              )}
+                            </td>
+                          );
+                        });
+                      })()}
                     </tr>
                   );
                 })}
