@@ -572,6 +572,12 @@ export async function getExpiryDataByFilter(filterType, user) {
       // (e.g. a stray date) that isn't a billing cycle at all.
       const cycleRaw = safeStr(row[_poCycleCol]).trim();
       item.billingCycle = (cycleRaw === 'Monthly' || cycleRaw === 'Daily') ? cycleRaw : '';
+      // For the Month-Wise Renew Tracking table (explicit spec 2026-10-16,
+      // columns "Actual Renewal Entry Date" and "Remarks") — col AN is
+      // stamped by both Save and Submit (whichever ran most recently); col
+      // AD is the Remarks field from that same Documents form.
+      item.renewalSubmittedDate = safeStr(row[RENEWAL_SUBMITTED_DATE_COL]);
+      item.renewalRemarks = safeStr(row[29]);
     }
     if (filterType === 'documents' || filterType === 'approval') {
       item.poUrl = safeStr(row[24]);

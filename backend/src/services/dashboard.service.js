@@ -262,7 +262,11 @@ export async function getPoAgreementTrackerData() {
       poPdfUrl: item.poPdfUrl || '',
       poNo: item.poNo || '',
       billingCycle: item.billingCycle || '',
-      status: item.actionStatus || ''
+      status: item.actionStatus || '',
+      // Month-Wise Renew Tracking table (explicit spec 2026-10-16) —
+      // "Actual Renewal Entry Date" and "Remarks" columns.
+      renewalSubmittedDate: item.renewalSubmittedDate || '',
+      remarks: item.renewalRemarks || ''
     }))
   };
 }
