@@ -9,7 +9,7 @@
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
 import { safeStr, parseDate } from '../utils/format.js';
-import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues } from './expiry.service.js';
+import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter } from './expiry.service.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -215,4 +215,28 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   }
 
   return { containers };
+}
+
+/**
+ * PO & Agreement Tracker — explicit request 2026-10-16: a day-strip view
+ * (one month at a time) of every deployed container's Agreement Valid Upto
+ * and PO Validity dates, so a client's two dates can be spotted on the
+ * calendar at a glance. Reuses getExpiryDataByFilter('pending', null) —
+ * the same "every currently-deployed container" list Lease Expiry's own
+ * default tab and the daily digest email already use (unscoped: null
+ * bypasses Sale-Person visibility, same as leaseExpiryDigest.service.js) —
+ * rather than re-reading/re-parsing the Deployed sheet a second way.
+ * Returns only what this page needs; the fuller Lease Expiry row (band,
+ * remarks, action status, …) is irrelevant here.
+ */
+export async function getPoAgreementTrackerData() {
+  const { data } = await getExpiryDataByFilter('pending', null);
+  return {
+    containers: data.map((item) => ({
+      container: safeStr(item.row[0]),
+      clientName: safeStr(item.row[2]),
+      agreementDate: item.agreementDate || null,
+      poDate: item.poDate || null
+    }))
+  };
 }

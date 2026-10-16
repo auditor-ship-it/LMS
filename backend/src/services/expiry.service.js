@@ -69,6 +69,14 @@ function padRow(row, len) {
   return out;
 }
 
+/** "YYYY-MM-DD" from a Date's own local y/m/d fields — never
+ *  date.toISOString(), which converts to UTC first and can shift the
+ *  calendar date by one depending on the server's timezone. */
+function _toLocalIsoDate(date) {
+  const y = date.getFullYear(), m = String(date.getMonth() + 1).padStart(2, '0'), d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 /** First column whose header exactly matches one of `names` (case/space
  *  insensitive), or -1. Located by header rather than hardcoded index: this
  *  sheet has had columns inserted/removed by hand before (see the Off-Lease
@@ -488,6 +496,15 @@ export async function getExpiryDataByFilter(filterType, user) {
       remark: expiryRemarkCol >= 0 ? safeStr(row[expiryRemarkCol]) : '',
       _rowNum: ri + 2
     };
+    // Raw Agreement/PO dates, as plain "YYYY-MM-DD" (local calendar date,
+    // not expDate.toISOString() — that converts to UTC first and can shift
+    // the date by a day depending on server timezone) — added for the PO &
+    // Agreement Tracker page, which needs the actual point-in-time dates,
+    // not just the derived band this function already returns above.
+    if (filterType === 'pending') {
+      item.agreementDate = expDate ? _toLocalIsoDate(expDate) : null;
+      item.poDate = poExpDate ? _toLocalIsoDate(poExpDate) : null;
+    }
     if (filterType === 'documents' || filterType === 'approval') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);

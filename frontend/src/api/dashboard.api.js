@@ -6,3 +6,6 @@ export const getDeployedSummary = () => apiClient.get('/dashboard/deployed-summa
 /** Container-level drill-down for one deployed-summary month/category/type/size cell. */
 export const getDeployedDetail = (month, category, type, size) =>
   apiClient.get('/dashboard/deployed-detail', { params: { month, category, type, size } }).then((r) => r.data);
+
+/** Every deployed container's Agreement Valid Upto / PO Validity dates, for the PO & Agreement Tracker page. */
+export const getPoAgreementTracker = () => apiClient.get('/dashboard/po-agreement-tracker').then((r) => r.data);

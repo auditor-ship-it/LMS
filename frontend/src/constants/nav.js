@@ -54,6 +54,7 @@ export const NAV_TREE = {
     { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending', taskKey: 'renewApprovalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
+    { key: 'poAgreementTracker', label: 'PO & Agreement Tracker', path: ROUTES.PO_AGREEMENT_TRACKER, icon: 'clock', sidebarKey: 'poAgreementTracker', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
     // sidebarKey added 2026-09-10 — the matching SIDEBAR_KEYS column now
     // exists (permissions.config.js) and roles.service.js backfills every

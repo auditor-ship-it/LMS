@@ -1,0 +1,115 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.monthNav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.navBtn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.navBtn:hover { background: var(--surface-2); }
+.monthLabel {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 130px;
+  text-align: center;
+}
+.todayBtn {
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.scrollWrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.table th, .table td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.table thead th {
+  background: var(--surface-2);
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+  position: sticky;
+  top: 0;
+}
+.colContainer, .colClient {
+  text-align: left;
+  padding-left: 12px;
+  position: sticky;
+  background: var(--surface);
+  font-weight: 600;
+}
+.colContainer { left: 0; min-width: 130px; }
+.colClient { left: 130px; min-width: 160px; border-right: 1px solid var(--line); }
+thead .colContainer, thead .colClient { background: var(--surface-2); }
+
+.dayCell { min-width: 22px; position: relative; }
+.todayCol { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  margin: 0 1px;
+  vertical-align: middle;
+}
+.dotSquare { border-radius: 2px; }
+.bad { background: var(--error); }
+.warn { background: var(--warn); }
+.info { background: var(--info); }
+.ok { background: var(--success); }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.legendItem { display: inline-flex; align-items: center; gap: 6px; }
+.legendDivider {
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+}
