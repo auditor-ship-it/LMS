@@ -74,74 +74,6 @@ function coverageMonthsForYear(startStr, endStr, year) {
 }
 
 /**
- * The set of month indices (0-11, within `year`) that are "relevant" for
- * one side (Agreement or PO) of the Month-Wise Renew Tracking table —
- * explicit spec 2026-10-16. Every covered month (the start-to-end range,
- * or just the single valid-till month when there's no start date) PLUS
- * every month after that which has LAPSED (valid-till already passed with
- * no renewal filed yet) — mirrors exactly the grid's covered/lapsed split,
- * just returned as a set of months instead of colored cells.
- */
-function relevantMonths(range, singleMonth, band) {
-  const months = new Set();
-  if (range) { for (let m = range.from; m <= range.to; m++) months.add(m); }
-  else if (singleMonth !== null) months.add(singleMonth);
-  const coveredTo = range ? range.to : singleMonth;
-  if (band === 'overdue' && coveredTo !== null) {
-    for (let m = coveredTo + 1; m <= 11; m++) months.add(m);
-  }
-  return months;
-}
-
-/**
- * Flattens one container into its Month-Wise Renew Tracking rows — one row
- * per tracking month, per the pasted spec's table (container/client/
- * renewal start+end stay the same on every row; Renewal Status and PO
- * Coverage Status are each independently Green/Red/Pending for that row's
- * month). PENDING overrides a would-be Red month only while the container
- * itself is actively mid-renewal (status === 'Documents Pending') — a
- * genuinely missing PO with no renewal in progress stays Red, per the
- * spec's own distinction ("PENDING... awaiting completion... distinguish
- * it from a confirmed missing PO").
- */
-function trackingRowsForContainer(c, displayedYear) {
-  const agrBand = bandForDate(c.agreementDate, new Date(new Date().setHours(0, 0, 0, 0)));
-  const poBand = bandForDate(c.poDate, new Date(new Date().setHours(0, 0, 0, 0)));
-  const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
-  const poRange = coverageMonthsForYear(c.agreementDate, c.poDate, displayedYear);
-  const agrMonth = monthOfYear(c.agreementDate, displayedYear);
-  const poMonth = monthOfYear(c.poDate, displayedYear);
-  const agrMonths = relevantMonths(agrRange, agrMonth, agrBand);
-  const poMonths = relevantMonths(poRange, poMonth, poBand);
-  const isMidRenewal = String(c.status || '').trim().toLowerCase() === 'documents pending';
-
-  const allMonths = [...new Set([...agrMonths, ...poMonths])].sort((a, b) => a - b);
-  return allMonths.map((m) => {
-    const inAgr = agrRange ? (m >= agrRange.from && m <= agrRange.to) : agrMonth === m;
-    const inPo = poRange ? (m >= poRange.from && m <= poRange.to) : poMonth === m;
-    const renewalStatus = inAgr ? 'Green' : (agrMonths.has(m) ? (isMidRenewal ? 'Pending' : 'Red') : '—');
-    const poCoverageStatus = inPo ? 'Green' : (poMonths.has(m) ? (isMidRenewal ? 'Pending' : 'Red') : '—');
-    return {
-      key: `${c.container}-${m}`,
-      container: c.container,
-      clientName: c.clientName,
-      renewalStartDate: c.agreementStartDate,
-      renewalEndDate: c.agreementDate,
-      trackingMonth: `${MONTH_SHORT[m]} ${displayedYear}`,
-      renewalStatus,
-      poNo: c.poNo,
-      poStartDate: c.agreementDate,
-      poValidityEndDate: c.poDate,
-      poCoverageStatus,
-      renewalSubmittedDate: c.renewalSubmittedDate,
-      remarks: c.remarks
-    };
-  });
-}
-
-const STATUS_TONE = { Green: 'textOk', Red: 'textBad', Pending: 'textWarn', '—': '' };
-
-/**
  * PO & Agreement Tracker — explicit request 2026-10-16: a year-wide view
  * (Jan..Dec as columns) of every deployed container's Agreement Valid Upto
  * / PO Validity dates, colored by urgency. Backed by
@@ -175,12 +107,6 @@ export function PoAgreementTrackerPage() {
   // cell) got cluttered/confusing once both started actually showing ticks.
   // Splitting into two toggleable views instead of showing both at once.
   const [dataView, setDataView] = useState('agreement'); // 'agreement' | 'po'
-  // Month-Wise Renew Tracking table — explicit pasted spec 2026-10-16: a
-  // long one-row-per-tracking-month list (Renewal Status AND PO Coverage
-  // Status side by side), alongside the existing month-grid rather than
-  // replacing it. Only relevant (covered or lapsed) months get a row, so
-  // this doesn't balloon into 12 rows per container.
-  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'table'
   // Explicit request 2026-10-16 ("click the ticket open PO"): clicking a
   // row opens a read-only detail panel in place of the table, same swap-
   // in-place pattern Lease Expiry/Renew & Document already use for their
@@ -218,11 +144,6 @@ export function PoAgreementTrackerPage() {
     [filtered, displayedYear]
   );
 
-  const trackingRows = useMemo(
-    () => (viewMode === 'table' ? filtered.flatMap((c) => trackingRowsForContainer(c, displayedYear)) : []),
-    [filtered, displayedYear, viewMode]
-  );
-
   return (
     <>
       <PageHeader
@@ -234,15 +155,9 @@ export function PoAgreementTrackerPage() {
         <div className={styles.toolbar}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search container, client…" />
           <div className={styles.viewToggle}>
-            <button type="button" className={viewMode === 'grid' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setViewMode('grid')}>Grid view</button>
-            <button type="button" className={viewMode === 'table' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setViewMode('table')}>Table view</button>
+            <button type="button" className={dataView === 'agreement' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setDataView('agreement')}>Agreement wise</button>
+            <button type="button" className={dataView === 'po' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setDataView('po')}>PO wise</button>
           </div>
-          {viewMode === 'grid' && (
-            <div className={styles.viewToggle}>
-              <button type="button" className={dataView === 'agreement' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setDataView('agreement')}>Agreement wise</button>
-              <button type="button" className={dataView === 'po' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setDataView('po')}>PO wise</button>
-            </div>
-          )}
           <label className={styles.checkboxLabel}>
             <input type="checkbox" checked={onlyThisYear} onChange={(e) => setOnlyThisYear(e.target.checked)} />
             Only show containers due this year
@@ -268,51 +183,7 @@ export function PoAgreementTrackerPage() {
         {!error && !loading && filtered.length > 0 && selected && (
           <PoAgreementDetail container={selected} onBack={() => setSelected(null)} onEdit={() => navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainer: selected.container } })} />
         )}
-        {!error && !loading && filtered.length > 0 && !selected && viewMode === 'table' && (
-          <div className={styles.scrollWrap}>
-            {!trackingRows.length
-              ? <EmptyState message="No container has a renewal or PO due/lapsed in this year" />
-              : (
-                <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th className={styles.colContainer}>Container</th>
-                      <th className={styles.colClient}>Client</th>
-                      <th className={styles.colDate}>Renewal Start</th>
-                      <th className={styles.colDate}>Renewal End</th>
-                      <th>Tracking Month</th>
-                      <th>Renewal Status</th>
-                      <th>PO No</th>
-                      <th className={styles.colDate}>PO Start</th>
-                      <th className={styles.colDate}>PO Valid Till</th>
-                      <th>PO Coverage Status</th>
-                      <th>Entry Date</th>
-                      <th>Remarks</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trackingRows.map((r) => (
-                      <tr key={r.key} className={styles.clickRow} onClick={() => setSelected(containers.find((c) => c.container === r.container))}>
-                        <td className={styles.colContainer}>{r.container}</td>
-                        <td className={styles.colClient}>{r.clientName}</td>
-                        <td className={styles.colDate}>{r.renewalStartDate ? formatDisplayDate(r.renewalStartDate) : '—'}</td>
-                        <td className={styles.colDate}>{formatDisplayDate(r.renewalEndDate)}</td>
-                        <td>{r.trackingMonth}</td>
-                        <td className={styles[STATUS_TONE[r.renewalStatus]]}>{r.renewalStatus}</td>
-                        <td>{r.poNo || '—'}</td>
-                        <td className={styles.colDate}>{r.poStartDate ? formatDisplayDate(r.poStartDate) : '—'}</td>
-                        <td className={styles.colDate}>{formatDisplayDate(r.poValidityEndDate)}</td>
-                        <td className={styles[STATUS_TONE[r.poCoverageStatus]]}>{r.poCoverageStatus}</td>
-                        <td>{r.renewalSubmittedDate || '—'}</td>
-                        <td>{r.remarks || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-          </div>
-        )}
-        {!error && !loading && filtered.length > 0 && !selected && viewMode === 'grid' && (
+        {!error && !loading && filtered.length > 0 && !selected && (
           <div className={styles.scrollWrap}>
             <table className={styles.table}>
               <thead>
@@ -400,7 +271,7 @@ export function PoAgreementTrackerPage() {
           </div>
         )}
 
-        {!selected && viewMode === 'grid' && <div className={styles.legend}>
+        {!selected && <div className={styles.legend}>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.bad}`} />Overdue</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendItem}><span className={`${styles.checkbox} ${styles.bad}`} style={{ borderColor: 'var(--error)' }} />Solid red, no tick = overdue, still not renewed</span>
