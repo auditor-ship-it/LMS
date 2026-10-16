@@ -126,6 +126,21 @@ thead .colContainer, thead .colClient { background: var(--surface-2); }
   vertical-align: middle;
 }
 .dotSquare { border-radius: 2px; }
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.checkboxChecked { border-style: solid; }
 .bad { background: var(--error); }
 .warn { background: var(--warn); }
 .info { background: var(--info); }

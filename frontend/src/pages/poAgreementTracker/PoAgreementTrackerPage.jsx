@@ -34,6 +34,16 @@ const BAND_TEXT_TONE = { overdue: 'textBad', critical: 'textWarn', warning: 'tex
 // Same 4 bands again, as a light cell-background tint for the Agreement
 // coverage bar (a day cell the bar passes through, not just its end date).
 const BAND_RANGE_TONE = { overdue: 'rangeBad', critical: 'rangeWarn', warning: 'rangeInfo', safe: 'rangeOk' };
+// Year view's month checkboxes are colored inline (border + fill) rather
+// than via CSS class, since a checkbox needs both colors set together —
+// same 4 bands, as actual CSS variable values.
+const BAND_COLOR_VAR = {
+  overdue: 'var(--error)',
+  critical: 'var(--warn)',
+  warning: 'var(--info)',
+  safe: 'var(--success)',
+  none: 'var(--text-3)'
+};
 
 function daysInMonth(year, month) { return new Date(year, month + 1, 0).getDate(); }
 
@@ -235,20 +245,23 @@ export function PoAgreementTrackerPage() {
                           );
                         });
                       })() : (() => {
-                        const agrMonth = monthOfYear(c.agreementDate, displayedYear);
                         const poMonth = monthOfYear(c.poDate, displayedYear);
                         const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
+                        const toneVar = BAND_COLOR_VAR[agrBand] || BAND_COLOR_VAR.none;
                         return monthList.map((m) => {
                           const inRange = agrRange && m >= agrRange.from && m <= agrRange.to;
                           return (
                             <td
                               key={m}
-                              className={`${styles.dayCell} ${displayedYear === today.getFullYear() && m === today.getMonth() ? styles.todayCol : ''} ${inRange ? styles[BAND_RANGE_TONE[agrBand]] : ''}`}
+                              className={`${styles.dayCell} ${displayedYear === today.getFullYear() && m === today.getMonth() ? styles.todayCol : ''}`}
                               title={inRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : undefined}
                             >
-                              {agrMonth === m && (
-                                <span className={`${styles.dot} ${styles[BAND_TONE[agrBand]]}`} title={`Agreement valid upto ${c.agreementDate}`} />
-                              )}
+                              <span
+                                className={`${styles.checkbox} ${inRange ? styles.checkboxChecked : ''}`}
+                                style={{ borderColor: toneVar, background: inRange ? toneVar : 'transparent' }}
+                              >
+                                {inRange && '✓'}
+                              </span>
                               {poMonth === m && (
                                 <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
                               )}
