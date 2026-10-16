@@ -315,6 +315,11 @@ export async function getExpiryDataByFilter(filterType, user) {
   const allHeaders = padRow(values[0], readWidth);
   const allRows = values.slice(1).map((r) => padRow(r, readWidth));
   const expiryRemarkCol = findExpiryRemarkCol(allHeaders);
+  // Real Agreement/PO file + PO No columns, resolved once here (same helper
+  // every other Agreement/PO PDF reader in this app uses) — only actually
+  // read below for filterType 'pending' (the PO & Agreement Tracker page's
+  // click-through detail), but cheap enough to resolve unconditionally.
+  const { agrCol: _poAgrCol, poCol: _poPoCol, poPdfCol: _poPoPdfCol, cycleCol: _poCycleCol } = _resolveRenewalColumns(allHeaders);
 
   let colIdx = -1;
   for (let h = 0; h <= 14; h++) {
@@ -539,6 +544,21 @@ export async function getExpiryDataByFilter(filterType, user) {
     if (filterType === 'pending') {
       item.agreementDate = expDate ? _toLocalIsoDate(expDate) : null;
       item.poDate = poExpDate ? _toLocalIsoDate(poExpDate) : null;
+      // For the PO & Agreement Tracker page's click-through detail view —
+      // explicit request 2026-10-16 ("click the ticket open PO"): the
+      // actual Agreement/PO file links, PO No and Billing Cycle, so
+      // clicking a container there can show them without a second
+      // round-trip. actionStatus (above, set for every filterType) already
+      // tells the frontend whether this container is in 'documents
+      // pending' — the only stage its Update Agreement form can save to.
+      item.agreementUrl = safeStr(row[_poAgrCol]);
+      item.poPdfUrl = safeStr(row[_poPoPdfCol]);
+      item.poNo = safeStr(row[_poPoCol]);
+      // Only the two real values this field is ever meant to hold — some
+      // rows carry leftover data from before this column's current use
+      // (e.g. a stray date) that isn't a billing cycle at all.
+      const cycleRaw = safeStr(row[_poCycleCol]).trim();
+      item.billingCycle = (cycleRaw === 'Monthly' || cycleRaw === 'Daily') ? cycleRaw : '';
     }
     if (filterType === 'documents' || filterType === 'approval') {
       item.poUrl = safeStr(row[24]);

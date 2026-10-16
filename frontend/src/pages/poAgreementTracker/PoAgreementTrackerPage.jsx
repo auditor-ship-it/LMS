@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PageHeader, Card, Button, SearchBar, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchPoAgreementTracker } from '../../services/poAgreementTracker.service.js';
+import { ROUTES } from '../../constants/routes.js';
 import styles from './PoAgreementTrackerPage.module.css';
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -102,10 +104,19 @@ function coverageMonthsForYear(startStr, endStr, year) {
  */
 export function PoAgreementTrackerPage() {
   const { data, loading, error, reload } = useAsync(fetchPoAgreementTracker, []);
+  const navigate = useNavigate();
   const [yearOffset, setYearOffset] = useState(0);
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
   const [onlyThisYear, setOnlyThisYear] = useState(false);
+  // Explicit request 2026-10-16 ("click the ticket open PO"): clicking a
+  // row opens a read-only detail panel in place of the table, same swap-
+  // in-place pattern Lease Expiry/Renew & Document already use for their
+  // own row detail. No edit form here — this page lists EVERY deployed
+  // container, not just ones in the 'Documents Pending' stage that can
+  // actually be saved; Edit instead hands off to Renew & Document, which
+  // already gates correctly.
+  const [selected, setSelected] = useState(null);
 
   const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const displayedYear = today.getFullYear() + yearOffset;
@@ -121,6 +132,19 @@ export function PoAgreementTrackerPage() {
     }
     return out;
   }, [containers, debouncedSearch, onlyThisYear, displayedYear]);
+
+  // "AGRMENT WISE AND PO WISE" totals — explicit request 2026-10-16: how
+  // many of the currently-shown containers have an Agreement date vs a PO
+  // date due in the displayed year, counted separately (a container can
+  // count toward both, or neither).
+  const agreementDueCount = useMemo(
+    () => filtered.filter((c) => monthOfYear(c.agreementDate, displayedYear) !== null).length,
+    [filtered, displayedYear]
+  );
+  const poDueCount = useMemo(
+    () => filtered.filter((c) => monthOfYear(c.poDate, displayedYear) !== null).length,
+    [filtered, displayedYear]
+  );
 
   return (
     <>
@@ -144,10 +168,20 @@ export function PoAgreementTrackerPage() {
           </div>
         </div>
 
+        {!error && !loading && !!filtered.length && !selected && (
+          <div className={styles.totals}>
+            <span><strong>{agreementDueCount}</strong> agreement{agreementDueCount === 1 ? '' : 's'} due in {displayedYear}</span>
+            <span><strong>{poDueCount}</strong> PO{poDueCount === 1 ? '' : 's'} due in {displayedYear}</span>
+          </div>
+        )}
+
         {error && <ErrorState message={error} onRetry={reload} />}
         {!error && loading && <SkeletonTable columns={6} rows={10} />}
         {!error && !loading && !filtered.length && <EmptyState message="No containers found" />}
-        {!error && !loading && filtered.length > 0 && (
+        {!error && !loading && filtered.length > 0 && selected && (
+          <PoAgreementDetail container={selected} onBack={() => setSelected(null)} onEdit={() => navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainer: selected.container } })} />
+        )}
+        {!error && !loading && filtered.length > 0 && !selected && (
           <div className={styles.scrollWrap}>
             <table className={styles.table}>
               <thead>
@@ -169,7 +203,7 @@ export function PoAgreementTrackerPage() {
                   const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
                   const toneVar = BAND_COLOR_VAR[agrBand] || BAND_COLOR_VAR.none;
                   return (
-                    <tr key={c.container}>
+                    <tr key={c.container} className={styles.clickRow} onClick={() => setSelected(c)}>
                       <td className={styles.colContainer}>{c.container}</td>
                       <td className={styles.colClient}>{c.clientName}</td>
                       <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
@@ -202,7 +236,7 @@ export function PoAgreementTrackerPage() {
           </div>
         )}
 
-        <div className={styles.legend}>
+        {!selected && <div className={styles.legend}>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.bad}`} />Overdue</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.warn}`} />Due soon (≤7d)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.info}`} />Upcoming (≤30d)</span>
@@ -210,8 +244,80 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendDivider} />
           <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = month covered, from start date to valid-upto — where a start date is on file)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.dotSquare}`} />PO (valid-upto month only — no start date tracked)</span>
-        </div>
+        </div>}
       </Card>
     </>
+  );
+}
+
+/**
+ * Read-only detail panel for one container, shown when a tracker row is
+ * clicked ("click the ticket open PO" — explicit request 2026-10-16). Pure
+ * display — this page covers every deployed container, most of which
+ * aren't in the 'Documents Pending' stage its Update Agreement form can
+ * actually save to, so editing happens by handing off to Renew & Document
+ * (onEdit) instead of reimplementing that form here.
+ */
+function PoAgreementDetail({ container: c, onBack, onEdit }) {
+  const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
+  const agrBand = bandForDate(c.agreementDate, today);
+  const poBand = bandForDate(c.poDate, today);
+  const editable = String(c.status || '').trim().toLowerCase() === 'documents pending';
+
+  return (
+    <div className={styles.detailPanel}>
+      <div className={styles.detailHeader}>
+        <h3>{c.container}</h3>
+        <span>{c.clientName}</span>
+      </div>
+
+      <div className={styles.detailGrid}>
+        <div className={styles.detailField}>
+          <span className={styles.label}>Agreement Valid Till</span>
+          <span className={agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}>{formatDisplayDate(c.agreementDate)}</span>
+        </div>
+        <div className={styles.detailField}>
+          <span className={styles.label}>Agreement Start Date</span>
+          <span>{c.agreementStartDate ? formatDisplayDate(c.agreementStartDate) : '— (not on file)'}</span>
+        </div>
+        <div className={styles.detailField}>
+          <span className={styles.label}>Agreement File</span>
+          {c.agreementUrl
+            ? <a href={c.agreementUrl} target="_blank" rel="noreferrer">Open Agreement ↗</a>
+            : <span className={styles.hintText}>No agreement file on record</span>}
+        </div>
+
+        <div className={styles.detailField}>
+          <span className={styles.label}>PO Valid Till</span>
+          <span className={poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}>{formatDisplayDate(c.poDate)}</span>
+        </div>
+        <div className={styles.detailField}>
+          <span className={styles.label}>PO No</span>
+          <span>{c.poNo || '—'}</span>
+        </div>
+        <div className={styles.detailField}>
+          <span className={styles.label}>PO File</span>
+          {c.poPdfUrl
+            ? <a href={c.poPdfUrl} target="_blank" rel="noreferrer">Open PO ↗</a>
+            : <span className={styles.hintText}>No PO file on record</span>}
+        </div>
+
+        {c.billingCycle && (
+          <div className={styles.detailField}>
+            <span className={styles.label}>Billing Cycle</span>
+            <span>{c.billingCycle}</span>
+          </div>
+        )}
+        <div className={styles.detailField}>
+          <span className={styles.label}>Renewal Status</span>
+          <span>{c.status || 'No renewal in progress'}</span>
+        </div>
+      </div>
+
+      <div className={styles.detailActions}>
+        <Button variant="secondary" onClick={onBack}>Back to list</Button>
+        {editable && <Button variant="primary" onClick={onEdit}>Edit in Renew &amp; Document →</Button>}
+      </div>
+    </div>
   );
 }

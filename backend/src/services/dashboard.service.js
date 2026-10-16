@@ -246,7 +246,16 @@ export async function getPoAgreementTrackerData() {
       clientName: safeStr(item.row[2]),
       agreementStartDate: agrStartMap[safeStr(item.row[1]).trim()] || null,
       agreementDate: item.agreementDate || null,
-      poDate: item.poDate || null
+      poDate: item.poDate || null,
+      // Click-through detail (explicit request 2026-10-16) — the actual
+      // Agreement/PO file links + PO No/Billing Cycle, and whether this
+      // container is in 'documents pending' (the only stage its Update
+      // Agreement form in Renew & Document can actually save to).
+      agreementUrl: item.agreementUrl || '',
+      poPdfUrl: item.poPdfUrl || '',
+      poNo: item.poNo || '',
+      billingCycle: item.billingCycle || '',
+      status: item.actionStatus || ''
     }))
   };
 }
