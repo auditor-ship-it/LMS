@@ -200,6 +200,7 @@ export function PoAgreementTrackerPage() {
                   const agrBand = bandForDate(c.agreementDate, today);
                   const poBand = bandForDate(c.poDate, today);
                   const poMonth = monthOfYear(c.poDate, displayedYear);
+                  const agrMonth = monthOfYear(c.agreementDate, displayedYear);
                   const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
                   const toneVar = BAND_COLOR_VAR[agrBand] || BAND_COLOR_VAR.none;
                   return (
@@ -209,12 +210,21 @@ export function PoAgreementTrackerPage() {
                       <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
                       <td className={`${styles.colDate} ${poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}`}>{formatDisplayDate(c.poDate)}</td>
                       {monthList.map((m) => {
-                        const inRange = agrRange && m >= agrRange.from && m <= agrRange.to;
+                        // Checked for every month the Agreement's start-to-valid-till
+                        // range covers — but MOST containers have no start date on
+                        // file (only ~15% join to one; see _agreementStartDateMap),
+                        // so agrRange is null for most rows. Without a fallback,
+                        // those rows showed NO ticked box anywhere, all year, which
+                        // read as "nothing showing" even though the Agreement Date
+                        // column (left) has a real date — so when there's no range,
+                        // tick just that one valid-till month instead, same as PO's
+                        // own single end-date marker always does.
+                        const inRange = agrRange ? (m >= agrRange.from && m <= agrRange.to) : agrMonth === m;
                         return (
                           <td
                             key={m}
                             className={`${styles.dayCell} ${displayedYear === today.getFullYear() && m === today.getMonth() ? styles.todayCol : ''}`}
-                            title={inRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : undefined}
+                            title={inRange ? (agrRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : `Agreement valid upto ${c.agreementDate} (no start date on file)`) : undefined}
                           >
                             <span
                               className={`${styles.checkbox} ${inRange ? styles.checkboxChecked : ''}`}
@@ -242,7 +252,7 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.info}`} />Upcoming (≤30d)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendDivider} />
-          <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = month covered, from start date to valid-upto — where a start date is on file)</span>
+          <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto where a start date is on file — just the valid-upto month ticked otherwise)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.dotSquare}`} />PO (valid-upto month only — no start date tracked)</span>
         </div>}
       </Card>
