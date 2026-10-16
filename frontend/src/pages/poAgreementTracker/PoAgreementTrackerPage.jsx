@@ -109,6 +109,11 @@ export function PoAgreementTrackerPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
   const [onlyThisYear, setOnlyThisYear] = useState(false);
+  // "one PO wise view and one agreement wise view" — explicit request
+  // 2026-10-16: the combined grid (Agreement checkbox + PO dot in the same
+  // cell) got cluttered/confusing once both started actually showing ticks.
+  // Splitting into two toggleable views instead of showing both at once.
+  const [dataView, setDataView] = useState('agreement'); // 'agreement' | 'po'
   // Explicit request 2026-10-16 ("click the ticket open PO"): clicking a
   // row opens a read-only detail panel in place of the table, same swap-
   // in-place pattern Lease Expiry/Renew & Document already use for their
@@ -156,6 +161,10 @@ export function PoAgreementTrackerPage() {
       <Card>
         <div className={styles.toolbar}>
           <SearchBar value={search} onChange={setSearch} placeholder="Search container, client…" />
+          <div className={styles.viewToggle}>
+            <button type="button" className={dataView === 'agreement' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setDataView('agreement')}>Agreement wise</button>
+            <button type="button" className={dataView === 'po' ? styles.viewBtnActive : styles.viewBtn} onClick={() => setDataView('po')}>PO wise</button>
+          </div>
           <label className={styles.checkboxLabel}>
             <input type="checkbox" checked={onlyThisYear} onChange={(e) => setOnlyThisYear(e.target.checked)} />
             Only show containers due this year
@@ -202,7 +211,8 @@ export function PoAgreementTrackerPage() {
                   const poMonth = monthOfYear(c.poDate, displayedYear);
                   const agrMonth = monthOfYear(c.agreementDate, displayedYear);
                   const agrRange = coverageMonthsForYear(c.agreementStartDate, c.agreementDate, displayedYear);
-                  const toneVar = BAND_COLOR_VAR[agrBand] || BAND_COLOR_VAR.none;
+                  const band = dataView === 'po' ? poBand : agrBand;
+                  const toneVar = BAND_COLOR_VAR[band] || BAND_COLOR_VAR.none;
                   return (
                     <tr key={c.container} className={styles.clickRow} onClick={() => setSelected(c)}>
                       <td className={styles.colContainer}>{c.container}</td>
@@ -210,21 +220,25 @@ export function PoAgreementTrackerPage() {
                       <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
                       <td className={`${styles.colDate} ${poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}`}>{formatDisplayDate(c.poDate)}</td>
                       {monthList.map((m) => {
-                        // Checked for every month the Agreement's start-to-valid-till
-                        // range covers — but MOST containers have no start date on
-                        // file (only ~15% join to one; see _agreementStartDateMap),
-                        // so agrRange is null for most rows. Without a fallback,
-                        // those rows showed NO ticked box anywhere, all year, which
-                        // read as "nothing showing" even though the Agreement Date
-                        // column (left) has a real date — so when there's no range,
-                        // tick just that one valid-till month instead, same as PO's
-                        // own single end-date marker always does.
-                        const inRange = agrRange ? (m >= agrRange.from && m <= agrRange.to) : agrMonth === m;
+                        // Agreement view: checked for every month the start-to-
+                        // valid-till range covers — but MOST containers have no
+                        // start date on file (only ~15% join to one; see
+                        // _agreementStartDateMap), so agrRange is null for most
+                        // rows; those tick just their valid-till month instead,
+                        // same as PO's own single end-date marker always does.
+                        // PO view: PO never has a start date at all, so it's
+                        // always just the single valid-till month.
+                        const inRange = dataView === 'po'
+                          ? poMonth === m
+                          : (agrRange ? (m >= agrRange.from && m <= agrRange.to) : agrMonth === m);
+                        const title = dataView === 'po'
+                          ? (inRange ? `PO valid upto ${c.poDate}` : undefined)
+                          : (inRange ? (agrRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : `Agreement valid upto ${c.agreementDate} (no start date on file)`) : undefined);
                         return (
                           <td
                             key={m}
                             className={`${styles.dayCell} ${displayedYear === today.getFullYear() && m === today.getMonth() ? styles.todayCol : ''}`}
-                            title={inRange ? (agrRange ? `Agreement covers ${c.agreementStartDate} to ${c.agreementDate}` : `Agreement valid upto ${c.agreementDate} (no start date on file)`) : undefined}
+                            title={title}
                           >
                             <span
                               className={`${styles.checkbox} ${inRange ? styles.checkboxChecked : ''}`}
@@ -232,9 +246,6 @@ export function PoAgreementTrackerPage() {
                             >
                               {inRange && '✓'}
                             </span>
-                            {poMonth === m && (
-                              <span className={`${styles.dot} ${styles.dotSquare} ${styles[BAND_TONE[poBand]]}`} title={`PO valid upto ${c.poDate}`} />
-                            )}
                           </td>
                         );
                       })}
@@ -252,8 +263,11 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.info}`} />Upcoming (≤30d)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendDivider} />
-          <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto where a start date is on file — just the valid-upto month ticked otherwise)</span>
-          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.dotSquare}`} />PO (valid-upto month only — no start date tracked)</span>
+          {dataView === 'po' ? (
+            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = valid-upto month — no PO start date is tracked anywhere in this system)</span>
+          ) : (
+            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto where a start date is on file — just the valid-upto month ticked otherwise)</span>
+          )}
         </div>}
       </Card>
     </>

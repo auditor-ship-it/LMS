@@ -42,6 +42,27 @@
   cursor: pointer;
 }
 
+.viewToggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+.viewBtn, .viewBtnActive {
+  border: none;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.viewBtn:hover { background: var(--surface-2); }
+.viewBtnActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .checkboxLabel {
   display: inline-flex;
   align-items: center;
