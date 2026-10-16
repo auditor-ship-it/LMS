@@ -244,29 +244,49 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
 export async function getPoAgreementTrackerData() {
   const [{ data }, agrStartMap] = await Promise.all([getExpiryDataByFilter('pending', null), _agreementStartDateMap()]);
   return {
-    containers: data.map((item) => ({
-      container: safeStr(item.row[0]),
-      clientName: safeStr(item.row[2]),
-      // Prefer the Deployed sheet's own Renewed Date (col AA, item.renewedDate
-      // — set on every Save/Submit, so it reflects the CURRENT agreement
-      // period) over the New Lease Reff join, which only covers containers
-      // never yet renewed through this app and can be a stale one-time date.
-      agreementStartDate: item.renewedDate || agrStartMap[safeStr(item.row[1]).trim()] || null,
-      agreementDate: item.agreementDate || null,
-      poDate: item.poDate || null,
-      // Click-through detail (explicit request 2026-10-16) — the actual
-      // Agreement/PO file links + PO No/Billing Cycle, and whether this
-      // container is in 'documents pending' (the only stage its Update
-      // Agreement form in Renew & Document can actually save to).
-      agreementUrl: item.agreementUrl || '',
-      poPdfUrl: item.poPdfUrl || '',
-      poNo: item.poNo || '',
-      billingCycle: item.billingCycle || '',
-      status: item.actionStatus || '',
-      // Month-Wise Renew Tracking table (explicit spec 2026-10-16) —
-      // "Actual Renewal Entry Date" and "Remarks" columns.
-      renewalSubmittedDate: item.renewalSubmittedDate || '',
-      remarks: item.renewalRemarks || ''
-    }))
+    containers: data.map((item) => {
+      // Explicit pasted spec 2026-10-16: "if I renew again in May with a
+      // start date of April, automatically mark April green as well" — the
+      // tracker must reflect a renewal the moment it's SUBMITTED (Save or
+      // Submit on the Documents form), not wait for Pushpa's Approve, which
+      // is what the real "Agreement Valid Upto" column (H, item.agreementDate)
+      // is gated on. The one case this must NOT apply: a submission Pushpa
+      // already sent back (Approval Status 'Rejected') — that proposed
+      // period was explicitly rejected, so showing it as if it already
+      // covers those months would be wrong; falls back to the last
+      // genuinely-approved date (H) instead, same as before this fix.
+      const rejected = String(item.approvalStatus || '').trim().toLowerCase() === 'rejected';
+      const trustStaged = !rejected && !!item.renewedDate;
+      const agreementStartDate = trustStaged ? item.renewedDate : (agrStartMap[safeStr(item.row[1]).trim()] || null);
+      const agreementDate = (trustStaged && item.stagedValidTill) ? item.stagedValidTill : (item.agreementDate || null);
+      return {
+        container: safeStr(item.row[0]),
+        clientName: safeStr(item.row[2]),
+        agreementStartDate,
+        agreementDate,
+        poDate: item.poDate || null,
+        // Click-through detail (explicit request 2026-10-16) — the actual
+        // Agreement/PO file links + PO No/Billing Cycle, and whether this
+        // container is in 'documents pending' (the only stage its Update
+        // Agreement form in Renew & Document can actually save to).
+        agreementUrl: item.agreementUrl || '',
+        poPdfUrl: item.poPdfUrl || '',
+        poNo: item.poNo || '',
+        billingCycle: item.billingCycle || '',
+        status: item.actionStatus || '',
+        // Month-Wise Renew Tracking table (explicit spec 2026-10-16) —
+        // "Actual Renewal Entry Date" and "Remarks" columns.
+        renewalSubmittedDate: item.renewalSubmittedDate || '',
+        remarks: item.renewalRemarks || '',
+        // Transparency note (explicit request pattern this session: be
+        // upfront about data nuances) — true only while the container is
+        // actually still sitting in 'Documents Pending' (awaiting Pushpa's
+        // Approve/Send Back) AND these dates came from that submission —
+        // NOT just because trustStaged happened to be true (which is also
+        // true for any long-since-approved container, where AA/AB already
+        // equal H/X anyway and there's nothing provisional left to flag).
+        provisional: trustStaged && String(item.actionStatus || '').trim().toLowerCase() === 'documents pending'
+      };
+    })
   };
 }

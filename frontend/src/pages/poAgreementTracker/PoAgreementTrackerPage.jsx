@@ -437,6 +437,12 @@ function PoAgreementDetail({ container: c, onBack, onEdit }) {
         <span>{c.clientName}</span>
       </div>
 
+      {c.provisional && (
+        <p className={styles.hintText}>
+          Based on a renewal already submitted but not yet approved by Pushpa — dates may still change.
+        </p>
+      )}
+
       <div className={styles.detailGrid}>
         <div className={styles.detailField}>
           <span className={styles.label}>Agreement Valid Till</span>

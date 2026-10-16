@@ -557,6 +557,21 @@ export async function getExpiryDataByFilter(filterType, user) {
       // that has never been through a renewal yet).
       const renewedParsed = parseDate(row[26]);
       item.renewedDate = renewedParsed ? _toLocalIsoDate(renewedParsed) : null;
+      // The STAGED valid-till (col AB) — needed alongside renewedDate,
+      // because the REAL "Agreement Valid Upto" (col H, read into
+      // item.agreementDate above) does NOT update on Save/Submit; it only
+      // gets promoted from AB once Pushpa actually Approves (see
+      // saveRenewalDraft's own doc comment: "Deliberately does NOT touch:
+      // Valid Upto (H/X)..."). Confirmed live 2026-10-16 on PCIU6016370: H
+      // still showed a stale 30-03-2026 (already overdue) while AA/AB had
+      // just been submitted for 01-10-2026 — explicit spec requirement
+      // ("if I renew again in May... mark green") needs the tracker to
+      // reflect a submitted renewal immediately, not wait for approval.
+      // dashboard.service.js decides whether to actually trust this over H
+      // (never when the submission was Rejected — see its own comment).
+      const stagedValidTillParsed = parseDate(row[27]);
+      item.stagedValidTill = stagedValidTillParsed ? _toLocalIsoDate(stagedValidTillParsed) : null;
+      item.approvalStatus = safeStr(row[APPROVAL_STATUS_COL]);
       // For the PO & Agreement Tracker page's click-through detail view —
       // explicit request 2026-10-16 ("click the ticket open PO"): the
       // actual Agreement/PO file links, PO No and Billing Cycle, so
