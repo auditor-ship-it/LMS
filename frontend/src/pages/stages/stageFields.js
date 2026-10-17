@@ -68,6 +68,33 @@ const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
  *  moved to a since-removed Stage 10 2026-09-18, back here 2026-09-22. */
 const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
 
+/** Final Billing Date is normally exactly one calendar month after Off-Lease
+ *  Intimation Date (explicit request 2026-10-17 — client billing is
+ *  month-based, so a full month between the two is the expected case: e.g.
+ *  1-1-2026 -> 1-2-2026). Parses "YYYY-MM-DD" by its own y/m/d parts rather
+ *  than `new Date(str)`, same reasoning as _toLocalIsoDate on the backend —
+ *  avoids a UTC-parse day shift depending on the browser's timezone. Returns
+ *  true (can't yet tell) while either date is still blank, so Remark isn't
+ *  forced required before the user has even picked both dates. */
+function exactlyOneMonthLater(startStr, endStr) {
+  if (!startStr || !endStr) return true;
+  const [sy, sm, sd] = startStr.split('-').map(Number);
+  const [ey, em, ed] = endStr.split('-').map(Number);
+  if (!sy || !sm || !sd || !ey || !em || !ed) return true;
+  // `sm` is 1-indexed (Jan=1); passing it straight as Date's 0-indexed
+  // month arg lands one month ahead of the start date — exactly the
+  // "+1 month" this is checking for.
+  const expected = new Date(sy, sm, sd);
+  return expected.getFullYear() === ey && expected.getMonth() === em - 1 && expected.getDate() === ed;
+}
+
+/** Remark becomes mandatory on Stage 1's form whenever Final Billing Date
+ *  (col_13) isn't exactly one month after Off-Lease Intimation Date
+ *  (col_10) — e.g. 27-1-2026 instead of 1-2-2026 — so there's always a
+ *  recorded reason for billing the client for something other than a full
+ *  month. */
+const billingRemarkRequired = (v) => !exactlyOneMonthLater(v.col_10, v.col_13);
+
 /** Stage 7 (Payment Status)'s UTR Number field only makes sense once VR
  *  (Voucher Raised, a separate custom action — see StageDetailModal.jsx's
  *  PAYMENT_STATUS_STAGE block) is done; col_348 is OL_VR_STATUS_COL on the
@@ -269,7 +296,7 @@ export const STAGE_FIELDS = {
        StageDetailModal.jsx) so Stage 1A only has one file to open — see
        OL_HEADERS[336] / result.col_336 in offlease.service.js. */
     { key: 'col_336', label: 'Container Photos', type: 'imagesToPdf' },
-    { key: 'col_14', label: 'Remark', type: 'text' }
+    { key: 'col_14', label: 'Remark', type: 'text', requiredIf: billingRemarkRequired }
   ],
 
   2: [

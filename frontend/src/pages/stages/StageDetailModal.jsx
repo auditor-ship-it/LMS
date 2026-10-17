@@ -249,7 +249,19 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
 
   const setField = (key, v) => setValues((prev) => ({ ...prev, [key]: v }));
 
-  const visibleFields = useMemo(() => fields.filter((f) => !f.showIf || f.showIf(values)), [fields, values]);
+  /* A field can carry `requiredIf(values)` instead of a static `required`
+     (e.g. Stage 1's Remark — explicit request 2026-10-17: mandatory only
+     when Final Billing Date isn't exactly one month after Off-Lease
+     Intimation Date) — resolved here, once, so the required-check below,
+     the asterisk Labeled renders, and both render paths (the flat grid and
+     FormSections) all see an already-resolved `required` without needing
+     to know about `requiredIf` themselves. */
+  const visibleFields = useMemo(
+    () => fields
+      .filter((f) => !f.showIf || f.showIf(values))
+      .map((f) => (f.requiredIf ? { ...f, required: f.requiredIf(values) } : f)),
+    [fields, values]
+  );
 
   /* Fields tagged `inspection` are pulled out of the plain grid and rendered
      as the Good/Damage table instead — grouped by item, so each row can show
