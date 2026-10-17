@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { PageHeader, Card, Button, StatCard, SearchBar, FilterBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
@@ -110,7 +111,14 @@ export function RenewDocumentPage() {
   const { user } = useAuth();
   const canActRenew = canAct('renew');
 
-  const [search, setSearch] = useState('');
+  // Explicit request 2026-10-16: PO & Agreement Tracker's click-through
+  // "open PO" action lands here (the Documents list this container is
+  // actually actionable from) with the container pre-filled into search,
+  // via navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainer } }) —
+  // so the user doesn't have to retype it. Read once; a later in-page
+  // search edit should not keep snapping back to this.
+  const location = useLocation();
+  const [search, setSearch] = useState(() => location.state?.focusContainer || '');
   const debouncedSearch = useDebouncedValue(search, 250);
   const [statusFilter, setStatusFilter] = useState('');
   const [selectedContainer, setSelectedContainer] = useState(null);

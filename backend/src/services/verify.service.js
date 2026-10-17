@@ -40,7 +40,7 @@ import { safeStr, formatDateVal, buildDisplayRow } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
-import { patchMongoMirrorRow, getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow, getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
 import { sendMail } from './email.service.js';
 import { DEPLOYED_RAW_CACHE_KEY, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
@@ -282,7 +282,8 @@ export async function renewLeaseWithAgreement(containerNo, newDateString, agreem
       container: containerNo, clientName: _deployedClientName(headers, srcRow),
       poNo: '', poFileUrl: '', agreementUrl: agreementUrl || '',
       oldPoNo: '', oldPoFileUrl: '', oldAgreementUrl: oldAgr || '',
-      validTill: newDateString, userEmail, source: 'Update Lease Period'
+      validTill: newDateString, userEmail, source: 'Update Lease Period',
+      oldValidTill: oldValidStr || ''
     });
 
     return 'OK';
@@ -313,7 +314,12 @@ function _deployedClientName(headers, row) {
    history, so every renewal action, including a Complete Document Stage that
    follows an Update Lease Period for the same cycle, gets its own row rather
    than being merged into an earlier one). */
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File'];
+// Explicit request 2026-10-16 ("pls update the sheet heder and data") — 3
+// more columns, appended at the end (never inserted), matching
+// expiry.service.js's identical copy of this header/function (both write
+// paths must agree on this sheet's shape — see this function's own doc
+// comment above).
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date', 'Old PO Date'];
 
 async function _logRenewal(info) {
   try {
@@ -327,11 +333,25 @@ async function _logRenewal(info) {
       await updateRange(SHEETS.RENEWAL_LOG, `${startCol}1:${endCol}1`, [RENEWAL_LOG_HEADERS.slice(headers.length)]);
     }
     const stamp = dmyTime(new Date());
-    await appendRow(SHEETS.RENEWAL_LOG, [
+    const logRow = [
       stamp, info.container || '', info.clientName || '', info.poNo || '',
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
-    ]);
+      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || '',
+      // This flow (Update Lease Period) has no Renewed Date/PO fields of
+      // its own — only Old Agreement Date is available here (oldValidStr,
+      // captured before the overwrite below).
+      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || '', info.oldPoDate || ''
+    ];
+    await appendRow(SHEETS.RENEWAL_LOG, logRow);
+    // BUG FOUND AND FIXED 2026-10-16 ("refer the one mongo db file Renewal
+    // Log") — this path (Update Lease Period) wrote the live Sheet above
+    // but never mirrored the row into Mongo, unlike expiry.service.js's own
+    // copy of this same function. getRenewalLogData/other Renewal Log
+    // readers go through the Mongo mirror (getSheetDataFromMongo), so a
+    // renewal logged from THIS path was invisible there until the next
+    // periodic full resync (sheetsReconcile.job.js) caught up — up to
+    // several minutes later, not immediately like the Approval path.
+    await appendMongoMirrorRow(SHEETS.RENEWAL_LOG, logRow);
     // Same try/catch as the log write above — a mail failure must not be
     // mistaken for the renewal itself failing, and this only ever fires
     // once the append has actually succeeded.

@@ -193,5 +193,15 @@ export const SIDEBAR_KEYS = [
    * every other entry above, so nobody loses access the moment this ships. */
   { key: 'refunds', label: 'Refunds' },
   { key: 'refundsApproval', label: 'Refunds Approval' },
-  { key: 'approvalPending', label: 'Renew Approval Pending' }
+  { key: 'approvalPending', label: 'Renew Approval Pending' },
+  // Appended 2026-10-16, explicit request — PO & Agreement Tracker is a new
+  // standalone page (no prior sidebarKey could exist). Same backfilled-to-
+  // true-for-existing-rows mechanism as every other entry above, via
+  // roles.service.js's _ensureSidebarHeaderWidth.
+  { key: 'poAgreementTracker', label: 'PO & Agreement Tracker' },
+  // Appended 2026-10-17, explicit request — Sync Status is a new standalone
+  // admin page (no prior sidebarKey could exist). Same backfilled-to-
+  // true-for-existing-rows mechanism as every other entry above, via
+  // roles.service.js's _ensureSidebarHeaderWidth.
+  { key: 'syncStatus', label: 'Sync Status' }
 ];

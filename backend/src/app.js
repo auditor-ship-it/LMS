@@ -15,6 +15,7 @@ import offLeaseRoutes from './routes/offlease.routes.js';
 import tasksRoutes from './routes/tasks.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import apiKeysRoutes from './routes/apiKeys.routes.js';
+import syncStatusRoutes from './routes/syncStatus.routes.js';
 import publicRoutes from './routes/public.routes.js';
 import ssoRoutes from './routes/sso.routes.js';
 import refundsRoutes from './routes/refunds.routes.js';
@@ -93,6 +94,7 @@ export function createApp() {
   app.use('/api/tasks', tasksRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/api-keys', apiKeysRoutes);
+  app.use('/api/sync-status', syncStatusRoutes);
   app.use('/api/refunds', refundsRoutes);
   // No-login, signed-link review (see refundReview.routes.js's own comment) —
   // same "must stay reachable with no session" posture as /api/sso below.

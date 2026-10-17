@@ -8,3 +8,7 @@ export async function getDeployedDetail(req, res) {
   const { month, category, type, size } = req.query;
   res.json(await dashboardService.getDeployedDetailData(month, category, type, size));
 }
+
+export async function getPoAgreementTracker(req, res) {
+  res.json(await dashboardService.getPoAgreementTrackerData());
+}

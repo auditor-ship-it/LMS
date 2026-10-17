@@ -176,7 +176,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      simply never wired it up. Self-fetch here whenever the caller didn't
      supply it, rather than requiring every future caller to remember to. */
   const suppliedFms = movement !== undefined || transport !== undefined || delivery !== undefined;
-  const { data: ownFms, loading: fmsLoading } = useAsync(
+  const { data: ownFms, loading: fmsLoading, reload: reloadOwnFms } = useAsync(
     () => (identityOnly && !suppliedFms && containerNo
       ? getOffLeaseContainerDetail(containerNo).then((d) => d?.fms || null)
       : Promise.resolve(null)),
@@ -249,7 +249,19 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
 
   const setField = (key, v) => setValues((prev) => ({ ...prev, [key]: v }));
 
-  const visibleFields = useMemo(() => fields.filter((f) => !f.showIf || f.showIf(values)), [fields, values]);
+  /* A field can carry `requiredIf(values)` instead of a static `required`
+     (e.g. Stage 1's Remark — explicit request 2026-10-17: mandatory only
+     when Final Billing Date isn't exactly one month after Off-Lease
+     Intimation Date) — resolved here, once, so the required-check below,
+     the asterisk Labeled renders, and both render paths (the flat grid and
+     FormSections) all see an already-resolved `required` without needing
+     to know about `requiredIf` themselves. */
+  const visibleFields = useMemo(
+    () => fields
+      .filter((f) => !f.showIf || f.showIf(values))
+      .map((f) => (f.requiredIf ? { ...f, required: f.requiredIf(values) } : f)),
+    [fields, values]
+  );
 
   /* Fields tagged `inspection` are pulled out of the plain grid and rendered
      as the Good/Damage table instead — grouped by item, so each row can show
@@ -520,6 +532,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                       { n: 9, label: 'Transport', record: fmsTransport, empty: 'No Offlease transport in STAGE-9 for this container and client.' },
                       { n: 10, label: 'Site Delivery', record: fmsDelivery, empty: "No STAGE-10 record for this container's DO number." }
                     ]}
+                    onRetry={!suppliedFms ? reloadOwnFms : undefined}
                   />
                 ))}
 
@@ -1494,7 +1507,7 @@ function _doNumberFromFms(record) {
  * One step at a time, in a grid that flows into columns, fits the detail in
  * the modal without any vertical scrolling.
  */
-function FmsSteps({ steps }) {
+function FmsSteps({ steps, onRetry }) {
   /* Opens on the first step that actually has data — landing on an empty
      STAGE-8 would hide the two populated ones behind a click. */
   const firstWithData = steps.find((s) => fmsState(s.record) === 'found')?.n ?? steps[0].n;
@@ -1541,8 +1554,17 @@ function FmsSteps({ steps }) {
         )
         : (
           <p className={styles.fmsEmpty}>
+            {/* This moved to a Mongo mirror 2026-08-28 specifically so a
+                Sheets quota hit can no longer cause this — a failure here now
+                is a transient read/connection hiccup, not the routine
+                "shared quota exhausted" the old wording described. */}
             {state === 'unread'
-              ? 'Sheet could not be read — Google Sheets read quota exhausted.'
+              ? (
+                <>
+                  Could not load this data just now — try again.{' '}
+                  {onRetry && <button type="button" className={styles.linkBtn} onClick={onRetry}>Retry</button>}
+                </>
+              )
               : step.empty}
           </p>
         )}

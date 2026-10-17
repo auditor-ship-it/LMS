@@ -270,6 +270,16 @@
   font-size: 12px;
   color: var(--text-2);
 }
+.linkBtn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
 
 @media (max-width: 900px) {
   .stepRow { flex-wrap: wrap; gap: 8px; }

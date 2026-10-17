@@ -54,6 +54,7 @@ export const NAV_TREE = {
     { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending', taskKey: 'renewApprovalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
+    { key: 'poAgreementTracker', label: 'PO & Agreement Tracker', path: ROUTES.PO_AGREEMENT_TRACKER, icon: 'clock', sidebarKey: 'poAgreementTracker', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
     // sidebarKey added 2026-09-10 — the matching SIDEBAR_KEYS column now
     // exists (permissions.config.js) and roles.service.js backfills every
@@ -85,6 +86,10 @@ export const NAV_TREE = {
     { key: 'rolesAccess', label: 'Roles & Access', path: ROUTES.ROLES_ACCESS, icon: 'lock', section: 'Admin', sidebarKey: 'rolesAccess', permKey: 'rolesAdmin' },
     // Same reasoning/exception as Roles & Access directly above, gated on
     // 'apiAdmin' + 'apiAccess' instead.
-    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin', sidebarKey: 'apiAccess', permKey: 'apiAdmin' }
+    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin', sidebarKey: 'apiAccess', permKey: 'apiAdmin' },
+    // Same reasoning/exception as Roles & Access above, gated on the same
+    // 'rolesAdmin' permission (this page's own backend controller checks
+    // it too) — explicit request 2026-10-17.
+    { key: 'syncStatus', label: 'Sync Status', path: ROUTES.SYNC_STATUS, icon: 'clock', section: 'Admin', sidebarKey: 'syncStatus', permKey: 'rolesAdmin' }
   ]
 };

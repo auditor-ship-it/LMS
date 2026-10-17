@@ -69,6 +69,14 @@ function padRow(row, len) {
   return out;
 }
 
+/** "YYYY-MM-DD" from a Date's own local y/m/d fields — never
+ *  date.toISOString(), which converts to UTC first and can shift the
+ *  calendar date by one depending on the server's timezone. */
+function _toLocalIsoDate(date) {
+  const y = date.getFullYear(), m = String(date.getMonth() + 1).padStart(2, '0'), d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 /** First column whose header exactly matches one of `names` (case/space
  *  insensitive), or -1. Located by header rather than hardcoded index: this
  *  sheet has had columns inserted/removed by hand before (see the Off-Lease
@@ -221,6 +229,41 @@ export function _resolveOrderNo(ordMap, containerNo, clientName) {
   return ordMap.map[k] || '';
 }
 
+const AGREEMENT_START_CACHE_KEY = 'agreement_start_map_v1';
+const AGREEMENT_START_TTL_SECS = 300;
+
+/**
+ * Order No -> Agreement START date ("YYYY-MM-DD"), for the PO & Agreement
+ * Tracker's coverage bar — explicit request 2026-10-16. The Deployed sheet
+ * only ever tracked Agreement VALID UPTO (the expiry end), never when the
+ * agreement actually started; this is sourced from "New lease reff"'s own
+ * "Agreement Date" column instead (col N, index 13 — confirmed start/signing
+ * date, not another expiry field, by its header match requiring "date" or
+ * "valid" alongside "agreement"), keyed by Order No (col D, index 3) — same
+ * sheet/columns verify.service.js's own agrMap already reads for Verify
+ * Lease, same reasoning, independent read here rather than a cross-file
+ * import (that map is scoped to verify.service.js's own request lifecycle).
+ * No equivalent PO start date exists anywhere in this system — PO has no
+ * entry in this map and the Tracker falls back to a single-day marker for
+ * it, not a bar.
+ */
+export async function _agreementStartDateMap() {
+  return cacheGetOrLoad(AGREEMENT_START_CACHE_KEY, AGREEMENT_START_TTL_SECS, async () => {
+    const map = {};
+    try {
+      const { rows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE_REFF);
+      for (const raw of rows) {
+        const r = padRow(raw, 15);
+        const orderNo = safeStr(r[3]).trim(); // D = Order No
+        if (!orderNo || map[orderNo]) continue; // first non-blank wins, same convention as _expiryOrderNoMap
+        const d = parseDate(r[13]); // N = Agreement Date
+        if (d) map[orderNo] = _toLocalIsoDate(d);
+      }
+    } catch (e) { /* never break the tracker page — falls back to no bar for every row */ }
+    return map;
+  });
+}
+
 export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
 const DEPLOYED_RAW_TTL_SECS = 30;
 
@@ -272,6 +315,11 @@ export async function getExpiryDataByFilter(filterType, user) {
   const allHeaders = padRow(values[0], readWidth);
   const allRows = values.slice(1).map((r) => padRow(r, readWidth));
   const expiryRemarkCol = findExpiryRemarkCol(allHeaders);
+  // Real Agreement/PO file + PO No columns, resolved once here (same helper
+  // every other Agreement/PO PDF reader in this app uses) — only actually
+  // read below for filterType 'pending' (the PO & Agreement Tracker page's
+  // click-through detail), but cheap enough to resolve unconditionally.
+  const { agrCol: _poAgrCol, poCol: _poPoCol, poPdfCol: _poPoPdfCol, cycleCol: _poCycleCol } = _resolveRenewalColumns(allHeaders);
 
   let colIdx = -1;
   for (let h = 0; h <= 14; h++) {
@@ -488,6 +536,64 @@ export async function getExpiryDataByFilter(filterType, user) {
       remark: expiryRemarkCol >= 0 ? safeStr(row[expiryRemarkCol]) : '',
       _rowNum: ri + 2
     };
+    // Raw Agreement/PO dates, as plain "YYYY-MM-DD" (local calendar date,
+    // not expDate.toISOString() — that converts to UTC first and can shift
+    // the date by a day depending on server timezone) — added for the PO &
+    // Agreement Tracker page, which needs the actual point-in-time dates,
+    // not just the derived band this function already returns above.
+    if (filterType === 'pending') {
+      item.agreementDate = expDate ? _toLocalIsoDate(expDate) : null;
+      item.poDate = poExpDate ? _toLocalIsoDate(poExpDate) : null;
+      // Agreement START date for the PO & Agreement Tracker's coverage
+      // range — explicit request 2026-10-16 (a live example container,
+      // CXRU1249797: Renewed Date 01-08-2026, Valid Till 30-09-2026 ->
+      // Aug+Sep should both tick). col AA ("Renewed Date") is written by
+      // every Save/Submit on the Documents form (saveRenewalDraft/
+      // completeDocStage) and reflects the ACTUAL start of the container's
+      // current agreement period — far better coverage than
+      // _agreementStartDateMap's New Lease Reff join (~15% of containers,
+      // and not necessarily the current renewal cycle). Falls back to that
+      // join in dashboard.service.js only when this is blank (a container
+      // that has never been through a renewal yet).
+      const renewedParsed = parseDate(row[26]);
+      item.renewedDate = renewedParsed ? _toLocalIsoDate(renewedParsed) : null;
+      // The STAGED valid-till (col AB) — needed alongside renewedDate,
+      // because the REAL "Agreement Valid Upto" (col H, read into
+      // item.agreementDate above) does NOT update on Save/Submit; it only
+      // gets promoted from AB once Pushpa actually Approves (see
+      // saveRenewalDraft's own doc comment: "Deliberately does NOT touch:
+      // Valid Upto (H/X)..."). Confirmed live 2026-10-16 on PCIU6016370: H
+      // still showed a stale 30-03-2026 (already overdue) while AA/AB had
+      // just been submitted for 01-10-2026 — explicit spec requirement
+      // ("if I renew again in May... mark green") needs the tracker to
+      // reflect a submitted renewal immediately, not wait for approval.
+      // dashboard.service.js decides whether to actually trust this over H
+      // (never when the submission was Rejected — see its own comment).
+      const stagedValidTillParsed = parseDate(row[27]);
+      item.stagedValidTill = stagedValidTillParsed ? _toLocalIsoDate(stagedValidTillParsed) : null;
+      item.approvalStatus = safeStr(row[APPROVAL_STATUS_COL]);
+      // For the PO & Agreement Tracker page's click-through detail view —
+      // explicit request 2026-10-16 ("click the ticket open PO"): the
+      // actual Agreement/PO file links, PO No and Billing Cycle, so
+      // clicking a container there can show them without a second
+      // round-trip. actionStatus (above, set for every filterType) already
+      // tells the frontend whether this container is in 'documents
+      // pending' — the only stage its Update Agreement form can save to.
+      item.agreementUrl = safeStr(row[_poAgrCol]);
+      item.poPdfUrl = safeStr(row[_poPoPdfCol]);
+      item.poNo = safeStr(row[_poPoCol]);
+      // Only the two real values this field is ever meant to hold — some
+      // rows carry leftover data from before this column's current use
+      // (e.g. a stray date) that isn't a billing cycle at all.
+      const cycleRaw = safeStr(row[_poCycleCol]).trim();
+      item.billingCycle = (cycleRaw === 'Monthly' || cycleRaw === 'Daily') ? cycleRaw : '';
+      // For the Month-Wise Renew Tracking table (explicit spec 2026-10-16,
+      // columns "Actual Renewal Entry Date" and "Remarks") — col AN is
+      // stamped by both Save and Submit (whichever ran most recently); col
+      // AD is the Remarks field from that same Documents form.
+      item.renewalSubmittedDate = safeStr(row[RENEWAL_SUBMITTED_DATE_COL]);
+      item.renewalRemarks = safeStr(row[29]);
+    }
     if (filterType === 'documents' || filterType === 'approval') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);
@@ -938,7 +1044,13 @@ export async function saveExpiryRemarkFast(containerNo, remark, callerEmail, kno
    here: _deployedClientName @681, _logRenewal @701 — see file header note)
 ============================================= */
 const RENEWAL_LOG_SHEET = SHEETS.RENEWAL_LOG;
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File'];
+// Explicit request 2026-10-16 ("pls update the sheet heder and data") — the
+// user pointed out this log had no Renewed Date, PO Valid Date, or Old
+// Valid Till columns (only Old PO No/File and Old Agreement File).
+// Appended at the end, never inserted — insertSheetIfMissing/the
+// curHeaders-extension logic below both already assume append-only growth,
+// same convention as every other positional sheet in this app.
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date', 'Old PO Date'];
 
 function _deployedClientName(headers, row) {
   try {
@@ -1453,6 +1565,11 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     const oldAgr = safeStr(oldAgrCell?.[0]?.[0]);
     const oldPoNo = safeStr(oldPoNoCell?.[0]?.[0]);
     const oldPoPdf = safeStr(oldPoPdfCell?.[0]?.[0]);
+    // Old PO Date (explicit request 2026-10-16) — the PO Validity value
+    // this approval is about to overwrite. Read straight from matchedRow
+    // (captured at the top of this function, before any writes), same as
+    // Old Agreement Date's matchedRow[7] — no extra getRange call needed.
+    const oldPoDate = fmtCellDate(matchedRow[poValidityCol]);
 
     const signedCopyUrl = safeStr(matchedRow[28]); // AC
     const poNo = safeStr(matchedRow[DRAFT_PO_NO_COL]);
@@ -1486,7 +1603,14 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       container: containerNo, clientName,
       poNo, poFileUrl, agreementUrl: signedCopyUrl,
       oldPoNo, oldPoFileUrl: oldPoPdf, oldAgreementUrl: oldAgr,
-      validTill: fmtCellDate(validTillDraft), userEmail: submittedBy, source: 'Renewal Approval (Pushpa)'
+      validTill: fmtCellDate(validTillDraft), userEmail: submittedBy, source: 'Renewal Approval (Pushpa)',
+      // New columns (explicit request 2026-10-16) — the start date entered
+      // on the Documents form (AA, staged by Save/Submit, still present on
+      // matchedRow from the read at the top of this function) and the PO's
+      // own valid-till, plus the Agreement valid-till THIS approval is
+      // about to overwrite (matchedRow[7] — col H, read before any of the
+      // updates above were applied).
+      renewedDate: safeStr(matchedRow[26]), poValidDate: poValidity, oldValidTill: fmtCellDate(matchedRow[7]), oldPoDate
     });
 
     return 'Approved — renewal applied';
@@ -1512,7 +1636,8 @@ export async function _logRenewal(info) {
     const logRow = [
       stamp, info.container || '', info.clientName || '', info.poNo || '',
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
+      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || '',
+      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || '', info.oldPoDate || ''
     ];
     await appendRow(RENEWAL_LOG_SHEET, logRow);
     await appendMongoMirrorRow(RENEWAL_LOG_SHEET, logRow);

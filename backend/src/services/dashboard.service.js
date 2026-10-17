@@ -9,7 +9,7 @@
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
 import { safeStr, parseDate } from '../utils/format.js';
-import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues } from './expiry.service.js';
+import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap } from './expiry.service.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -215,4 +215,78 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   }
 
   return { containers };
+}
+
+/**
+ * PO & Agreement Tracker — explicit request 2026-10-16: a day-strip view
+ * (one month at a time) of every deployed container's Agreement Valid Upto
+ * and PO Validity dates, so a client's two dates can be spotted on the
+ * calendar at a glance. Reuses getExpiryDataByFilter('pending', null) —
+ * the same "every currently-deployed container" list Lease Expiry's own
+ * default tab and the daily digest email already use (unscoped: null
+ * bypasses Sale-Person visibility, same as leaseExpiryDigest.service.js) —
+ * rather than re-reading/re-parsing the Deployed sheet a second way.
+ * Returns only what this page needs; the fuller Lease Expiry row (band,
+ * remarks, action status, …) is irrelevant here.
+ *
+ * agreementStartDate (explicit request 2026-10-16, for a coverage range
+ * rather than a single end-date tick): prefers item.renewedDate (the
+ * Deployed sheet's own col AA, set on every Save/Submit — reflects the
+ * CURRENT agreement period), falling back to _agreementStartDateMap()'s
+ * New Lease Reff join by Order No for a container never yet renewed
+ * through this app. PO has no equivalent start date tracked anywhere in
+ * this system — the Tracker page's frontend instead treats the
+ * Agreement's OWN valid-till date as the PO's implicit start (explicit
+ * request/example 2026-10-16: a PO commonly picks up coverage right where
+ * the agreement renewal left off), so PO still gets a real range when an
+ * Agreement date exists, a single tick otherwise.
+ */
+export async function getPoAgreementTrackerData() {
+  const [{ data }, agrStartMap] = await Promise.all([getExpiryDataByFilter('pending', null), _agreementStartDateMap()]);
+  return {
+    containers: data.map((item) => {
+      // Explicit pasted spec 2026-10-16: "if I renew again in May with a
+      // start date of April, automatically mark April green as well" — the
+      // tracker must reflect a renewal the moment it's SUBMITTED (Save or
+      // Submit on the Documents form), not wait for Pushpa's Approve, which
+      // is what the real "Agreement Valid Upto" column (H, item.agreementDate)
+      // is gated on. The one case this must NOT apply: a submission Pushpa
+      // already sent back (Approval Status 'Rejected') — that proposed
+      // period was explicitly rejected, so showing it as if it already
+      // covers those months would be wrong; falls back to the last
+      // genuinely-approved date (H) instead, same as before this fix.
+      const rejected = String(item.approvalStatus || '').trim().toLowerCase() === 'rejected';
+      const trustStaged = !rejected && !!item.renewedDate;
+      const agreementStartDate = trustStaged ? item.renewedDate : (agrStartMap[safeStr(item.row[1]).trim()] || null);
+      const agreementDate = (trustStaged && item.stagedValidTill) ? item.stagedValidTill : (item.agreementDate || null);
+      return {
+        container: safeStr(item.row[0]),
+        clientName: safeStr(item.row[2]),
+        agreementStartDate,
+        agreementDate,
+        poDate: item.poDate || null,
+        // Click-through detail (explicit request 2026-10-16) — the actual
+        // Agreement/PO file links + PO No/Billing Cycle, and whether this
+        // container is in 'documents pending' (the only stage its Update
+        // Agreement form in Renew & Document can actually save to).
+        agreementUrl: item.agreementUrl || '',
+        poPdfUrl: item.poPdfUrl || '',
+        poNo: item.poNo || '',
+        billingCycle: item.billingCycle || '',
+        status: item.actionStatus || '',
+        // Month-Wise Renew Tracking table (explicit spec 2026-10-16) —
+        // "Actual Renewal Entry Date" and "Remarks" columns.
+        renewalSubmittedDate: item.renewalSubmittedDate || '',
+        remarks: item.renewalRemarks || '',
+        // Transparency note (explicit request pattern this session: be
+        // upfront about data nuances) — true only while the container is
+        // actually still sitting in 'Documents Pending' (awaiting Pushpa's
+        // Approve/Send Back) AND these dates came from that submission —
+        // NOT just because trustStaged happened to be true (which is also
+        // true for any long-since-approved container, where AA/AB already
+        // equal H/X anyway and there's nothing provisional left to flag).
+        provisional: trustStaged && String(item.actionStatus || '').trim().toLowerCase() === 'documents pending'
+      };
+    })
+  };
 }
