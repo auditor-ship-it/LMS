@@ -5814,6 +5814,15 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
 
       const photosVal = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
       if (photosVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_CONTAINER_PHOTOS_COL] || 'Container Photos', value: photosVal });
+
+      // Final Billing Remark (col_352) — explicit request 2026-10-17
+      // ("pushpa maam tick the final billing date"): this approval panel
+      // showed Final Billing Date but never the remark explaining it when
+      // it isn't exactly one month after OL Intimation Date, same gap as
+      // getOffLeaseStageDetail's own Stage 1 block had before the earlier
+      // fix today.
+      const billingRemarkVal = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
+      if (billingRemarkVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_FINAL_BILLING_REMARK_COL] || 'Final Billing Remark', value: billingRemarkVal });
     }
 
     /* Gate In (internal 7) and a repair-not-required Inspection Checklist
