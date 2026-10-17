@@ -477,6 +477,14 @@ const OL_UTR_NUMBER_COL = 351;
  *  above. Added 2026-09-23 (explicit request). */
 const OL_CONTAINER_PHOTOS_COL = 336;
 
+/** Stage 1's "Final Billing Remark" — a dedicated remark distinct from the
+ *  generic "Stage 1 Remark" (col_14), only meant to explain why Final
+ *  Billing Date (col_13) isn't exactly one month after OL Intimation Date
+ *  (col_10) — see billingRemarkRequired in frontend/stageFields.js. Outside
+ *  Stage 1's own startCol..endCol range (10-17), same reasoning as
+ *  OL_CONTAINER_PHOTOS_COL above. Added 2026-10-17 (explicit request). */
+const OL_FINAL_BILLING_REMARK_COL = 352;
+
 /** Stage 1A's "Client to Client" decision (alongside Approve/Send Back/
  *  Reject) — the new client this container is going straight to. Added
  *  2026-09-23 (explicit request). See saveOffLeaseApprovalClientToClient. */
@@ -2705,6 +2713,9 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       // safeStr, not fmtCell — a Drive URL, same reasoning as every other
       // upload field in this file.
       result[`col_${OL_CONTAINER_PHOTOS_COL}`] = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
+      // Final Billing Remark (col_352) — plain text, same reasoning as the
+      // other Stage 1 *_EXTRA_COLS fields above.
+      result[`col_${OL_FINAL_BILLING_REMARK_COL}`] = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
 
       /* "Sent back from Stage 1A" banner — explicit request 2026-10-01. See
          saveOffLeaseSendBackFromApproval's doc comment: Send Back writes

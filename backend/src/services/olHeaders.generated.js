@@ -210,4 +210,12 @@ export const OL_HEADERS = [
      OL_VR_STATUS_COL/OL_UTR_NUMBER_COL in offlease.service.js). Keep these
      4 entries if this file is ever regenerated from the live header row. */
   "VR Status", "VR Timestamp", "VR User", "UTR Number",
+  /* Index 352 — same deliberate, hand-added exception as above: added
+     2026-10-17 for Stage 1's own "Final Billing Remark" field (col_352,
+     OL_FINAL_BILLING_REMARK_COL in offlease.service.js), a dedicated
+     remark distinct from the generic "Stage 1 Remark" (col_14) — only
+     meant to explain why Final Billing Date isn't exactly one month after
+     OL Intimation Date. Keep this entry if this file is ever regenerated
+     from the live header row. */
+  "Final Billing Remark",
 ];

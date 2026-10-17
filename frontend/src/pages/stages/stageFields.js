@@ -296,7 +296,14 @@ export const STAGE_FIELDS = {
        StageDetailModal.jsx) so Stage 1A only has one file to open — see
        OL_HEADERS[336] / result.col_336 in offlease.service.js. */
     { key: 'col_336', label: 'Container Photos', type: 'imagesToPdf' },
-    { key: 'col_14', label: 'Remark', type: 'text', requiredIf: billingRemarkRequired }
+    { key: 'col_14', label: 'Remark', type: 'text' },
+    /* Explicit follow-up request 2026-10-17 ("one remarks add his difrent
+       final billing remarks") — a DEDICATED remark for the billing-date
+       gap, kept separate from the plain Remark above rather than reusing
+       it. col_352 (OL_FINAL_BILLING_REMARK_COL in offlease.service.js) is
+       a new, hand-added column — see olHeaders.generated.js's own doc
+       comment for why. */
+    { key: 'col_352', label: 'Final Billing Remark', type: 'text', requiredIf: billingRemarkRequired }
   ],
 
   2: [
