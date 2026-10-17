@@ -20,6 +20,17 @@ const BATCH_SIZE = 20;
 const BASE_DELAY_MS = 15000; // 15s, doubles per attempt
 const MAX_DELAY_MS = 15 * 60 * 1000; // 15 min cap
 const QUOTA_PAUSE_MS = 5 * 60 * 1000; // mirrors the app's global-lockout duration, but local to this worker only
+// BUG FOUND AND FIXED 2026-10-17 ("there should be a log that which... are
+// left to be added in the sheet" — building that log surfaced this): a
+// process restart (deploy, crash) between claimBatch setting an entry to
+// 'processing' and markDone/markFailure running orphans it forever — the
+// claim query only ever looked at 'pending'/'failed', so a 'processing'
+// entry was never reclaimed by anything. Confirmed live: 84 entries stuck
+// in 'processing' since 2026-10-10, their Sheets writes never replayed, no
+// error logged anywhere — a silent week-long Mongo/Sheet desync. A real
+// write only ever takes seconds, so anything still 'processing' after this
+// long is abandoned, not slow — safe to treat as claimable again.
+const STALE_PROCESSING_MS = 10 * 60 * 1000; // 10 min
 
 let workerPausedUntil = 0;
 let ticking = false;
@@ -28,8 +39,10 @@ let intervalHandle = null;
 async function claimBatch(col) {
   const now = new Date();
   const due = await col.find({
-    status: { $in: ['pending', 'failed'] },
-    nextAttemptAt: { $lte: now }
+    $or: [
+      { status: { $in: ['pending', 'failed'] }, nextAttemptAt: { $lte: now } },
+      { status: 'processing', updatedAt: { $lte: new Date(now - STALE_PROCESSING_MS) } }
+    ]
   }).sort({ nextAttemptAt: 1 }).limit(BATCH_SIZE).toArray();
 
   const claimed = [];
