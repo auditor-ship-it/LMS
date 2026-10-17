@@ -14,6 +14,7 @@ const DeployedSummaryPage = lazy(() => import('../pages/deployedSummary/Deployed
 const PoAgreementTrackerPage = lazy(() => import('../pages/poAgreementTracker/PoAgreementTrackerPage.jsx').then((m) => ({ default: m.PoAgreementTrackerPage })));
 const RolesAccessPage = lazy(() => import('../pages/rolesAccess/RolesAccessPage.jsx').then((m) => ({ default: m.RolesAccessPage })));
 const ApiAccessPage = lazy(() => import('../pages/apiAccess/ApiAccessPage.jsx').then((m) => ({ default: m.ApiAccessPage })));
+const SyncStatusPage = lazy(() => import('../pages/syncStatus/SyncStatusPage.jsx').then((m) => ({ default: m.SyncStatusPage })));
 const ReportsPage = lazy(() => import('../pages/reports/ReportsPage.jsx').then((m) => ({ default: m.ReportsPage })));
 const RefundsPage = lazy(() => import('../pages/refunds/RefundsPage.jsx').then((m) => ({ default: m.RefundsPage })));
 const RefundsApprovalPage = lazy(() => import('../pages/refunds/RefundsApprovalPage.jsx').then((m) => ({ default: m.RefundsApprovalPage })));
@@ -45,6 +46,7 @@ export const APP_ROUTES = [
   { path: ROUTES.PO_AGREEMENT_TRACKER, element: PoAgreementTrackerPage },
   { path: ROUTES.ROLES_ACCESS, element: RolesAccessPage },
   { path: ROUTES.API_ACCESS, element: ApiAccessPage },
+  { path: ROUTES.SYNC_STATUS, element: SyncStatusPage },
   { path: ROUTES.REPORTS, element: ReportsPage },
   { path: ROUTES.REFUNDS, element: RefundsPage },
   { path: ROUTES.REFUNDS_APPROVAL, element: RefundsApprovalPage },

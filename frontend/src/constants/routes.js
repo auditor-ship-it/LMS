@@ -13,6 +13,7 @@ export const ROUTES = {
   PO_AGREEMENT_TRACKER: '/po-agreement-tracker',
   ROLES_ACCESS: '/roles-access',
   API_ACCESS: '/api-access',
+  SYNC_STATUS: '/sync-status',
   REPORTS: '/reports',
   REFUNDS: '/refunds',
   REFUNDS_APPROVAL: '/refunds-approval',

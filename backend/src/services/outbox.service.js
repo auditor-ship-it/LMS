@@ -50,3 +50,43 @@ export async function enqueueSheetReplay(kind, args, opts = {}) {
   });
   logger.debug(`[OUTBOX] enqueued ${kind}`);
 }
+
+/**
+ * Read-only outbox summary — explicit request 2026-10-17 ("there should be
+ * a log that which [records] are left to be added in the sheet"): visibility
+ * into what's still waiting to replay against live Sheets, since the whole
+ * point of Mongo-first writes is that the Mongo side is already done by the
+ * time anyone would look. Counts every status; the entry list only covers
+ * the ones NOT yet 'done' (pending/processing/failed/dead), newest first,
+ * capped at `limit` — 'done' entries are routine history, not something
+ * needing attention.
+ */
+export async function getOutboxStatus(limit = 200) {
+  const col = getCollection(OUTBOX_COLLECTION);
+  const [counts, entries] = await Promise.all([
+    col.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(),
+    col.find({ status: { $ne: 'done' } }).sort({ createdAt: -1 }).limit(limit).toArray()
+  ]);
+  const byStatus = { pending: 0, processing: 0, failed: 0, dead: 0, done: 0 };
+  for (const c of counts) if (c._id in byStatus) byStatus[c._id] = c.count;
+  return {
+    counts: byStatus,
+    entries: entries.map((e) => ({
+      id: String(e._id),
+      kind: e.kind,
+      // Most registered actions take containerNo as their first arg — a
+      // best-effort label for the list, not authoritative; the full args
+      // array is also returned for anyone who needs the exact detail.
+      subject: Array.isArray(e.args) && e.args.length ? String(e.args[0]) : '',
+      args: e.args || [],
+      actor: e.actor || '',
+      status: e.status,
+      attempts: e.attempts,
+      maxAttempts: e.maxAttempts,
+      lastError: e.lastError || '',
+      nextAttemptAt: e.nextAttemptAt,
+      createdAt: e.createdAt,
+      updatedAt: e.updatedAt
+    }))
+  };
+}

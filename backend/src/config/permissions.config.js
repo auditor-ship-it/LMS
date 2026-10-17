@@ -198,5 +198,10 @@ export const SIDEBAR_KEYS = [
   // standalone page (no prior sidebarKey could exist). Same backfilled-to-
   // true-for-existing-rows mechanism as every other entry above, via
   // roles.service.js's _ensureSidebarHeaderWidth.
-  { key: 'poAgreementTracker', label: 'PO & Agreement Tracker' }
+  { key: 'poAgreementTracker', label: 'PO & Agreement Tracker' },
+  // Appended 2026-10-17, explicit request — Sync Status is a new standalone
+  // admin page (no prior sidebarKey could exist). Same backfilled-to-
+  // true-for-existing-rows mechanism as every other entry above, via
+  // roles.service.js's _ensureSidebarHeaderWidth.
+  { key: 'syncStatus', label: 'Sync Status' }
 ];
