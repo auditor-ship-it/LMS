@@ -1,0 +1,26 @@
+name: "🧾 Data fix — a record is wrong"
+description: A specific record needs correcting. No code change.
+title: "[DATA] "
+labels: ["type:data-fix", "human-only"]
+body:
+  - type: input
+    id: record
+    attributes:
+      label: Record (container / order / invoice / JO number)
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Current value → correct value, and why
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Business owner who approves this correction
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "Production data is never edited by an agent. A script is prepared and dry-run, then a named person runs it after a backup."

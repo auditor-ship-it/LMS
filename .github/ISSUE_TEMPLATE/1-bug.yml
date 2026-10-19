@@ -1,0 +1,40 @@
+name: "🐞 Bug — something is broken"
+description: Report something that does not work as the SOP says it should.
+title: "[BUG] "
+labels: ["type:bug", "needs-repro"]
+body:
+  - type: input
+    id: jira
+    attributes:
+      label: Jira key (if already raised)
+      placeholder: "e.g. LSE-123"
+  - type: input
+    id: page
+    attributes:
+      label: Page / screen where it happened
+      placeholder: "e.g. Off-Lease → Stage 6 SD Refund"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened vs what should happen
+      description: Steps to reproduce, the record number (container / order / invoice), and what you expected.
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "P1 — revenue at risk / app down / blocked for everyone"
+        - "P2 — customer-facing delay / blocked for some users"
+        - "P3 — annoying, workaround exists"
+        - "P4 — cosmetic / improvement"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshot, screen recording or error text. Never paste passwords, PINs, PAN/GST/bank numbers.
