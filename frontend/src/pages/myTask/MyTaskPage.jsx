@@ -57,7 +57,7 @@ const CARD_DEFS = [
    * renamed 2026-08-25 to match. */
   { key: 'offleaseApproval', label: 'Off-Lease Stage 1A: Pending Approval', owner: 'Pushpa', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'warn', icon: 'clock' },
   { key: 'olStage6', label: 'Off-Lease Stage 2: Transportation', owner: 'Kshirod Khatua', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
-  { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Pritam', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
+  { key: 'olStage7', label: 'Off-Lease Stage 3: Gate In', owner: 'Nikhil', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage3', label: 'Off-Lease Stage 4: Inspection Checklist', owner: 'Sitaram', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   { key: 'olStage5', label: 'Off-Lease Stage 5: Final Billing', owner: 'Shivani', path: ROUTES.OFF_LEASE, group: GROUPS.OFFLEASE, tint: 'info', icon: 'package' },
   // ADDED 2026-10-05 (explicit request) — matches the Off-Lease dashboard
