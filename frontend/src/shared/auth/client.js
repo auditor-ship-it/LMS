@@ -41,8 +41,12 @@ client.interceptors.response.use(
 
 export default client;
 
-/** Unwraps { error } payloads into a normal thrown Error with a clean message. */
+/** Unwraps { error } payloads into a normal thrown Error with a clean message.
+ *  `ECONNABORTED` (explicit request 2026-10-19) is axios's own code for a
+ *  request that hit its configured `timeout` — reworded from "timeout of
+ *  45000ms exceeded" into something a non-technical reader can act on. */
 export function apiErrorMessage(err) {
+  if (err?.code === 'ECONNABORTED') return 'This is taking longer than expected. Please try again.';
   return err?.response?.data?.error || err?.message || 'Something went wrong';
 }
 

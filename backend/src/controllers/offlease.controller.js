@@ -369,45 +369,55 @@ export async function getContainerDetail(req, res) {
      an addition to the lookup, so a Stage 9 read failure must not take the
      whole container detail down with it. */
   if (detail?.found && !detail?.multiple) {
-    try {
-      detail.movements = await stage9Service.getMovementsForContainer(req.params.containerNo);
-    } catch (e) {
+    /* BUG FOUND AND FIXED 2026-10-19 (Off-Lease Record page stuck on
+       "Loading stage data..." for 10s+): these four lookups were awaited
+       one after another — none of them depends on another's RESULT, only
+       on `detail` itself (already resolved above), so the sequential
+       chain was paying the SUM of their latencies (movements + invoice
+       attachments + FMS + entry stamp) when it only ever needed the MAX.
+       Promise.allSettled, not Promise.all, so one failing lookup still
+       can't take the others down with it — same as each one's own
+       try/catch already guaranteed before, just running together now. */
+    const [movementsResult, invoiceAttachmentsResult, fmsResult, slaResult] = await Promise.allSettled([
+      stage9Service.getMovementsForContainer(req.params.containerNo),
+      offLeaseService.getInvoiceAttachments((detail.outstanding?.invoiceTotals || []).map((i) => i.invoiceNo)),
+      /* The FMS chain (STAGE-8 movement, STAGE-9 transport, STAGE-10 site
+         delivery) — the same data the Stage 2 grid shows, so the container's
+         full history includes its transportation, not just the off-lease
+         stages. Best-effort like the rest.
+
+         No cycle-start bound (REVERTED 2026-08-28, same day it was added):
+         briefly passed this container's own Stage 1 completion time so
+         getFmsForContainer would ignore an older, unrelated cycle's FMS rows
+         for the same reused container number. Reverted — confirmed against
+         real data (SZLU9446439, SZLU9915829, GESU9563904, CXRU1037294,
+         CAIU5404270 and others) that this app's own Stage 1 timestamp
+         routinely completes AFTER the external FMS system's own event
+         timestamps (paperwork catching up to physical reality), not before —
+         so the bound hid real, correct movement/transport/delivery data on
+         more containers than the one cross-cycle case it was protecting
+         against. See getFmsForContainer's own doc comment for the full
+         history of this back-and-forth. */
+      stage8Service.getFmsForContainer(req.params.containerNo, detail.clientName),
+      /* When the container was flagged Off-Lease on the Deployed sheet — not
+         its deployed date, which is when it went OUT on lease and made every
+         container read as a 600-day breach. */
+      offLeaseService.getOffLeaseEntryStamp(req.params.containerNo)
+    ]);
+
+    if (movementsResult.status === 'fulfilled') {
+      detail.movements = movementsResult.value;
+    } else {
       detail.movements = [];
-      detail.movementsError = e?.message || 'Could not load Stage 9 movements';
+      detail.movementsError = movementsResult.reason?.message || 'Could not load Stage 9 movements';
     }
 
     /* Invoice attachments, looked up by invoice number rather than through the
        billing records — those are matched on container + client and come back
        empty for most containers. Best-effort, same as above. */
-    try {
-      const nos = (detail.outstanding?.invoiceTotals || []).map((i) => i.invoiceNo);
-      detail.invoiceAttachments = await offLeaseService.getInvoiceAttachments(nos);
-    } catch (e) {
-      detail.invoiceAttachments = {};
-    }
+    detail.invoiceAttachments = invoiceAttachmentsResult.status === 'fulfilled' ? invoiceAttachmentsResult.value : {};
 
-    /* The FMS chain (STAGE-8 movement, STAGE-9 transport, STAGE-10 site
-       delivery) — the same data the Stage 2 grid shows, so the container's
-       full history includes its transportation, not just the off-lease
-       stages. Best-effort like the rest.
-
-       No cycle-start bound (REVERTED 2026-08-28, same day it was added):
-       briefly passed this container's own Stage 1 completion time so
-       getFmsForContainer would ignore an older, unrelated cycle's FMS rows
-       for the same reused container number. Reverted — confirmed against
-       real data (SZLU9446439, SZLU9915829, GESU9563904, CXRU1037294,
-       CAIU5404270 and others) that this app's own Stage 1 timestamp
-       routinely completes AFTER the external FMS system's own event
-       timestamps (paperwork catching up to physical reality), not before —
-       so the bound hid real, correct movement/transport/delivery data on
-       more containers than the one cross-cycle case it was protecting
-       against. See getFmsForContainer's own doc comment for the full
-       history of this back-and-forth. */
-    try {
-      detail.fms = await stage8Service.getFmsForContainer(req.params.containerNo, detail.clientName);
-    } catch (e) {
-      detail.fms = null;
-    }
+    detail.fms = fmsResult.status === 'fulfilled' ? fmsResult.value : null;
 
     /* Stage 2 (internal 6) is COMPLETE once all three FMS legs exist — booked
        in STAGE-8, transported in STAGE-9, delivered in STAGE-10. The stage
@@ -422,20 +432,19 @@ export async function getContainerDetail(req, res) {
     /* Stage timers. Stage 1's clock starts when the container entered
        off-lease — its deployed date is the only recorded "arrived here"
        moment, so it seeds the first budget. */
-    try {
-      /* When the container was flagged Off-Lease on the Deployed sheet — not
-         its deployed date, which is when it went OUT on lease and made every
-         container read as a 600-day breach. */
-      const entryStamp = await offLeaseService.getOffLeaseEntryStamp(req.params.containerNo);
-      const sla = slaService.applySla(detail.stages || [], {
-        entryStamp: entryStamp || detail.deployedDate,
-        approvalStatus: detail.approvalStatus,
-        approvalDate: detail.approvalDate
-      });
-      detail.approvalSla = sla.approvalSla;
-      detail.delayedCount = sla.delayedCount;
-      detail.anyDelayed = sla.anyDelayed;
-    } catch (e) { /* timers are additive — never fail the lookup over them */ }
+    if (slaResult.status === 'fulfilled') {
+      try {
+        const entryStamp = slaResult.value;
+        const sla = slaService.applySla(detail.stages || [], {
+          entryStamp: entryStamp || detail.deployedDate,
+          approvalStatus: detail.approvalStatus,
+          approvalDate: detail.approvalDate
+        });
+        detail.approvalSla = sla.approvalSla;
+        detail.delayedCount = sla.delayedCount;
+        detail.anyDelayed = sla.anyDelayed;
+      } catch (e) { /* timers are additive — never fail the lookup over them */ }
+    }
 
     const f = detail.fms;
     const s2 = (detail.stages || []).find((s) => s.stage === STAGE2_INTERNAL);
