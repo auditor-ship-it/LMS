@@ -228,6 +228,17 @@ export function PoAgreementTrackerPage() {
                   // whole row turns 'safe' and these same months go green instead
                   // (covered, ticked) the next time this data is fetched.
                   const coveredToMonth = range ? range.to : singleMonth;
+                  // Explicit request 2026-10-19 ("add the logic date[s] and
+                  // all black... blank"): a container with NO date at all on
+                  // record for the active view (e.g. Agreement wise but this
+                  // container has no Agreement date, ever — not just "not
+                  // due this year") looked identical to a container that
+                  // simply has nothing due in the DISPLAYED year — both were
+                  // a row of plain empty boxes. Filling every month black
+                  // for a genuinely blank row tells the two apart: black =
+                  // no data on file at all, plain white = has data, just not
+                  // due in this particular year (check another year).
+                  const noData = !(dataView === 'po' ? c.poDate : c.agreementDate);
                   return (
                     <tr key={c.container} className={styles.clickRow} onClick={() => setSelected(c)}>
                       <td className={styles.colContainer}>{c.container}</td>
@@ -242,12 +253,15 @@ export function PoAgreementTrackerPage() {
                         // PO view: ticks the Agreement-end-to-PO-end range when
                         // both dates exist, else just the single PO valid-till
                         // month (no Agreement date to pick up coverage from).
-                        const inRange = range ? (m >= range.from && m <= range.to) : singleMonth === m;
-                        const lapsed = !inRange && band === 'overdue' && coveredToMonth !== null && m > coveredToMonth;
+                        const inRange = !noData && (range ? (m >= range.from && m <= range.to) : singleMonth === m);
+                        const lapsed = !noData && !inRange && band === 'overdue' && coveredToMonth !== null && m > coveredToMonth;
                         const label = dataView === 'po' ? 'PO' : 'Agreement';
-                        const title = inRange
-                          ? (range ? `${label} covers ${dataView === 'po' ? c.agreementDate : c.agreementStartDate} to ${dataView === 'po' ? c.poDate : c.agreementDate}` : `${label} valid upto ${dataView === 'po' ? c.poDate : c.agreementDate}`)
-                          : (lapsed ? `${label} overdue since ${dataView === 'po' ? c.poDate : c.agreementDate} — not yet renewed` : undefined);
+                        const title = noData
+                          ? `No ${label} date on record for this container`
+                          : inRange
+                            ? (range ? `${label} covers ${dataView === 'po' ? c.agreementDate : c.agreementStartDate} to ${dataView === 'po' ? c.poDate : c.agreementDate}` : `${label} valid upto ${dataView === 'po' ? c.poDate : c.agreementDate}`)
+                            : (lapsed ? `${label} overdue since ${dataView === 'po' ? c.poDate : c.agreementDate} — not yet renewed` : undefined);
+                        const cellToneVar = noData ? 'var(--text-3)' : toneVar;
                         return (
                           <td
                             key={m}
@@ -255,8 +269,8 @@ export function PoAgreementTrackerPage() {
                             title={title}
                           >
                             <span
-                              className={`${styles.checkbox} ${(inRange || lapsed) ? styles.checkboxChecked : ''}`}
-                              style={{ borderColor: toneVar, background: (inRange || lapsed) ? toneVar : 'transparent' }}
+                              className={`${styles.checkbox} ${(inRange || lapsed || noData) ? styles.checkboxChecked : ''}`}
+                              style={{ borderColor: cellToneVar, background: (inRange || lapsed || noData) ? cellToneVar : 'transparent' }}
                             >
                               {inRange && '✓'}
                             </span>
@@ -275,6 +289,7 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.bad}`} />Overdue</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendItem}><span className={`${styles.checkbox} ${styles.bad}`} style={{ borderColor: 'var(--error)' }} />Solid red, no tick = overdue, still not renewed</span>
+          <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)', background: 'var(--text-3)' }} />Solid black = no date on record at all for this container</span>
           <span className={styles.legendDivider} />
           {dataView === 'po' ? (
             <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own valid-upto date to PO valid-upto — just the valid-upto month ticked if no Agreement date exists)</span>
