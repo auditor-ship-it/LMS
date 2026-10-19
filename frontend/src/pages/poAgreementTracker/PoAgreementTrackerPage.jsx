@@ -125,11 +125,18 @@ export function PoAgreementTrackerPage() {
     const term = debouncedSearch.trim().toLowerCase();
     let out = containers;
     if (term) out = out.filter((c) => c.container.toLowerCase().includes(term) || c.clientName.toLowerCase().includes(term));
+    // Explicit request 2026-10-19 ("do not show this", pointing at rows
+    // with no PO Date at all) — a container with no date on record for
+    // the view you're actually looking at (Agreement wise needs an
+    // Agreement Date, PO wise needs a PO Date) is just noise there, not a
+    // real "nothing due" case. Hidden instead of shown as an empty/blank
+    // row. Still reachable from the OTHER view if it has data there.
+    out = out.filter((c) => (dataView === 'po' ? c.poDate : c.agreementDate));
     if (onlyThisYear) {
       out = out.filter((c) => monthOfYear(c.agreementDate, displayedYear) !== null || monthOfYear(c.poDate, displayedYear) !== null);
     }
     return out;
-  }, [containers, debouncedSearch, onlyThisYear, displayedYear]);
+  }, [containers, debouncedSearch, onlyThisYear, displayedYear, dataView]);
 
   // "AGRMENT WISE AND PO WISE" totals — explicit request 2026-10-16: how
   // many of the currently-shown containers have an Agreement date vs a PO
@@ -228,17 +235,6 @@ export function PoAgreementTrackerPage() {
                   // whole row turns 'safe' and these same months go green instead
                   // (covered, ticked) the next time this data is fetched.
                   const coveredToMonth = range ? range.to : singleMonth;
-                  // Explicit request 2026-10-19 ("add the logic date[s] and
-                  // all black... blank"): a container with NO date at all on
-                  // record for the active view (e.g. Agreement wise but this
-                  // container has no Agreement date, ever — not just "not
-                  // due this year") looked identical to a container that
-                  // simply has nothing due in the DISPLAYED year — both were
-                  // a row of plain empty boxes. Filling every month black
-                  // for a genuinely blank row tells the two apart: black =
-                  // no data on file at all, plain white = has data, just not
-                  // due in this particular year (check another year).
-                  const noData = !(dataView === 'po' ? c.poDate : c.agreementDate);
                   return (
                     <tr key={c.container} className={styles.clickRow} onClick={() => setSelected(c)}>
                       <td className={styles.colContainer}>{c.container}</td>
@@ -253,15 +249,12 @@ export function PoAgreementTrackerPage() {
                         // PO view: ticks the Agreement-end-to-PO-end range when
                         // both dates exist, else just the single PO valid-till
                         // month (no Agreement date to pick up coverage from).
-                        const inRange = !noData && (range ? (m >= range.from && m <= range.to) : singleMonth === m);
-                        const lapsed = !noData && !inRange && band === 'overdue' && coveredToMonth !== null && m > coveredToMonth;
+                        const inRange = range ? (m >= range.from && m <= range.to) : singleMonth === m;
+                        const lapsed = !inRange && band === 'overdue' && coveredToMonth !== null && m > coveredToMonth;
                         const label = dataView === 'po' ? 'PO' : 'Agreement';
-                        const title = noData
-                          ? `No ${label} date on record for this container`
-                          : inRange
-                            ? (range ? `${label} covers ${dataView === 'po' ? c.agreementDate : c.agreementStartDate} to ${dataView === 'po' ? c.poDate : c.agreementDate}` : `${label} valid upto ${dataView === 'po' ? c.poDate : c.agreementDate}`)
-                            : (lapsed ? `${label} overdue since ${dataView === 'po' ? c.poDate : c.agreementDate} — not yet renewed` : undefined);
-                        const cellToneVar = noData ? 'var(--text-3)' : toneVar;
+                        const title = inRange
+                          ? (range ? `${label} covers ${dataView === 'po' ? c.agreementDate : c.agreementStartDate} to ${dataView === 'po' ? c.poDate : c.agreementDate}` : `${label} valid upto ${dataView === 'po' ? c.poDate : c.agreementDate}`)
+                          : (lapsed ? `${label} overdue since ${dataView === 'po' ? c.poDate : c.agreementDate} — not yet renewed` : undefined);
                         return (
                           <td
                             key={m}
@@ -269,8 +262,8 @@ export function PoAgreementTrackerPage() {
                             title={title}
                           >
                             <span
-                              className={`${styles.checkbox} ${(inRange || lapsed || noData) ? styles.checkboxChecked : ''}`}
-                              style={{ borderColor: cellToneVar, background: (inRange || lapsed || noData) ? cellToneVar : 'transparent' }}
+                              className={`${styles.checkbox} ${(inRange || lapsed) ? styles.checkboxChecked : ''}`}
+                              style={{ borderColor: toneVar, background: (inRange || lapsed) ? toneVar : 'transparent' }}
                             >
                               {inRange && '✓'}
                             </span>
@@ -289,7 +282,6 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.bad}`} />Overdue</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendItem}><span className={`${styles.checkbox} ${styles.bad}`} style={{ borderColor: 'var(--error)' }} />Solid red, no tick = overdue, still not renewed</span>
-          <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)', background: 'var(--text-3)' }} />Solid black = no date on record at all for this container</span>
           <span className={styles.legendDivider} />
           {dataView === 'po' ? (
             <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own valid-upto date to PO valid-upto — just the valid-upto month ticked if no Agreement date exists)</span>
