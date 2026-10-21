@@ -47,6 +47,13 @@ export function ApprovalPanel({ containerNo, rowNum, status, date, user, remark,
   const [clientName, setClientName] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  // Explicit request 2026-10-17 ("pushpa maam tick the final billing date")
+  // — Approve is gated on the approver explicitly acknowledging the Final
+  // Billing Date shown above, not just reading it. Only Approve: Send
+  // Back/Reject are already gated on a remark (the thing actually being
+  // flagged), and Client to Client replaces the date's relevance entirely.
+  const [billingConfirmed, setBillingConfirmed] = useState(false);
+  const finalBillingDate = (stage1Fields || []).find((f) => /final billing date/i.test(f.label))?.value;
 
   // Agreement / PO PDFs live on the Deployed sheet, not the tracking row.
   const { data: docs } = useAsync(() => fetchAgreementPoPdf(containerNo), [containerNo]);
@@ -71,7 +78,10 @@ export function ApprovalPanel({ containerNo, rowNum, status, date, user, remark,
     }
   };
 
-  const approve = () => run('approve', false, (t) => decideApproval(containerNo, 'Approved', t, rowNum));
+  const approve = () => {
+    if (!billingConfirmed) { setError('Tick "I\'ve reviewed the Final Billing Date" before approving.'); return; }
+    run('approve', false, (t) => decideApproval(containerNo, 'Approved', t, rowNum));
+  };
   const reject = () => run('reject', true, (t) => decideApproval(containerNo, 'Rejected', t, rowNum));
   const sendBack = () => run('sendBack', true, (t) => sendBackToStage1FromApproval(containerNo, t, rowNum));
   const confirmCtc = () => {
@@ -116,6 +126,19 @@ export function ApprovalPanel({ containerNo, rowNum, status, date, user, remark,
 
       {canAct && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          {!ctcOpen && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={billingConfirmed}
+                onChange={(e) => { setBillingConfirmed(e.target.checked); if (error) setError(''); }}
+              />
+              <span style={{ fontSize: 13 }}>
+                I've reviewed the Final Billing Date{finalBillingDate ? ` (${renderCellValue(finalBillingDate)})` : ''} — OK to Approve
+              </span>
+            </label>
+          )}
+
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={LABEL_STYLE}>Remarks (required to reject or send back)</span>
             <textarea
@@ -146,7 +169,7 @@ export function ApprovalPanel({ containerNo, rowNum, status, date, user, remark,
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {!ctcOpen ? (
               <>
-                <Button size="sm" variant="primary" loading={busy === 'approve'} disabled={!!busy} onClick={approve}>Approve</Button>
+                <Button size="sm" variant="primary" loading={busy === 'approve'} disabled={!!busy || !billingConfirmed} onClick={approve}>Approve</Button>
                 <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => { setError(''); setCtcOpen(true); }}>Client to Client</Button>
                 <Button size="sm" variant="secondary" loading={busy === 'sendBack'} disabled={!!busy} onClick={sendBack}>Send Back</Button>
                 <Button size="sm" variant="danger" loading={busy === 'reject'} disabled={!!busy} onClick={reject}>Reject</Button>

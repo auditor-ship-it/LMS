@@ -72,8 +72,26 @@ function cachedFmsRead(tab, loader) {
  * would warm nothing.
  */
 export async function warmFmsCache() {
-  for (const tab of [S8_TAB, S9_TAB, S10_TAB]) cacheRemove(`stage8_fms_read_v1:${tab}`);
-  await Promise.all([readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()]);
+  for (const tab of [S8_TAB, S9_TAB, S10_TAB, `${S9_TAB}::raw`]) cacheRemove(`stage8_fms_read_v1:${tab}`);
+  await Promise.all([readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows(), readStage9RawRows()]);
+}
+
+/**
+ * BUG FOUND AND FIXED 2026-10-19 (Off-Lease Record page stuck on "Loading
+ * stage data..." for 10s+): offlease.service.js's `_lookupStage9OrderNos`
+ * read STAGE-9 straight off `getSheetDataFromMongo`, bypassing this whole
+ * file's 330s warm cache entirely — paying the full cold STAGE-9 read
+ * (confirmed live: ~17-22s for ~700 rows) on every detail-page load more
+ * than 8s apart (getSheetDataFromMongo's own cache is only 8s), even though
+ * `readStage9OffleaseRows` above already keeps a warm copy of this exact
+ * tab via the cron-driven warmFmsCache. Can't just reuse that function —
+ * it's filtered to Movement Type = Offlease and reshaped into a narrow
+ * field set, while this caller needs the full unfiltered sheet (any
+ * Movement Type) and arbitrary header-name lookups. Separate `::raw` cache
+ * key so the two never collide on shape.
+ */
+export async function readStage9RawRows() {
+  return cachedFmsRead(`${S9_TAB}::raw`, () => getSheetDataFromMongo(S9_TAB));
 }
 
 const S8_TAB = SHEETS.FMS_STAGE8;

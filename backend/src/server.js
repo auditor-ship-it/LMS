@@ -2,6 +2,7 @@ import { env } from './config/env.js';
 import { createApp } from './app.js';
 import { registerCronJobs, registerSheetsSync } from './jobs/index.js';
 import { startOutboxWorker } from './jobs/outboxWorker.js';
+import { warmFmsCache } from './services/stage8.service.js';
 import { connectMongo } from './config/db.js';
 import { loadRuntimeSecretsFromMongo } from './config/runtimeSecrets.js';
 import { logger } from './utils/logger.js';
@@ -48,6 +49,14 @@ app.listen(env.port, env.host, () => {
   if (env.enableSheetsSync) {
     registerSheetsSync();
     logger.info('[SYNC] Background sync service started');
+    // BUG FOUND AND FIXED 2026-10-19 (Off-Lease Record page stuck on
+    // "Loading stage data..."): warmFmsCache only ran on its cron (every
+    // 5 min, offset :04) — up to ~5 minutes after a fresh deploy/restart,
+    // the FIRST request touching STAGE-8/9/10 paid the full ~17-22s cold
+    // read. Fire-and-forget here so the cache starts warming immediately
+    // instead of waiting for the next cron tick; never blocks startup or
+    // a request, and any failure is just logged (the cron keeps retrying).
+    warmFmsCache().catch((e) => logger.error('[SYNC] warmFmsCache (boot warm-up) failed:', e?.message || e));
   } else {
     logger.info('[SERVER] Sheets<->Mongo sync disabled (set ENABLE_SHEETS_SYNC=true in .env to enable it)');
   }

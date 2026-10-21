@@ -91,7 +91,7 @@ import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from '
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { _deployedRawValues, _resolveRenewalColumns, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer } from './stage8.service.js';
+import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer, readStage9RawRows } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
@@ -1208,7 +1208,11 @@ async function _findOrderNosForContainer(want) {
 async function _lookupStage9OrderNos(containerNo, clientName) {
   const want = normKey(containerNo);
   if (!want) return [];
-  const { headers, rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
+  // BUG FOUND AND FIXED 2026-10-19 — was a raw getSheetDataFromMongo call,
+  // bypassing stage8.service.js's 330s warm FMS cache entirely and paying
+  // the full ~17-22s cold STAGE-9 read on most detail-page loads (see
+  // readStage9RawRows's own doc comment). Same data, same shape, just cached.
+  const { headers, rows } = await readStage9RawRows();
   const contCol = headers.findIndex((h) => /container number/i.test(String(h || '')));
   const ordCol = headers.findIndex((h) => /order received number/i.test(String(h || '')));
   const custCol = headers.findIndex((h) => /customer name/i.test(String(h || '')));
@@ -5814,6 +5818,15 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
 
       const photosVal = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
       if (photosVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_CONTAINER_PHOTOS_COL] || 'Container Photos', value: photosVal });
+
+      // Final Billing Remark (col_352) — explicit request 2026-10-17
+      // ("pushpa maam tick the final billing date"): this approval panel
+      // showed Final Billing Date but never the remark explaining it when
+      // it isn't exactly one month after OL Intimation Date, same gap as
+      // getOffLeaseStageDetail's own Stage 1 block had before the earlier
+      // fix today.
+      const billingRemarkVal = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
+      if (billingRemarkVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_FINAL_BILLING_REMARK_COL] || 'Final Billing Remark', value: billingRemarkVal });
     }
 
     /* Gate In (internal 7) and a repair-not-required Inspection Checklist
