@@ -70,6 +70,7 @@ import { warmFmsCache } from '../services/stage8.service.js';
 import { checkPendingClientToClientMoves } from '../services/offlease.service.js';
 import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js';
 import { sendMonthlyReport } from '../services/monthlyReport.service.js';
+import { sendPoAgreementDigest } from '../services/poAgreementDigest.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -103,7 +104,15 @@ export function registerCronJobs() {
      against a manual re-trigger or a restart landing on the same day. */
   cron.schedule('0 6 1 * *', safeRun('monthlyRenewOffLeaseReport', () => sendMonthlyReport()));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM)');
+  /* 25th of every month, 9:00 AM — explicit request 2026-10-21: which
+     deployed containers need their PO and/or Agreement updated (overdue or
+     due within 30 days), same data the PO & Agreement Tracker page shows,
+     to the same two recipients as the monthly report above. A single value
+     in the day-of-month field, same reasoning as that job's own schedule
+     above. Idempotency handled inside poAgreementDigest.service.js. */
+  cron.schedule('0 9 25 * *', safeRun('poAgreementDigest', () => sendPoAgreementDigest()));
+
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM)');
 }
 
 /**
