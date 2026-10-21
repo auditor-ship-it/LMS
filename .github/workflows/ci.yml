@@ -10,11 +10,47 @@ on:
     branches: [main]
 
 jobs:
+  # GH-15 / TC-QUA15-3: fails the PR if a secret-looking string shows up in
+  # any commit being pushed/proposed. Separate job from `verify` so it runs
+  # in parallel and a scan failure doesn't hide behind an unrelated lint
+  # failure. This only covers NEW commits going forward — it does not (and
+  # cannot) scan the pre-existing history, which is what GH-15's separate
+  # `git filter-repo` + coordinated force-push step is for (repo-admin-only,
+  # see that issue's own Risks section — not run by CI or by an agent).
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   verify:
     name: Lint, build and smoke-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # GH-15: a customer-data CSV (containers-on-lease-reconciled.csv, 354
+      # real container/customer rows) and 32 backend/*.log.err files were
+      # tracked in the repo for an unknown period before this check existed.
+      # Fails the build if either ever gets re-added, rather than relying on
+      # .gitignore alone (a `git add -f` or a stale local copy can still slip
+      # one past that). TC-QUA15-3's own gitleaks scan covers SECRET content;
+      # this is specifically about these two known-sensitive FILE patterns.
+      - name: Fail if tracked CSV or *.log.err files exist (GH-15)
+        run: |
+          hits=$(git ls-files '*.csv' '*.log.err')
+          if [ -n "$hits" ]; then
+            echo "::error::Tracked CSV/.log.err file(s) found — these must never be committed (GH-15):"
+            echo "$hits"
+            exit 1
+          fi
+          echo 'OK - no tracked CSV or .log.err files'
 
       # Node 20 to match the VPS runtime exactly (node v20.20.2 there).
       # Building on a newer major than production can hide syntax/API problems
