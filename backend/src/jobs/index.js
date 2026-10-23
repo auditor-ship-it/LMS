@@ -72,6 +72,7 @@ import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js'
 import { sendMonthlyReport } from '../services/monthlyReport.service.js';
 import { runSlaEscalation } from '../services/slaEscalation.service.js';
 import { logger } from '../utils/logger.js';
+import { isCentral } from '../services/centralSheets.service.js';
 
 function safeRun(name, fn) {
   return () => {
@@ -149,7 +150,8 @@ export function registerSheetsSync() {
   // sheet list (mongoSheetMapping.js) — the separate refreshFmsCaches live-
   // read job that used to cover them is retired; stage8.service.js reads
   // exclusively from the Mongo mirror now, same as every other sheet.
-  cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
+  // DATA_SOURCE=central: no Sheets->Mongo reconcile — the central tables are the data.
+  if (!isCentral()) cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
   cron.schedule(`${FMS_REFRESH_MINUTES} * * * *`, safeRun('refreshStage3FormCache', refreshStage3FormCache));
   cron.schedule(`${WARM_FMS_CACHE_MINUTES} * * * *`, safeRun('warmFmsCache', warmFmsCache));
   cron.schedule(`${CTC_PENDING_CHECK_MINUTES} * * * *`, safeRun('checkPendingClientToClientMoves', checkPendingClientToClientMoves));

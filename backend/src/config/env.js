@@ -1,13 +1,17 @@
 import 'dotenv/config';
 
-const REQUIRED = [
-  'GOOGLE_PROJECT_ID',
-  'GOOGLE_CLIENT_EMAIL',
-  'GOOGLE_PRIVATE_KEY',
-  'GOOGLE_SHEET_ID',
-  'MONGODB_URI',
-  'MONGO_DB_NAME'
-];
+const CENTRAL = String(process.env.DATA_SOURCE || '').toLowerCase() === 'central';
+// DATA_SOURCE=central never talks to Google, so it needs the central DB instead of Google credentials.
+const REQUIRED = CENTRAL
+  ? ['CENTRAL_DATABASE_URL', 'MONGODB_URI', 'MONGO_DB_NAME']
+  : [
+    'GOOGLE_PROJECT_ID',
+    'GOOGLE_CLIENT_EMAIL',
+    'GOOGLE_PRIVATE_KEY',
+    'GOOGLE_SHEET_ID',
+    'MONGODB_URI',
+    'MONGO_DB_NAME'
+  ];
 
 const missing = REQUIRED.filter((key) => !process.env[key] || String(process.env[key]).trim() === '');
 if (missing.length) {
@@ -17,7 +21,7 @@ if (missing.length) {
 }
 
 // Apps Script / dotenv often stores the private key with literal \n escapes.
-const normalizedPrivateKey = process.env.GOOGLE_PRIVATE_KEY.includes('\\n')
+const normalizedPrivateKey = String(process.env.GOOGLE_PRIVATE_KEY || '').includes('\\n')
   ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n')
   : process.env.GOOGLE_PRIVATE_KEY;
 

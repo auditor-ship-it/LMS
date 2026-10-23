@@ -1,6 +1,10 @@
 import { getCollection } from './mongo.service.js';
 import { logger } from '../utils/logger.js';
 import { cacheGetOrLoad, cacheRemove } from '../utils/memoryCache.js';
+import { isCentral, centralGetByName, onCentralWrite } from './centralSheets.service.js';
+
+// DATA_SOURCE=central: every central write drops this file's short read cache for that tab.
+onCentralWrite((tab) => cacheRemove(`mongo_raw_v1:${tab}`));
 
 const META_ID = '__meta__';
 
@@ -101,6 +105,7 @@ const MONGO_RAW_CACHE_TTL_SECS = 8;
 
 export async function getSheetDataFromMongo(sheetName) {
   return cacheGetOrLoad(`mongo_raw_v1:${sheetName}`, MONGO_RAW_CACHE_TTL_SECS, async () => {
+    if (isCentral()) return centralGetByName(sheetName);
     const start = process.hrtime.bigint();
     const col = getCollection(sheetName);
     const [metaDoc, docs] = await Promise.all([
@@ -156,6 +161,8 @@ function _colIndexFromLetter(letter) {
  * regardless, just not instantly.
  */
 export async function patchMongoMirrorRow(sheetName, targetRow, updates, opts = {}) {
+  // Central mode: the write itself already landed in the central table — nothing to mirror.
+  if (isCentral()) { cacheRemove(`mongo_raw_v1:${sheetName}`); return; }
   try {
     const re = new RegExp(`^'?${sheetName}'?!([A-Z]+)${targetRow}(?::[A-Z]+${targetRow})?$`);
     const patch = {};
@@ -206,6 +213,7 @@ export async function patchMongoMirrorRow(sheetName, targetRow, updates, opts = 
  * visible to Mongo-mirror reads instead of this call doing it instantly.
  */
 export async function appendMongoMirrorRow(sheetName, row) {
+  if (isCentral()) { cacheRemove(`mongo_raw_v1:${sheetName}`); return; } // already appended centrally
   try {
     const col = getCollection(sheetName);
     const existing = await col.find({ _id: { $ne: META_ID }, key: { $exists: true } }, { projection: { key: 1 } }).toArray();

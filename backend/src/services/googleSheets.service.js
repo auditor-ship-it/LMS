@@ -3,6 +3,13 @@ import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { touchSource } from '../utils/requestContext.js';
 import { getGlobalQuotaLock, tripGlobalQuotaLock } from '../utils/quotaLock.js';
+import {
+  isCentral, googleDisabled, parseA1, centralGetValues, centralGetSheetData, centralWriteRange,
+  centralBatchUpdate, centralAppendRows, centralDeleteRows, centralEnsureHeader
+} from './centralSheets.service.js';
+
+/* DATA_SOURCE=central: every function below serves the central `lease`
+   tables instead (centralSheets.service.js) and Google is never called. */
 
 /** Every exported function below that actually calls the Sheets API goes
  *  through this first — the one place that makes "did this request touch
@@ -98,6 +105,7 @@ function getAuthClient() {
 }
 
 export function getSheetsClient() {
+  if (isCentral()) throw googleDisabled('Google Sheets API');
   if (!_sheetsClient) {
     _sheetsClient = google.sheets({ version: 'v4', auth: getAuthClient() });
   }
@@ -105,6 +113,7 @@ export function getSheetsClient() {
 }
 
 export function getDriveAuthClient() {
+  if (isCentral()) throw googleDisabled('Google Drive');
   return getAuthClient();
 }
 
@@ -123,6 +132,7 @@ export function colLetter(idx0) {
 const sheetIdCache = new Map();
 
 export async function getSheetId(sheetName, ssId = env.googleSheetId) {
+  if (isCentral()) throw googleDisabled('spreadsheets.get (sheet id)');
   const cacheKey = `${ssId}::${sheetName}`;
   if (sheetIdCache.has(cacheKey)) return sheetIdCache.get(cacheKey);
   logSheetsAccess('getSheetId (spreadsheets.get)', sheetName, ssId);
@@ -143,6 +153,7 @@ export function clearSheetIdCache() {
  * where `values` is the raw 2D array (headers included as values[0]).
  */
 export async function getSheetData(sheetName, ssId = env.googleSheetId, range = 'A1:ZZ') {
+  if (isCentral()) return centralGetSheetData(sheetName, ssId, range);
   logSheetsAccess('getSheetData (values.get)', sheetName, ssId);
   const sheets = getSheetsClient();
   const res = await withQuotaRetry(`getSheetData(${sheetName})`, () => sheets.spreadsheets.values.get({
@@ -165,6 +176,8 @@ export async function getSheetData(sheetName, ssId = env.googleSheetId, range = 
  *   dates come back as serial numbers rather than formatted strings.
  */
 export async function getRange(sheetName, a1Range, ssId = env.googleSheetId, renderOption = 'UNFORMATTED_VALUE') {
+  // Central holds values, not formulas: a FORMULA read gets the values.
+  if (isCentral()) return centralGetValues(sheetName, a1Range, ssId);
   logSheetsAccess(`getRange (values.get ${a1Range})`, sheetName, ssId);
   const sheets = getSheetsClient();
   const res = await withQuotaRetry(`getRange(${sheetName})`, () => sheets.spreadsheets.values.get({
@@ -177,6 +190,7 @@ export async function getRange(sheetName, a1Range, ssId = env.googleSheetId, ren
 }
 
 export async function appendRow(sheetName, rowArray, ssId = env.googleSheetId) {
+  if (isCentral()) return { rowNum: await centralAppendRows(sheetName, [rowArray], ssId) };
   logSheetsAccess('appendRow (values.append)', sheetName, ssId);
   const sheets = getSheetsClient();
   const res = await withQuotaRetry(`appendRow(${sheetName})`, () => sheets.spreadsheets.values.append({
@@ -193,6 +207,7 @@ export async function appendRow(sheetName, rowArray, ssId = env.googleSheetId) {
 }
 
 export async function appendRows(sheetName, rows2D, ssId = env.googleSheetId) {
+  if (isCentral()) { await centralAppendRows(sheetName, rows2D || [], ssId); return; }
   logSheetsAccess(`appendRows (values.append x${rows2D?.length || 0})`, sheetName, ssId);
   const sheets = getSheetsClient();
   await withQuotaRetry(`appendRows(${sheetName})`, () => sheets.spreadsheets.values.append({
@@ -206,6 +221,7 @@ export async function appendRows(sheetName, rows2D, ssId = env.googleSheetId) {
 
 /** 1-based row number, full row overwrite starting at column A. */
 export async function updateRow(sheetName, rowNum, rowArray, ssId = env.googleSheetId) {
+  if (isCentral()) return centralWriteRange(sheetName, rowNum, 0, [rowArray], ssId);
   logSheetsAccess(`updateRow (values.update row ${rowNum})`, sheetName, ssId);
   const sheets = getSheetsClient();
   const endCol = colLetter(Math.max(rowArray.length - 1, 0));
@@ -219,6 +235,7 @@ export async function updateRow(sheetName, rowNum, rowArray, ssId = env.googleSh
 
 /** 1-based row number, 0-based column index. */
 export async function updateCell(sheetName, rowNum, col0, value, ssId = env.googleSheetId) {
+  if (isCentral()) return centralWriteRange(sheetName, rowNum, col0, [[value]], ssId);
   logSheetsAccess(`updateCell (values.update row ${rowNum} col ${colLetter(col0)})`, sheetName, ssId);
   const sheets = getSheetsClient();
   const col = colLetter(col0);
@@ -241,6 +258,7 @@ export async function updateCell(sheetName, rowNum, col0, value, ssId = env.goog
  * pass. Returns the number of columns added.
  */
 export async function ensureColumnCount(sheetName, minCols, ssId = env.googleSheetId) {
+  if (isCentral()) return 0; // central rows have no grid limit
   const sheets = getSheetsClient();
   const meta = await withQuotaRetry(`ensureColumnCount.get(${sheetName})`, () => sheets.spreadsheets.get({
     spreadsheetId: ssId,
@@ -266,6 +284,7 @@ export async function ensureColumnCount(sheetName, minCols, ssId = env.googleShe
 }
 
 export async function updateRange(sheetName, a1Range, values2D, ssId = env.googleSheetId) {
+  if (isCentral()) { const b = parseA1(a1Range); return centralWriteRange(sheetName, b.r0 + 1, b.c0, values2D, ssId); }
   logSheetsAccess(`updateRange (values.update ${a1Range})`, sheetName, ssId);
   const sheets = getSheetsClient();
   await withQuotaRetry(`updateRange(${sheetName})`, () => sheets.spreadsheets.values.update({
@@ -277,6 +296,7 @@ export async function updateRange(sheetName, a1Range, values2D, ssId = env.googl
 }
 
 export async function batchUpdateValues(updates, ssId = env.googleSheetId) {
+  if (isCentral()) return centralBatchUpdate(updates, ssId);
   // updates: [{ range: "'Sheet'!A2:B2", values: [[...]] }, ...]
   const sheetNames = [...new Set((updates || []).map((u) => (u.range.match(/^'([^']+)'/) || [])[1] || '?'))].join(', ');
   logSheetsAccess(`batchUpdateValues (values.batchUpdate x${updates?.length || 0})`, sheetNames, ssId);
@@ -290,6 +310,7 @@ export async function batchUpdateValues(updates, ssId = env.googleSheetId) {
 /** Deletes 1-based row numbers (any order/duplicates handled), batched, highest-first so indices stay valid. */
 export async function deleteRows(sheetName, rowNums, ssId = env.googleSheetId) {
   if (!rowNums || !rowNums.length) return;
+  if (isCentral()) return centralDeleteRows(sheetName, rowNums, ssId);
   logSheetsAccess(`deleteRows (batchUpdate x${rowNums.length})`, sheetName, ssId);
   const sheetId = await getSheetId(sheetName, ssId);
   const uniqueSorted = [...new Set(rowNums)].sort((a, b) => b - a);
@@ -311,6 +332,7 @@ export async function deleteRows(sheetName, rowNums, ssId = env.googleSheetId) {
 }
 
 export async function deleteSheetIfExists(sheetName, ssId = env.googleSheetId) {
+  if (isCentral()) { logger.warn(`[CENTRAL] deleteSheetIfExists('${sheetName}') ignored — central mode never drops tabs`); return; }
   logSheetsAccess('deleteSheetIfExists (spreadsheets.get)', sheetName, ssId);
   const sheets = getSheetsClient();
   const meta = await withQuotaRetry(`deleteSheetIfExists.get(${sheetName})`, () => sheets.spreadsheets.get({ spreadsheetId: ssId }));
@@ -324,6 +346,7 @@ export async function deleteSheetIfExists(sheetName, ssId = env.googleSheetId) {
 }
 
 export async function insertSheetIfMissing(sheetName, headerRow, ssId = env.googleSheetId) {
+  if (isCentral()) return centralEnsureHeader(sheetName, headerRow, ssId); // never creates a tab
   logSheetsAccess('insertSheetIfMissing (spreadsheets.get)', sheetName, ssId);
   const sheets = getSheetsClient();
   const meta = await withQuotaRetry(`insertSheetIfMissing.get(${sheetName})`, () => sheets.spreadsheets.get({ spreadsheetId: ssId }));

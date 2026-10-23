@@ -57,6 +57,7 @@
  * last positional argument, which for both functions IS the userEmail
  * param). The controller passes req.user.email as that value.
  */
+import { isCentral } from './centralSheets.service.js';
 import {
   getSheetData,
   getRange,
@@ -3523,6 +3524,8 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
  * round trip is the right trade, not a cost worth avoiding.
  */
 export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseStage(containerNo, stage, data, userEmail, knownRow);
   const stageNum = parseInt(stage, 10);
   await checkActionPermission(`offlease${stageNum}`, userEmail);
 
@@ -4059,6 +4062,8 @@ export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEma
  * function's doc comment for why.
  */
 export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseMoveToStage(containerNo, payload, userEmail, knownRow);
   await checkActionPermission(`offlease${OL_STAGE2_INTERNAL}`, userEmail);
   const shaped = _prepareMoveToStage(payload);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -4373,6 +4378,8 @@ export async function saveOffLeaseSendBack(containerNo, userEmail, knownRow) {
  *  function above, which is what actually performs the FMS re-fetch — this
  *  path only ever clears columns, never populates from FMS itself. */
 export async function saveOffLeaseSendBackFast(containerNo, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseSendBack(containerNo, userEmail, knownRow);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
@@ -4468,6 +4475,8 @@ export async function saveOffLeaseHold(containerNo, userEmail, remarks = '', kno
 /** Mongo-first fast path — same shape and trade-off as saveOffLeaseStageFast.
  *  This is the entry point the controller calls. */
 export async function saveOffLeaseHoldFast(containerNo, userEmail, remarks = '', knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseHold(containerNo, userEmail, remarks, knownRow);
   await checkActionPermission('offlease1', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
@@ -4528,6 +4537,8 @@ export async function saveOffLeaseSendBackToStage1(containerNo, userEmail, known
 /** Mongo-first fast path for Send Back To Stage 1 — same trade-off as the
  *  other Fast paths in this file. */
 export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseSendBackToStage1(containerNo, userEmail, knownRow);
   await checkActionPermission('offlease1', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
@@ -4598,6 +4609,8 @@ export async function saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow
 /** Mongo-first fast path for Voucher Raised — same trade-off as the other
  *  Fast paths in this file. */
 export async function saveOffLeaseVoucherRaisedFast(containerNo, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow);
   await checkActionPermission('offlease8', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
@@ -6078,6 +6091,8 @@ export async function saveOffLeaseApprovalAction(containerNo, status, userEmail,
  * outbox poll interval.
  */
 export async function saveOffLeaseApprovalActionFast(containerNo, status, userEmail, remarks = '', knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseApprovalAction(containerNo, status, userEmail, remarks, knownRow);
   await checkActionPermission('offleaseapproval', userEmail);
 
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -6262,6 +6277,8 @@ export async function saveOffLeaseSendRejectedToStage1(containerNo, userEmail, k
 
 /** Mongo-first fast path — same trade-off as the other Fast paths in this file. */
 export async function saveOffLeaseSendRejectedToStage1Fast(containerNo, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeaseSendRejectedToStage1(containerNo, userEmail, knownRow);
   await checkActionPermission('offlease1', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
