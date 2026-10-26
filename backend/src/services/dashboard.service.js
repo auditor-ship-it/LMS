@@ -262,6 +262,7 @@ export async function getPoAgreementTrackerData() {
       return {
         container: safeStr(item.row[0]),
         clientName: safeStr(item.row[2]),
+        deployedDate: item.deployedDate || null,
         agreementStartDate,
         agreementDate,
         poDate: item.poDate || null,

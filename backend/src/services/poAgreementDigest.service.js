@@ -29,7 +29,7 @@ import { sendMail } from './email.service.js';
 import { getCollection } from './mongo.service.js';
 import { logger } from '../utils/logger.js';
 
-const REPORT_RECIPIENTS = ['pushpa.shetty@crystalgroup.in', 'shivani.dhall@crystalgroup.in'];
+const REPORT_RECIPIENTS = ['pushpa.shetty@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'mansi.agarwal@crystalgroup.in'];
 
 const DUE_SOON_DAYS = 30;
 

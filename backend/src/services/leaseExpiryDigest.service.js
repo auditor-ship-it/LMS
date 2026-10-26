@@ -23,6 +23,13 @@ import { logger } from '../utils/logger.js';
  * expiry.service.js's _sendRenewalNotification). */
 const FALLBACK_EMAIL = 'support@crystalgroup.in';
 
+/* Explicit request 2026-10-23: CC these three on every real (non-test) Lease
+ * Expiry digest sent to a salesperson, so they see every overdue/expiring
+ * lease across the whole sales team, not just their own per-person total
+ * from poAgreementDigest/deployedSummaryDigest. Omitted on a `testRecipient`
+ * run — a manual test send must never CC real stakeholders. */
+const CC_RECIPIENTS = ['shivani.dhall@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'pushpa.shetty@crystalgroup.in'];
+
 /* overdue = already expired; critical/warning = expiring within 30 days —
  * both need a Renew/Off-Lease decision, not just what's already lapsed.
  * 'safe' rows are excluded — nothing actionable yet. Explicit request
@@ -142,7 +149,8 @@ export async function sendLeaseExpiryDigest({ testOnly, testRecipient } = {}) {
     const email = testRecipient || emailForSalePerson(salesperson) || FALLBACK_EMAIL;
     const { subject, body, html } = buildDigestEmail(salesperson, rows);
     const finalSubject = testRecipient ? `[TEST] ${subject}` : subject;
-    const res = await sendMail({ to: email, subject: finalSubject, body, html });
+    const cc = testRecipient ? undefined : CC_RECIPIENTS.join(', ');
+    const res = await sendMail({ to: email, cc, subject: finalSubject, body, html });
     logger.info(`[LEASE-EXPIRY-DIGEST] ${salesperson} (${rows.length} leases) -> ${email} — ${res.ok ? 'sent' : `FAILED: ${res.error}`}`);
     results.push({ salesperson, email, count: rows.length, ok: res.ok });
   }
@@ -154,7 +162,8 @@ export async function sendLeaseExpiryDigest({ testOnly, testRecipient } = {}) {
     const email = testRecipient || emailForSalePerson(testOnly) || FALLBACK_EMAIL;
     const { subject, body, html } = buildDigestEmail(testOnly, []);
     const finalSubject = testRecipient ? `[TEST] ${subject}` : subject;
-    const res = await sendMail({ to: email, subject: finalSubject, body, html });
+    const cc = testRecipient ? undefined : CC_RECIPIENTS.join(', ');
+    const res = await sendMail({ to: email, cc, subject: finalSubject, body, html });
     logger.info(`[LEASE-EXPIRY-DIGEST] ${testOnly} (0 leases) -> ${email} — ${res.ok ? 'sent' : `FAILED: ${res.error}`}`);
     results.push({ salesperson: testOnly, email, count: 0, ok: res.ok });
   }

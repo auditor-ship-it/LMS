@@ -4,7 +4,7 @@ import { useAsync } from '../../hooks/useAsync.js';
 import { fetchSyncStatus } from '../../services/syncStatus.service.js';
 import styles from './SyncStatusPage.module.css';
 
-const STATUS_TONE = { pending: 'textInfo', processing: 'textInfo', failed: 'textWarn', dead: 'textBad', done: 'textOk' };
+const STATUS_TONE = { pending: 'textInfo', processing: 'textInfo', failed: 'textWarn', dead: 'textBad', skipped: 'textWarn', done: 'textOk' };
 
 function fmtWhen(v) {
   if (!v) return '—';
@@ -36,7 +36,7 @@ export function SyncStatusPage() {
   const { data, loading, error, reload } = useAsync(fetchSyncStatus, []);
   const counts = data?.counts || {};
   const entries = data?.entries || [];
-  const needsAttention = (counts.failed || 0) + (counts.dead || 0) + (counts.processing || 0);
+  const needsAttention = (counts.failed || 0) + (counts.dead || 0) + (counts.processing || 0) + (counts.skipped || 0);
 
   return (
     <>
@@ -55,6 +55,7 @@ export function SyncStatusPage() {
               <span className={styles.countItem}><strong>{counts.processing || 0}</strong> processing</span>
               <span className={styles.countItem}><strong>{counts.failed || 0}</strong> retrying</span>
               <span className={`${styles.countItem} ${counts.dead ? styles.countBad : ''}`}><strong>{counts.dead || 0}</strong> dead (gave up)</span>
+              <span className={`${styles.countItem} ${counts.skipped ? styles.countBad : ''}`}><strong>{counts.skipped || 0}</strong> skipped (needs review)</span>
               <span className={styles.countItem}><strong>{counts.done || 0}</strong> done</span>
             </div>
 
@@ -94,6 +95,7 @@ export function SyncStatusPage() {
             {needsAttention > 0 && (
               <p className={styles.hint}>
                 {counts.dead > 0 && `${counts.dead} entr${counts.dead === 1 ? 'y' : 'ies'} gave up after repeated failures and need manual review. `}
+                {counts.skipped > 0 && `${counts.skipped} entr${counts.skipped === 1 ? 'y was' : 'ies were'} skipped — the record's state changed before the queued write could be applied; review manually. `}
                 {counts.failed > 0 && `${counts.failed} ${counts.failed === 1 ? 'is' : 'are'} still retrying automatically. `}
               </p>
             )}

@@ -22,7 +22,20 @@ export function parseDate(val) {
   const s = String(val).trim();
   if (s === '') return null;
 
-  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  // Trailing time (e.g. "13/10/2026 04:57:45", the "Action Timestamp" shape
+  // written by approve/verify/offlease/stage9's own dd/MM/yyyy HH:mm:ss
+  // stamp) used to fall through this regex entirely — the "$" anchored
+  // right after the year, so any string with a time suffix never matched
+  // here. It then fell to the native `new Date(s)` fallback below, which
+  // either rejected it outright (day > 12) or silently read it as MM/DD
+  // instead of DD/MM (day <= 12) — both cases return the wrong date for a
+  // value that IS a valid dd/MM/yyyy date, just with time attached. Bug
+  // found 2026-10-23: it was letting off-leased containers whose Action
+  // Timestamp carries a time (most of them) get miscounted as still
+  // deployed in the Deployed Summary's closing count. The optional
+  // trailing-time group below is ignored for the date value itself — this
+  // function has never returned time-of-day — only the date is read.
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?$/);
   if (m) {
     const dd = parseInt(m[1], 10), mm = parseInt(m[2], 10) - 1;
     let yy = parseInt(m[3], 10); if (yy < 100) yy += 2000;

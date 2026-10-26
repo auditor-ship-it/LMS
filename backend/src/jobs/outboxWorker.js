@@ -32,6 +32,21 @@ const QUOTA_PAUSE_MS = 5 * 60 * 1000; // mirrors the app's global-lockout durati
 // long is abandoned, not slow — safe to treat as claimable again.
 const STALE_PROCESSING_MS = 10 * 60 * 1000; // 10 min
 
+// BUG FOUND AND FIXED 2026-10-23 (same user request that asked for a Fast
+// path on Save/Submit — reviewing the existing worker surfaced this): a
+// replay that returns one of these guard-rejection sentinels (the record's
+// state in live Sheets no longer matches what the Mongo-first write assumed
+// — e.g. someone else already approved/sent-back the row in the meantime)
+// was being treated as a SUCCESS and marked 'done', because it didn't
+// throw. Nothing was actually written to Sheets, and there was no trace of
+// that anywhere — the queued change was silently dropped. These are the
+// exact sentinel strings every registered replay target in this codebase
+// uses for "guard rejected, nothing written" (grep-verified across
+// expiry.service.js and offlease.service.js — 'OK' is the only success
+// sentinel; everything else these functions return on success is either
+// 'OK' or a free-form success sentence, never one of these all-caps ones).
+const GUARD_REJECTION_SENTINELS = new Set(['ALREADY_PROCESSED', 'INVALID_STATE', 'MISSING_PO_OR_AGR', 'AWAITING_APPROVAL']);
+
 let workerPausedUntil = 0;
 let ticking = false;
 let intervalHandle = null;
@@ -63,16 +78,40 @@ async function markDone(col, entry, durationMs) {
   logger.info(`[OUTBOX] Replayed to Sheets | Kind: ${entry.kind} | Duration: ${durationMs.toFixed(1)}ms`);
 }
 
+/** See GUARD_REJECTION_SENTINELS above — a terminal state distinct from
+ *  'done' (nothing was actually written) and from 'dead' (this isn't a
+ *  failure that exhausted retries; retrying it again would just get the
+ *  same rejection forever, since the args are fixed). Surfaced on the Sync
+ *  Status page for manual review. */
+async function markSkipped(col, entry, result) {
+  const now = new Date();
+  await col.updateOne({ _id: entry._id }, {
+    $set: { status: 'skipped', completedAt: now, updatedAt: now, lastError: `Replay returned '${result}' — nothing was written to Sheets. The record's state likely changed before this queued write could be applied; review manually.` }
+  });
+  logger.warn(`[OUTBOX] entry ${entry._id} (${entry.kind}) skipped — replay returned '${result}', not a Sheets write`);
+}
+
 async function markFailure(col, entry, err) {
   const now = new Date();
-  const attempts = entry.attempts + 1;
   const message = err?.message || String(err);
 
   if (isGoogleQuotaError(err)) {
     workerPausedUntil = Date.now() + QUOTA_PAUSE_MS;
     logger.warn(`[OUTBOX] Google Sheets quota hit — pausing outbox worker for ${QUOTA_PAUSE_MS / 1000}s`);
+    // BUG FOUND AND FIXED 2026-10-23: quota exhaustion is never the entry's
+    // own fault and has no fixed bound on how long it lasts — it used to
+    // still burn an attempt and apply the escalating backoff like any other
+    // failure, so a long outage could exhaust maxAttempts and leave the
+    // entry permanently 'dead' even though the write was always going to
+    // succeed once the lock cleared. Attempt count is left untouched; it
+    // just retries right after this worker-wide pause ends.
+    await col.updateOne({ _id: entry._id }, {
+      $set: { status: 'failed', lastError: message, nextAttemptAt: new Date(workerPausedUntil), updatedAt: now }
+    });
+    return;
   }
 
+  const attempts = entry.attempts + 1;
   if (attempts >= entry.maxAttempts) {
     await col.updateOne({ _id: entry._id }, { $set: { status: 'dead', attempts, lastError: message, updatedAt: now } });
     logger.error(`[OUTBOX ERROR] entry ${entry._id} (${entry.kind}) exhausted retries -> dead | Reason: ${message}`);
@@ -96,8 +135,12 @@ async function tick() {
       const start = process.hrtime.bigint();
       try {
         const fn = resolveReplay(entry.kind);
-        await fn(...(entry.args || []));
-        await markDone(col, entry, Number(process.hrtime.bigint() - start) / 1e6);
+        const result = await fn(...(entry.args || []));
+        if (GUARD_REJECTION_SENTINELS.has(result)) {
+          await markSkipped(col, entry, result);
+        } else {
+          await markDone(col, entry, Number(process.hrtime.bigint() - start) / 1e6);
+        }
       } catch (err) {
         await markFailure(col, entry, err);
       }
