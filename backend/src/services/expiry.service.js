@@ -544,6 +544,13 @@ export async function getExpiryDataByFilter(filterType, user) {
     if (filterType === 'pending') {
       item.agreementDate = expDate ? _toLocalIsoDate(expDate) : null;
       item.poDate = poExpDate ? _toLocalIsoDate(poExpDate) : null;
+      // Deployed Date (col G) — explicit request 2026-10-23: the PO &
+      // Agreement Tracker's coverage checkboxes must never tick a month
+      // before the container was actually deployed, even when a coverage
+      // range (agreementStartDate) or the "extend to today" logic would
+      // otherwise reach further back/forward than that.
+      const deployedParsed = parseDate(row[6]);
+      item.deployedDate = deployedParsed ? _toLocalIsoDate(deployedParsed) : null;
       // Agreement START date for the PO & Agreement Tracker's coverage
       // range — explicit request 2026-10-16 (a live example container,
       // CXRU1249797: Renewed Date 01-08-2026, Valid Till 30-09-2026 ->
@@ -1422,7 +1429,7 @@ export async function saveRenewalDraft(containerNo, renewedDate, validTill, sign
  * awaitingApproval split) — from the submitter's point of view, indistinguishable
  * from "removed from Pending", which is what the request asked for.
  */
-export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
+export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue, skipEmail) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -1475,17 +1482,147 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     cacheRemove(DEPLOYED_RAW_CACHE_KEY);
     cacheRemoveByPrefix('mytasks_v1');
 
-    try {
-      await _sendRenewalApprovalRequestEmail({
-        container: containerNo,
-        clientName: _deployedClientName(hdrs0, matchedRow),
-        renewedDate, validTill, poNo: poNo || '', billingCycle: billingCycle || '',
-        submittedBy
-      });
-    } catch (e) { console.error('[RENEWAL-APPROVAL-EMAIL]', e.message); }
+    // skipEmail: set only when this call is the outbox worker REPLAYING a
+    // completeDocStageFast write that already sent this email immediately
+    // (see that function below) — without this, Pushpa would get the same
+    // approval-request email twice, once right away and once again whenever
+    // the queued Sheets write actually lands (seconds later, or minutes
+    // later under quota pressure).
+    if (!skipEmail) {
+      try {
+        await _sendRenewalApprovalRequestEmail({
+          container: containerNo,
+          clientName: _deployedClientName(hdrs0, matchedRow),
+          renewedDate, validTill, poNo: poNo || '', billingCycle: billingCycle || '',
+          submittedBy
+        });
+      } catch (e) { console.error('[RENEWAL-APPROVAL-EMAIL]', e.message); }
+    }
 
     return 'Submitted for approval — awaiting Pushpa Shetty';
   });
+}
+
+/**
+ * Mongo-first fast path for saveRenewalDraft ("Save" on the Update
+ * Agreement form) — same design as completeDocumentStageFast/
+ * saveExpiryActionFast above. Explicit request 2026-10-23: the live-Sheets
+ * version above used to hit withQuotaRetry's "already locked out" error
+ * during a Sheets quota outage and fail the WHOLE Save with a 500 — the
+ * user's filled-in form data was simply lost, with nothing saved anywhere.
+ * This always succeeds to Mongo first; the real Sheets write replays in the
+ * background once quota allows (jobs/outboxWorker.js), with a persistent
+ * log of exactly what's still pending (Sync Status page / _sync_outbox).
+ *
+ * Skips _ensureRenewalSubmittedDateHeader/_ensureApprovalColumnsHeader
+ * (both live Sheets calls — exactly what this path exists to avoid): safe
+ * because every container reachable here is already in 'documents pending',
+ * meaning an earlier write already created these headers; the replay (the
+ * unchanged original saveRenewalDraft) still calls them for real, covering
+ * a genuine first-ever case.
+ */
+export async function saveRenewalDraftFast(containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
+  await checkActionPermission('renew', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+
+  // Same column set/semantics as the live saveRenewalDraft above (AA-AD,
+  // DRAFT_*, RENEWAL_SUBMITTED_DATE_COL) — only write a field if it was
+  // actually provided, same "a draft is allowed to be partial" rule.
+  const patch = {};
+  if (renewedDate) patch['row.26'] = fmtCellDate(renewedDate);
+  if (validTill) patch['row.27'] = fmtCellDate(validTill);
+  if (signedCopyUrl) patch['row.28'] = signedCopyUrl;
+  if (remarks) patch['row.29'] = remarks;
+  if (poNo) patch[`row.${DRAFT_PO_NO_COL}`] = poNo;
+  if (poFileUrl) patch[`row.${DRAFT_PO_FILE_COL}`] = poFileUrl;
+  if (billingCycle) patch[`row.${DRAFT_BILLING_CYCLE_COL}`] = billingCycle;
+  if (poValidity) patch[`row.${DRAFT_PO_VALIDITY_COL}`] = fmtCellDate(poValidity);
+  if (poValue) patch[`row.${DRAFT_PO_VALUE_COL}`] = poValue;
+  patch[`row.${RENEWAL_SUBMITTED_DATE_COL}`] = dmyTime(new Date());
+
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+
+  // Resolved row through to the replay — see completeDocumentStageFast's
+  // identical note above on why (the live write must target the SAME row
+  // this Mongo patch just did, not re-search by container number later).
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.saveRenewalDraft', [containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, resolvedRow, poValue], { actor: callerEmail });
+
+  return 'Draft saved — still pending';
+}
+
+/**
+ * Mongo-first fast path for completeDocStage ("Submit" on the Update
+ * Agreement form) — same design and same motivation as
+ * saveRenewalDraftFast immediately above. The one real difference: the
+ * live completeDocStage also sends Pushpa an approval-request email as
+ * part of the same call. That email is sent HERE instead, immediately —
+ * Mongo already has everything it needs (the whole approval workflow
+ * reviews the STAGED data, which Mongo now holds, not the live Sheet cell)
+ * — and the replayed completeDocStage call is passed skipEmail=true so
+ * Pushpa doesn't get it a second time once the real Sheets write lands,
+ * possibly minutes later under quota pressure.
+ */
+export async function completeDocStageFast(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
+  await checkActionPermission('renew', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  if (!renewedDate) throw new AppError('Renewed Date is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+
+  const stamp = dmyTime(new Date());
+  const submittedBy = userEmail || callerEmail || '';
+  const patch = {
+    'row.26': fmtCellDate(renewedDate),
+    'row.27': fmtCellDate(validTill),
+    'row.28': signedCopyUrl || '',
+    'row.29': remarks || '',
+    [`row.${DRAFT_PO_NO_COL}`]: poNo || '',
+    [`row.${DRAFT_PO_FILE_COL}`]: poFileUrl || '',
+    [`row.${DRAFT_BILLING_CYCLE_COL}`]: billingCycle || '',
+    [`row.${DRAFT_PO_VALIDITY_COL}`]: poValidity ? fmtCellDate(poValidity) : '',
+    [`row.${DRAFT_PO_VALUE_COL}`]: poValue || '',
+    [`row.${RENEWAL_SUBMITTED_DATE_COL}`]: stamp,
+    // A resubmission after a prior Rejection clears that old decision out —
+    // same as the live version above.
+    [`row.${APPROVAL_STATUS_COL}`]: 'Pending',
+    [`row.${APPROVAL_REMARKS_COL}`]: '',
+    [`row.${APPROVAL_DATE_COL}`]: '',
+    [`row.${APPROVER_COL}`]: '',
+    [`row.${SUBMITTED_BY_COL}`]: submittedBy
+  };
+
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+  cacheRemoveByPrefix('mytasks_v1');
+
+  try {
+    await _sendRenewalApprovalRequestEmail({
+      container: containerNo,
+      // B (index 1) = Client Name, fixed position — no live headers
+      // available here to do the name-based lookup _deployedClientName
+      // does; this whole Fast-path family already treats the Deployed
+      // sheet's column layout as fixed (see e.g. the hardcoded 21/22 used
+      // throughout saveExpiryActionFast/completeDocumentStageFast above).
+      clientName: safeStr(found.row[1]),
+      renewedDate, validTill, poNo: poNo || '', billingCycle: billingCycle || '',
+      submittedBy
+    });
+  } catch (e) { console.error('[RENEWAL-APPROVAL-EMAIL]', e.message); }
+
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.completeDocStage', [containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, resolvedRow, poValue, true], { actor: callerEmail });
+
+  return 'Submitted for approval — awaiting Pushpa Shetty';
 }
 
 /**

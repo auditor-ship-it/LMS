@@ -124,11 +124,15 @@ export async function sendBackToPending(req, res) {
   res.json({ result: await expiryService.sendExpiryToPendingFast(containerNo, req.user.email, rowNum) });
 }
 
-/** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
+/** POST /api/expiry/renewal/complete-document-stage — completeDocStageFast
+ *  (LMS.js 5892 was the original synchronous version; switched to the
+ *  Mongo-first fast path 2026-10-23 — explicit request after a Sheets quota
+ *  lockout failed this whole call with a 500 and lost the user's filled-in
+ *  form. See completeDocStageFast's own doc comment for the full design.) */
 export async function completeRenewalDocStage(req, res) {
   const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
   res.json({
-    result: await expiryService.completeDocStage(
+    result: await expiryService.completeDocStageFast(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
       userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
     )
@@ -138,11 +142,13 @@ export async function completeRenewalDocStage(req, res) {
 /** POST /api/expiry/renewal/save-document-draft — "Save" (draft), explicit
  *  request 2026-09-28: same fields as complete-document-stage above, but the
  *  record stays in Documents Pending and nothing required — see
- *  saveRenewalDraft's own doc comment. */
+ *  saveRenewalDraft's own doc comment. Switched to the Mongo-first
+ *  saveRenewalDraftFast 2026-10-23 — same reason/design as
+ *  completeRenewalDocStage above. */
 export async function saveRenewalDraft(req, res) {
   const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
   res.json({
-    result: await expiryService.saveRenewalDraft(
+    result: await expiryService.saveRenewalDraftFast(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
       poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
     )

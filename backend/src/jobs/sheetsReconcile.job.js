@@ -12,22 +12,56 @@
  * only for the sheets it covers, using incremental upserts instead of a
  * full wipe, per the "avoid dropping collections every time" requirement.
  *
- * SHEETS-FIRST (reverted 2026-08-21) — every write in the app now lands on
- * Sheets directly; Mongo is a read-only backup mirror this job refreshes
- * one direction only (Sheets -> Mongo). The outbox worker and its
- * in-flight-write bookkeeping (resurrectDeadEntries/resurrectStuckProcessing/
- * inFlightDocIds) existed only to protect Mongo-first writes still in
- * transit to Sheets — with no such writes left to protect, they were removed
- * along with writeThrough.service.js and jobs/outboxWorker.js.
+ * SHEETS-FIRST, mostly — this job itself only ever reads Sheets and writes
+ * Mongo, one direction. But as of the Mongo-first Fast-path family
+ * (offlease.service.js's saveOffLeaseStageFast and friends, expiry.service.js's
+ * completeDocumentStageFast/saveExpiryActionFast/saveRenewalDraftFast/
+ * completeDocStageFast), some writes DO land on Mongo first and reach Sheets
+ * later via jobs/outboxWorker.js — this comment used to say that worker
+ * "was removed" (true on 2026-08-21, when it briefly was) — it was brought
+ * back and is very much alive; see _hasPendingOutboxForSheet below for why
+ * this job now has to know about it.
  */
 import { getSheetData, getRange } from '../services/googleSheets.service.js';
 import { getCollection, withTransaction } from '../services/mongo.service.js';
 import { MONGO_SHEET_MAPPING, normalizeKey } from '../config/mongoSheetMapping.js';
 import { SHEETS } from '../config/sheets.config.js';
+import { OUTBOX_COLLECTION } from '../services/outbox.service.js';
 import { safeStr } from '../utils/format.js';
 import { logger } from '../utils/logger.js';
 
 const META_ID = '__meta__';
+
+/**
+ * BUG FOUND AND FIXED 2026-10-23: a Mongo-first Fast write (see file header)
+ * patches Mongo immediately and queues its matching Sheets write for the
+ * outbox worker to replay, typically seconds later but up to several
+ * minutes under Sheets quota pressure. If THIS job's full-refresh for the
+ * same sheet runs in that window, it reads Sheets BEFORE the queued write
+ * has landed there, then deleteMany+insertMany's that stale snapshot over
+ * the top of Mongo — wiping the Fast write's effect from Mongo until the
+ * outbox replay eventually re-applies it (the replay's own
+ * patchMongoMirrorRow call fixes it for good, but a user who just saved
+ * could see it "disappear" in the meantime on a reload). Only matters for
+ * fullRefresh sheets (keyed upserts don't wipe-and-rebuild) — and in
+ * practice only SHEETS.DEPLOYED and SHEETS.OFF_LEASE_TRACKING, the two
+ * sheets every currently-registered Fast-path kind targets.
+ */
+const OUTBOX_KIND_SHEET_PREFIX = {
+  'offlease.': SHEETS.OFF_LEASE_TRACKING,
+  'expiry.': SHEETS.DEPLOYED
+};
+
+async function _hasPendingOutboxForSheet(sheetName) {
+  const prefixes = Object.keys(OUTBOX_KIND_SHEET_PREFIX).filter((p) => OUTBOX_KIND_SHEET_PREFIX[p] === sheetName);
+  if (!prefixes.length) return false;
+  const regex = new RegExp(`^(${prefixes.map((p) => p.replace('.', '\\.')).join('|')})`);
+  const count = await getCollection(OUTBOX_COLLECTION).countDocuments({
+    kind: { $regex: regex },
+    status: { $in: ['pending', 'processing', 'failed'] }
+  });
+  return count > 0;
+}
 
 /* STAGE-8's "Delivery Order" column (G) is a hyperlink in the live sheet;
  * values.get only ever returns its display text ("View DO"), never the
@@ -184,6 +218,11 @@ async function reconcileSheetByKey(sheetName, mapping, rows) {
 export async function reconcileSheet(sheetName) {
   const mapping = MONGO_SHEET_MAPPING[sheetName];
   if (!mapping || (mapping.naturalKeyColumn == null && !mapping.fullRefresh)) return { sheetName, skipped: true };
+
+  if (mapping.fullRefresh && await _hasPendingOutboxForSheet(sheetName)) {
+    logger.warn(`[SYNC] Skipping full-refresh of ${sheetName}: a Mongo-first write is still queued for Sheets (outbox) — refreshing now would briefly wipe it from Mongo. Will retry next cycle.`);
+    return { sheetName, skipped: true, skippedOutboxPending: true };
+  }
 
   logger.info(`[SYNC] Fetching sheet: ${sheetName}`);
   // mapping.ssId: undefined for every sheet in the main lease-management

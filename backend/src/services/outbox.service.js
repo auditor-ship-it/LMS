@@ -57,9 +57,11 @@ export async function enqueueSheetReplay(kind, args, opts = {}) {
  * into what's still waiting to replay against live Sheets, since the whole
  * point of Mongo-first writes is that the Mongo side is already done by the
  * time anyone would look. Counts every status; the entry list only covers
- * the ones NOT yet 'done' (pending/processing/failed/dead), newest first,
- * capped at `limit` — 'done' entries are routine history, not something
- * needing attention.
+ * the ones NOT yet 'done' (pending/processing/failed/dead/skipped), newest
+ * first, capped at `limit` — 'done' entries are routine history, not
+ * something needing attention. 'skipped' (added 2026-10-23, see
+ * outboxWorker.js's GUARD_REJECTION_SENTINELS) means the replay ran but a
+ * guard check rejected it — nothing was written to Sheets, needs review.
  */
 export async function getOutboxStatus(limit = 200) {
   const col = getCollection(OUTBOX_COLLECTION);
@@ -67,7 +69,7 @@ export async function getOutboxStatus(limit = 200) {
     col.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).toArray(),
     col.find({ status: { $ne: 'done' } }).sort({ createdAt: -1 }).limit(limit).toArray()
   ]);
-  const byStatus = { pending: 0, processing: 0, failed: 0, dead: 0, done: 0 };
+  const byStatus = { pending: 0, processing: 0, failed: 0, dead: 0, skipped: 0, done: 0 };
   for (const c of counts) if (c._id in byStatus) byStatus[c._id] = c.count;
   return {
     counts: byStatus,

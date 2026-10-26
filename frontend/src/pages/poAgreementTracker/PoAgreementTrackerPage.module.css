@@ -86,6 +86,16 @@
 .clickRow { cursor: pointer; }
 .clickRow:hover td { background: var(--surface-2); }
 
+/* Explicit request 2026-10-23: highlight the whole row once a date is
+   overdue or within 30 days — grey (var(--surface-2)), not amber/red (see
+   .warn/.textWarn's own comment below). The sticky Container/Client
+   columns need their own override since they otherwise paint their own
+   opaque background (see .colContainer/.colClient below) over the row's. */
+.rowDueSoon td { background: var(--surface-2); }
+.rowDueSoon:hover td { background: var(--surface-2); }
+.rowDueSoon .colContainer,
+.rowDueSoon .colClient { background: var(--surface-2); }
+
 .detailPanel {
   padding: 4px 0 0;
 }
@@ -133,7 +143,14 @@
 
 .table {
   border-collapse: collapse;
-  width: 100%;
+  /* Explicit request 2026-10-23 ("container no and client name white space
+     zyada hai"): no forced width: 100% — that made the table always stretch
+     to fill .scrollWrap, and since Container/Client have the widest natural
+     content among columns without their own fixed width, the browser's
+     table auto-layout dumped most of that extra slack space into exactly
+     those two, as large blank gaps. Letting the table size to its own
+     content removes that stretch; .scrollWrap's overflow-x: auto still
+     handles the case where content is wider than the viewport. */
   font-size: 12px;
 }
 .table th, .table td {
@@ -152,20 +169,48 @@
   position: sticky;
   top: 0;
 }
-.colContainer, .colClient {
+/* Explicit request 2026-10-23 ("yah middle pe hai left side hona chahiye"):
+   `.table td { text-align: center }` above has HIGHER CSS specificity
+   (.table + td = 0,1,1) than `.colContainer`/`.colClient` alone (0,1,0), so
+   it was silently winning and centering these two columns despite the
+   text-align: left below — fixed by matching that specificity (td prefix)
+   so source order (this comes later) decides it correctly.
+   max-width + ellipsis (new): caps these two columns so one unusually long
+   client name elsewhere in the ~400-row list can't balloon the column's
+   auto-layout width for every row — see .table's own comment on why
+   width: 100% was dropped; this is the companion fix for the column-width
+   side of that same complaint. */
+td.colContainer, td.colClient {
   text-align: left;
+}
+.colContainer, .colClient {
   padding-left: 12px;
   position: sticky;
   background: var(--surface);
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.colContainer { left: 0; min-width: 130px; }
-.colClient { left: 130px; min-width: 160px; border-right: 1px solid var(--line); }
+/* Explicit follow-up 2026-10-23 ("gap abhi bhi hai bhot" — still too much
+   gap): min-width/max-width set to the SAME value each, forcing a true
+   fixed width sized to the common case (an 11-char container code; a
+   typical client name) instead of leaving room for the rare outlier (a
+   combined multi-container cell like "TITU9230980,TITU9231009", or an
+   unusually long client name) — those now always ellipsis-truncate, with
+   the title attribute (see JSX) showing the full value on hover. */
+.colContainer { left: 0; min-width: 115px; max-width: 115px; }
+.colClient { left: 115px; min-width: 150px; max-width: 150px; border-right: 1px solid var(--line); }
 thead .colContainer, thead .colClient { background: var(--surface-2); }
 
-.colDate { min-width: 95px; font-weight: 600; }
+/* Same fix as colContainer/colClient above, same complaint, same cause:
+   these also only had a min-width, so auto table layout still handed them
+   the leftover slack space once the sticky columns stopped absorbing it. */
+/* Explicit follow-up 2026-10-23 ("agrement and po vaid is gap more"):
+   tightened further, 95px -> 80px — still comfortably fits the fixed
+   "DD-MM-YYYY" format (10 chars) with no overflow risk. */
+.colDate { min-width: 80px; max-width: 80px; font-weight: 600; }
 
-.dayCell { min-width: 22px; position: relative; }
+.dayCell { min-width: 22px; max-width: 22px; position: relative; }
 .todayCol { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 
 .dot {
@@ -194,12 +239,17 @@ thead .colContainer, thead .colClient { background: var(--surface-2); }
 }
 .checkboxChecked { border-style: solid; }
 .bad { background: var(--error); }
-.warn { background: var(--warn); }
+/* Explicit request 2026-10-23 ("not red col gey col... not red"): overdue
+   and due-soon both read as grey here, not the amber --warn token (which
+   still looked too close to red/orange) — .warn/.textWarn keep their names
+   (bandForDate still calls these states 'overdue'/'dueSoon' internally)
+   but are repointed to the neutral grey text/surface tokens. */
+.warn { background: var(--text-2); }
 .info { background: var(--info); }
 .ok { background: var(--success); }
 
 .textBad { color: var(--error); }
-.textWarn { color: var(--warn); }
+.textWarn { color: var(--text-2); }
 .textInfo { color: var(--info); }
 .textOk { color: var(--success); }
 
