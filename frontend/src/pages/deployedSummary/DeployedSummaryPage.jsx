@@ -6,7 +6,7 @@ import { PageHeader, Card, Button, Select, StatCard, DataGrid, ActionMenu, Error
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchDeployedSummary, fetchDeployedDetail } from '../../services/deployedSummary.service.js';
+import { fetchDeployedSummary, fetchDeployedDetail, fetchDeployedSummaryExport, fetchDeployedSummaryExportMonthCategories } from '../../services/deployedSummary.service.js';
 import styles from './DeployedSummaryPage.module.css';
 
 const GROUPS = [
@@ -17,7 +17,48 @@ const GROUPS = [
   { key: 'closing', label: 'Closing Deployed' }
 ];
 
-const DETAIL_HEADERS = ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement'];
+// 'PO No' added 2026-10-27 (explicit request: "po no show for this" — the
+// export had PO PDF, a link, but never the actual PO Number) — the backend
+// now returns c.poNo (dashboard.service.js's getDeployedDetailData,
+// resolved by header via _resolveRenewalColumns), inserted here right after
+// Billing Type.
+const DETAIL_HEADERS = ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement'];
+
+/** Triggers a browser download from an axios blob response — explicit
+ *  request 2026-10-27 ("highlight nahi dikh raha hai color mai"): these
+ *  exports now come pre-built (and pre-highlighted) from the server
+ *  instead of being assembled client-side, so this just saves the file the
+ *  server already sent. Filename comes from the server's own
+ *  Content-Disposition header, not guessed client-side. */
+function downloadBlobResponse(res, fallbackFilename) {
+  const disposition = res.headers?.['content-disposition'] || '';
+  const match = /filename="?([^"]+)"?/.exec(disposition);
+  const filename = match ? match[1] : fallbackFilename;
+  const url = URL.createObjectURL(res.data);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** apiErrorMessage can't read a Blob response body directly (axios still
+ *  returns the error payload as a Blob when the request was configured
+ *  with responseType: 'blob', even though the server sent ordinary JSON) —
+ *  this reads it as text and parses it first, falling back to the normal
+ *  message otherwise. */
+async function blobErrorMessage(e) {
+  const data = e?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text());
+      if (parsed?.error) return parsed.error;
+    } catch { /* not JSON — fall through to the generic message */ }
+  }
+  return apiErrorMessage(e);
+}
 
 /**
  * Reads one summary cell out of a Deployed Summary row — same shape
@@ -72,6 +113,22 @@ export function DeployedSummaryPage() {
     setExporting(true);
     setExportError('');
     try {
+      // Explicit request 2026-10-27 ("highlight nahi dikh raha hai color
+      // mai"): unfiltered, this now downloads the server-built file (real
+      // cell highlighting — yellow for recently updated, red for an
+      // off-lease Final Billing Date due, plus a "Changes vs last month"
+      // sheet) instead of assembling one client-side, which could never
+      // show colors at all (the browser `xlsx` package silently drops
+      // cell styles). Only falls back to the old client-side build below
+      // when a Type/Size filter is active — the server endpoint doesn't
+      // support that scoping yet, so a filtered export still works, just
+      // without highlighting until that's added too.
+      if (!typeVal && !sizeVal) {
+        const res = await fetchDeployedSummaryExport();
+        downloadBlobResponse(res, `Deployed-Summary-${data.months[0].replace(/\s+/g, '-')}.xlsx`);
+        return;
+      }
+
       const { months, rows, types } = data;
       const filterSuffix = typeVal && sizeVal ? ` (${typeVal} — ${sizeVal})` : typeVal ? ` (${typeVal})` : sizeVal ? ` (Size: ${sizeVal})` : '';
 
@@ -87,11 +144,11 @@ export function DeployedSummaryPage() {
       // than one cell.
       const { containers = [] } = await fetchDeployedDetail(months[0], 'closing', typeVal, sizeVal);
       const detailAoa = [
-        ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto'],
-        ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto])
+        ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto'],
+        ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto])
       ];
       const detailSheet = XLSX.utils.aoa_to_sheet(detailAoa);
-      detailSheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
+      detailSheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
@@ -99,7 +156,7 @@ export function DeployedSummaryPage() {
       const stamp = months[0].replace(' ', '-');
       XLSX.writeFile(wb, `Deployed-Summary-${stamp}.xlsx`);
     } catch (e) {
-      setExportError(apiErrorMessage(e));
+      setExportError(await blobErrorMessage(e));
     } finally {
       setExporting(false);
     }
@@ -112,9 +169,9 @@ export function DeployedSummaryPage() {
     if (format === 'excel') {
       const wb = XLSX.utils.book_new();
       sections.forEach((sec) => {
-        const aoa = [DETAIL_HEADERS, ...sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
+        const aoa = [DETAIL_HEADERS, ...sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
         const sheet = XLSX.utils.aoa_to_sheet(aoa);
-        sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+        sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
         XLSX.utils.book_append_sheet(wb, sheet, sec.label.slice(0, 31));
       });
       XLSX.writeFile(wb, `${stamp}.xlsx`);
@@ -132,7 +189,7 @@ export function DeployedSummaryPage() {
         autoTable(doc, {
           startY: nextY + 3,
           head: [DETAIL_HEADERS],
-          body: sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
+          body: sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
           styles: { fontSize: 7 },
           headStyles: { fillColor: [5, 35, 121] },
           margin: { top: 22 }
@@ -153,6 +210,18 @@ export function DeployedSummaryPage() {
     setMonthExporting(monthLabel);
     setExportError('');
     try {
+      // Explicit request 2026-10-27 ("highlight nahi dikh raha hai color
+      // mai") — this is the EXACT export the request pointed at
+      // ("Deployed-Oct-2026-All-Categories..."). Same server-built,
+      // highlighted-file swap as exportToExcel above, same Type/Size-filter
+      // fallback caveat (server endpoint doesn't support that scoping yet).
+      // PDF is untouched either way — only the Excel path changes.
+      if (format === 'excel' && !typeVal && !sizeVal) {
+        const res = await fetchDeployedSummaryExportMonthCategories(monthLabel, typeVal, sizeVal);
+        downloadBlobResponse(res, `Deployed-${monthLabel.replace(/\s+/g, '-')}-All-Categories.xlsx`);
+        return;
+      }
+
       const results = await Promise.all(
         GROUPS.map((grp) => fetchDeployedDetail(monthLabel, grp.key, typeVal, sizeVal))
       );
@@ -160,7 +229,7 @@ export function DeployedSummaryPage() {
       const stamp = `Deployed-${monthLabel.replace(' ', '-')}-All-Categories`;
       buildSectionedExport(`Deployed Summary — ${monthLabel} — All Categories`, stamp, sections, format);
     } catch (e) {
-      setExportError(apiErrorMessage(e));
+      setExportError(await blobErrorMessage(e));
     } finally {
       setMonthExporting('');
     }
@@ -353,7 +422,7 @@ function DeployedDetailPanel({ selection, onClose }) {
   const filterLabel = selection.typeVal ? (selection.sizeVal ? `${selection.typeVal} — ${selection.sizeVal}` : selection.typeVal) : (selection.sizeVal ? `Size: ${selection.sizeVal}` : 'All Types');
 
   const rows = containers.map((c) => ({
-    row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
+    row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
     _rowNum: c.container
   }));
 
@@ -361,9 +430,9 @@ function DeployedDetailPanel({ selection, onClose }) {
 
   const exportDetailToExcel = () => {
     if (!containers.length) return;
-    const aoa = [DETAIL_HEADERS, ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
+    const aoa = [DETAIL_HEADERS, ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
-    sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, sheet, `${catLabel} ${selection.monthLabel}`.slice(0, 31));
     XLSX.writeFile(wb, `Deployed-${fileStamp}.xlsx`);
@@ -379,7 +448,7 @@ function DeployedDetailPanel({ selection, onClose }) {
     autoTable(doc, {
       startY: 26,
       head: [DETAIL_HEADERS],
-      body: containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
+      body: containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
       styles: { fontSize: 8 },
       headStyles: { fillColor: [5, 35, 121] }
     });

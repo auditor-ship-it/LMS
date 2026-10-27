@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { PageHeader, Card, Button, StatCard, SearchBar, FilterBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
@@ -148,8 +148,17 @@ export function RenewDocumentPage() {
   /* Bulk selection, keyed by container number — same identity
      setSelectedContainer already uses for the single-row detail view, and
      stable across pagination/filtering (unlike a row index, which shifts
-     depending on which page or filtered set it's read from). */
-  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+     depending on which page or filtered set it's read from).
+     Explicit request 2026-10-27 ("click the renew not open form"): Lease
+     Expiry's bulk Renew button used to just silently mark containers
+     'Documents Pending' with no form — it now also hands off here via
+     navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainers } }), same
+     pattern as the single-container focusContainer above but a LIST,
+     pre-selecting them so the bulk bar (below) is already showing and one
+     click away from the actual Renewed Date/Valid Till/PO form, instead of
+     making the user find and re-select the exact containers they just
+     processed. */
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set(location.state?.focusContainers || []));
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState('');
@@ -188,6 +197,24 @@ export function RenewDocumentPage() {
     () => filtered.filter((r) => selectedKeys.has(r.row?.[0])),
     [filtered, selectedKeys]
   );
+
+  // Explicit follow-up 2026-10-27 ("samjhe from open hona chhaiye hai hai
+  // na" — the FORM itself should open, not just land here pre-selected):
+  // once the pre-selected containers from a bulk-Renew handoff actually
+  // resolve to real rows in the loaded list, open the bulk form
+  // automatically instead of leaving one more click (the bulk bar's own
+  // "Update") between landing here and actually seeing it. Guarded with a
+  // ref so this only ever fires once — selectedItems recomputes on every
+  // filter/search change, and bulkOpen must stay closeable afterward.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (!location.state?.focusContainers?.length) return;
+    if (!selectedItems.length) return;
+    autoOpenedRef.current = true;
+    setBulkError('');
+    setBulkOpen(true);
+  }, [selectedItems, location.state]);
 
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
   const handleStatusFilterChange = (v) => { setStatusFilter(v); resetPage(); };
