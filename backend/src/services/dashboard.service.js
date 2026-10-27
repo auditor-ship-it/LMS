@@ -9,7 +9,9 @@
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
 import { safeStr, parseDate } from '../utils/format.js';
-import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap } from './expiry.service.js';
+import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap, _resolveRenewalColumns } from './expiry.service.js';
+import { getSheetDataFromMongo } from './mongoSheetData.service.js';
+import { SHEETS } from '../config/sheets.config.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -165,6 +167,27 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   // Lease Expiry does, via the cached container -> Order No map built from
   // Operation sheet / New Lease (see expiry.service.js).
   const ordMap = await _expiryOrderNoMap();
+  // PO No / PO Validity — explicit request 2026-10-27 ("po no show for this
+  // and po vaild show" / follow-up "PO Validity this is not shpoe for
+  // deployed"): the exported "Deployed Containers" sheet had PO PDF (a
+  // link) but never the actual PO Number or its own valid-till date.
+  // Resolved by header (same helper getExpiryDataByFilter/completeDocStage
+  // use), not a hardcoded index — this sheet's columns have shifted before.
+  const { poCol, poValidityCol } = _resolveRenewalColumns(values[0] || []);
+  // "Last Updated" / recently-changed flag — explicit request 2026-10-27
+  // ("jo bhi edit hua hai usko highlight kar do... mai 10 din tak update
+  // kiya uske baad download kiya tho woh highlight hona chahiye"): this
+  // sheet has no true per-cell "last edited" metadata (the Sheets API
+  // doesn't expose one, and a manual edit made directly in the spreadsheet
+  // — outside this app — leaves no trace at all), so this is a PROXY: the
+  // most recent of the three timestamps this app itself actually stamps on
+  // a row (Renewal Submitted Date — every Save/Submit; Action Timestamp —
+  // every Off-Lease action; Approval Date — Pushpa's Approve/Reject). A row
+  // whose real sheet cell was hand-edited outside the app, with none of
+  // these three touched, will NOT be caught by this — the digest email
+  // says so explicitly (see deployedSummaryDigest.service.js).
+  const RECENT_DAYS = 30;
+  const recentCutoff = Date.now() - RECENT_DAYS * 86400000;
 
   const cleanType = typeFilter ? normalizeContainerType(typeFilter).toLowerCase() : '';
   const cleanSize = sizeFilter ? sizeFilter.toLowerCase().trim() : '';
@@ -195,6 +218,12 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
     }
     if (!include) continue;
 
+    const renewalSubmitted = parseDate(row[39]); // AN = Renewal Submitted Date
+    const approvalDate = parseDate(row[42]);     // AQ = Approval Date
+    const lastUpdatedDate = [renewalSubmitted, actionTs, approvalDate]
+      .filter(Boolean)
+      .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+
     containers.push({
       container: safeStr(row[0]),   // A = Container
       orderNo: _resolveOrderNo(ordMap, row[0], row[1]), // client-disambiguated — see expiry.service.js's own doc comment
@@ -208,9 +237,116 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
       rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate
       billingType: safeStr(row[16]), // Q = Billing Type
       agreementUrl: safeStr(row[8]), // I = Agreement PDF
+      poNo: safeStr(row[poCol]),
+      poValidity: safeStr(row[poValidityCol]),
       poAttachment: safeStr(row[11]), // L = PO PDF
       movement,
-      offLeaseDate: movement === 'Deletion' ? safeStr(row[21]) : '' // V = Action TS
+      offLeaseDate: movement === 'Deletion' ? safeStr(row[21]) : '', // V = Action TS
+      lastUpdated: lastUpdatedDate ? safeStr(lastUpdatedDate) : '',
+      recentlyUpdated: !!(lastUpdatedDate && lastUpdatedDate.getTime() >= recentCutoff)
+    });
+  }
+
+  return { containers };
+}
+
+/**
+ * Off-leased containers whose Final Billing Date is this month OR LATER —
+ * explicit request 2026-10-27 ("offlease kiya hai final billing date...
+ * oct month ka diya hai tho woh bhi dikhega deployed sheet pe... red ho
+ * jayega pura row"), widened same day ("oct bhi and nov bhi and koi dec
+ * hai tho woh bhi dikhega" — not just the exact current month, Oct/Nov/Dec/
+ * any later month too, NO upper bound): Final Billing Date is set on the
+ * Off-Lease Tracking sheet (SHEETS.OFF_LEASE_TRACKING, col_13, "Final
+ * Billing Date") during Stage 1 intake — the target cutoff date Stage 5/
+ * Billing reconciles actual charges against — and a container with one due
+ * THIS month or any future month is still billing-relevant even though
+ * it's no longer in the "currently deployed" pool. Only an ALREADY-PASSED
+ * Final Billing Date (before this month started) is excluded — that one's
+ * billing cycle has already closed out.
+ *
+ * Deliberately a SEPARATE function, not folded into getDeployedDetailData's
+ * own 'closing' category: that category's result count must keep matching
+ * getDeployedSummaryData's independently-computed closing KPI (opening +
+ * net, arithmetic) — silently adding off-leased rows into it would inflate
+ * the container list without the KPI agreeing, a confusing mismatch. This
+ * is meant to be called separately and the results shown as an ADDITIONAL,
+ * clearly distinct group (see deployedSummaryExcel.service.js, which red-
+ * fills these rows' whole row BACKGROUND — explicit request 2026-10-27
+ * "data shoe ho par background row red dikhe" — not the text/font color).
+ */
+export async function getOffLeasedWithFinalBillingDue(monthLabel) {
+  const parts = monthLabel.trim().split(' ');
+  const monthStr = parts[0], year = parseInt(parts[1], 10);
+  const monthOrder = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+  const monthNum = monthOrder[monthStr];
+  if (monthNum === undefined) return { containers: [] };
+  const ms = new Date(year, monthNum, 1).getTime();
+
+  const { values } = await _deployedRawValues();
+  const deployedRows = values.slice(1);
+  if (!deployedRows.length) return { containers: [] };
+
+  const { poCol, poValidityCol } = _resolveRenewalColumns(values[0] || []);
+  const ordMap = await _expiryOrderNoMap();
+
+  // Container No (col 0) -> Final Billing Date (col 13, "Final Billing
+  // Date" per olHeaders.generated.js). Last match wins — this sheet is
+  // append-only, so if a container was off-leased more than once over its
+  // life, the LAST row is the current/relevant cycle.
+  //
+  // Only rows whose Intimation Approval Status is 'Approved' count —
+  // explicit request 2026-10-27 ("yah approved hoga yahi haa bas"): a
+  // container whose off-lease intimation was 'Sent Back' (not yet
+  // re-approved) shouldn't show up here as if it were a settled off-lease.
+  // Resolved by header name, NOT olHeaders.generated.js's static OL_HEADERS
+  // array — that file is stale for this sheet (confirmed live 2026-10-27:
+  // it puts "Intimation Approval Status" at index 107, but the live sheet
+  // actually has it at index 30 — a real drift between the generated file
+  // and the live column layout, not a typo on either side).
+  const { headers: olHeaders, rows: olRows } = await getSheetDataFromMongo(SHEETS.OFF_LEASE_TRACKING);
+  const approvalStatusCol = olHeaders.findIndex((h) => String(h || '').trim() === 'Intimation Approval Status');
+  const finalBillingByContainer = new Map();
+  for (const r of olRows) {
+    const c = safeStr(r[0]).trim();
+    if (!c) continue;
+    if (approvalStatusCol >= 0 && safeStr(r[approvalStatusCol]).trim().toLowerCase() !== 'approved') continue;
+    const fbd = parseDate(r[13]);
+    if (fbd) finalBillingByContainer.set(c, fbd);
+  }
+
+  const containers = [];
+  for (const row of deployedRows) {
+    const containerNo = safeStr(row[0]).trim();
+    if (!containerNo) continue;
+    const actionStatus = safeStr(row[22]).trim().toLowerCase(); // W = Action Status
+    if (actionStatus !== 'off-lease') continue;
+
+    const fbd = finalBillingByContainer.get(containerNo);
+    if (!fbd || fbd.getTime() < ms) continue;
+
+    containers.push({
+      container: containerNo,
+      orderNo: _resolveOrderNo(ordMap, row[0], row[1]),
+      clientCode: safeStr(row[15]),  // P = Client Code
+      clientName: safeStr(row[1]),   // B = Client Name
+      size: safeStr(row[2]),         // C = Size
+      type: safeStr(row[3]),         // D = Type
+      location: safeStr(row[4]),     // E = Location
+      deployedDate: safeStr(row[6]), // G = Deployed Date
+      validUpto: safeStr(row[7]),    // H = Valid Upto
+      rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate (Deployed sheet's own col 13 — unrelated to Off-Lease Tracking's own col 13 used above)
+      billingType: safeStr(row[16]), // Q = Billing Type
+      agreementUrl: safeStr(row[8]), // I = Agreement PDF
+      poNo: safeStr(row[poCol]),
+      poValidity: safeStr(row[poValidityCol]),
+      poAttachment: safeStr(row[11]), // L = PO PDF
+      movement: 'Off-Lease (Final Billing)',
+      offLeaseDate: safeStr(row[21]), // V = Action Timestamp
+      finalBillingDate: safeStr(fbd),
+      finalBillingDue: true,
+      lastUpdated: '',
+      recentlyUpdated: false
     });
   }
 

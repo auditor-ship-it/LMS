@@ -1,33 +1,32 @@
 /**
- * MONTHLY DEPLOYED SUMMARY DIGEST
+ * DEPLOYED SUMMARY DIGEST — daily, 25th through 2nd of next month, 10:00 AM
  *
- * Explicit request 2026-10-23: a monthly email showing the Deployed Summary
- * page's own numbers (Opening/Addition/Deletion/Net/Closing, the exact same
+ * Explicit request 2026-10-23: an email showing the Deployed Summary page's
+ * own numbers (Opening/Addition/Deletion/Net/Closing, the exact same
  * month-wise movement table shown on that page), with an Excel attachment
  * matching what its own "Export to Excel" button produces — to
  * pushpa.shetty@crystalgroup.in, shivani.dhall@crystalgroup.in and
- * mansi.agarwal@crystalgroup.in, same recipients as the other monthly
- * digests. Separate from poAgreementDigest.service.js (that one is about
- * which containers need their PO/Agreement renewed — this one is the
- * month-wise deployed-container movement count).
+ * mansi.agarwal@crystalgroup.in, same recipients as the other digests.
+ * Separate from poAgreementDigest.service.js (that one is about which
+ * containers need their PO/Agreement renewed — this one is the month-wise
+ * deployed-container movement count).
  *
- * Skeleton (recipients list, idempotency state doc, testRecipient/now
- * pattern, cron registration) copied from poAgreementDigest.service.js.
+ * SCHEDULE CHANGED 2026-10-27 (explicit request: "25 to 2 date tak maild
+ * jana chahiye hai subh 10 bhje") — from one email on the 25th to one EVERY
+ * DAY from the 25th through the 2nd of the following month, at 10:00 AM
+ * (jobs/index.js). Idempotency switched from a monthly key to a DAILY one
+ * (lastSentDateKey, "YYYY-MM-DD") to match — the old monthly key would have
+ * let only the very first of these 9 daily sends through.
  *
- * EXCEL ATTACHMENT: the page's own exportToExcel()
- * (frontend/src/pages/deployedSummary/DeployedSummaryPage.jsx) builds this
- * client-side with the `xlsx` (SheetJS) package from already-fetched JSON —
- * there was no server-side equivalent. This mirrors both of its sheets:
- * "Summary" (totals per month, not broken out by type/size — the page's own
- * type/size breakdown is a client-side filter on the same JSON, not
- * meaningful in a single static monthly snapshot) and "Deployed Containers"
- * (explicit request 2026-10-23: every currently-deployed container, not
- * just the totals — same getDeployedDetailData('closing') call and column
- * set the page's own export uses), using the same `xlsx` package added to
- * the backend for this purpose.
+ * EXCEL ATTACHMENT: building moved out to deployedSummaryExcel.service.js
+ * 2026-10-27, shared with the frontend's own "Export to Excel" button (via
+ * a new on-demand download endpoint, dashboard.controller.js) so the two
+ * can never show different numbers or drift apart. See that file's own
+ * header comment for exactly what's in it (Summary / Deployed Containers /
+ * one sheet per Billing Type / Changes vs last month) and the highlighting
+ * color key.
  */
-import * as XLSX from 'xlsx';
-import { getDeployedSummaryData, getDeployedDetailData } from './dashboard.service.js';
+import { buildDeployedSummaryExcel } from './deployedSummaryExcel.service.js';
 import { sendMail } from './email.service.js';
 import { getCollection } from './mongo.service.js';
 import { logger } from '../utils/logger.js';
@@ -38,44 +37,11 @@ const STATE_COLLECTION = '_runtime_config';
 const STATE_ID = 'deployedSummaryDigestState';
 const HISTORY_LIMIT = 24;
 
-const SUMMARY_GROUPS = [
-  ['opening', 'Opening Deployed'],
-  ['addition', 'Addition'],
-  ['deletion', 'Deletion'],
-  ['net', 'Net Movement'],
-  ['closing', 'Closing Deployed'],
-];
-
-const CONTAINER_HEADERS = [
-  'Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type',
-  'Billing Type', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto'
-];
-
-function containerToRow(c) {
-  return [
-    c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type,
-    c.billingType, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto
-  ];
-}
-
-function buildWorkbookBuffer(data, containers) {
-  const summaryAoa = [['Category', ...data.months]];
-  for (const [key, label] of SUMMARY_GROUPS) {
-    summaryAoa.push([label, ...data.rows.map((r) => r[key].total)]);
-  }
-  const summaryWs = XLSX.utils.aoa_to_sheet(summaryAoa);
-
-  const containersAoa = [CONTAINER_HEADERS, ...containers.map(containerToRow)];
-  const containersWs = XLSX.utils.aoa_to_sheet(containersAoa);
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, summaryWs, 'Summary');
-  XLSX.utils.book_append_sheet(wb, containersWs, 'Deployed Containers');
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-}
-
-function buildDigestEmail({ latest }) {
+function buildDigestEmail({ latest, recentCount, finalBillingCount, diff }) {
   const subject = `Deployed Summary – ${latest.month}`;
+  const changesLine = diff.ok
+    ? `${diff.added.length} added, ${diff.removed.length} removed, and ${diff.changed.length} row(s) with a field changed vs ${diff.oldMonthKey}`
+    : `no comparison available yet (${diff.reason})`;
 
   const card = (label, value, color) => `
     <td style="padding:12px 18px;border:1px solid #ddd;${color ? `background:${color};` : ''}">
@@ -100,7 +66,7 @@ function buildDigestEmail({ latest }) {
       Closing: <b>${latest.closing.total}</b>
     </p>
     <p style="font-family:Arial,sans-serif;font-size:11.5px;color:#777;">
-      Attached as Excel: the full month-wise movement table (all months), plus the complete list of every currently deployed container (Container No, Client, Size, Type, Location, Deployed Date, Valid Upto, etc.).
+      Attached as Excel: the full month-wise movement table, the complete list of every currently deployed container (now with PO No/PO Validity and Last Updated), a separate sheet per Billing Type, ${recentCount} row(s) highlighted yellow for a change in the last 30 days (based on this app's own Renewal/Off-Lease/Approval timestamps — a hand-edit made directly in the spreadsheet outside the app won't be caught), ${finalBillingCount} approved-off-lease container(s) highlighted red whose Final Billing Date is ${latest.month} or later (not yet passed), and a "Changes vs last month" sheet: ${changesLine}.
     </p>
   `;
 
@@ -111,7 +77,7 @@ function buildDigestEmail({ latest }) {
     `Deletion: ${latest.deletion.total}`,
     `Net Movement: ${latest.net.total}`,
     `Closing Deployed: ${latest.closing.total}`, '',
-    'Attached as Excel: the full month-wise movement table, plus the complete list of every currently deployed container.'
+    `Attached as Excel: the full month-wise movement table, the complete container list (PO No/PO Validity + Last Updated added), a sheet per Billing Type, ${recentCount} row(s) highlighted for a change in the last 30 days, ${finalBillingCount} approved-off-lease row(s) highlighted red for a Final Billing Date in ${latest.month} or later, and a "Changes vs last month" sheet: ${changesLine}.`
   ].join('\n');
 
   return { subject, body, html };
@@ -125,12 +91,12 @@ async function getState() {
   }
 }
 
-async function recordRun({ monthKey, closing, ok, error }) {
+async function recordRun({ dateKey, closing, ok, error }) {
   try {
-    const entry = { monthKey, closing, ok, error: error || null, sentAt: new Date().toISOString() };
+    const entry = { dateKey, closing, ok, error: error || null, sentAt: new Date().toISOString() };
     await getCollection(STATE_COLLECTION).updateOne(
       { _id: STATE_ID },
-      { $set: ok ? { lastSentMonthKey: monthKey } : {}, $push: { history: { $each: [entry], $slice: -HISTORY_LIMIT } } },
+      { $set: ok ? { lastSentDateKey: dateKey } : {}, $push: { history: { $each: [entry], $slice: -HISTORY_LIMIT } } },
       { upsert: true }
     );
   } catch (e) {
@@ -139,60 +105,52 @@ async function recordRun({ monthKey, closing, ok, error }) {
 }
 
 /**
- * Builds and sends the digest for the CURRENT month (data.rows[0] — the
- * Deployed Summary data is already built latest-month-first).
+ * Builds and sends the digest for "today".
  *
  * @param {object} [opts]
  * @param {string} [opts.testRecipient] - send to this ONE address instead of
  *   the real recipient list, subject prefixed "[TEST]", never checked
  *   against or recorded into the idempotency state.
  * @param {Date} [opts.now] - override "today" for testing (only affects the
- *   idempotency monthKey, not which month's data is sent — that always
+ *   idempotency dateKey, not which month's data is sent — that always
  *   follows the live data's own latest row).
  */
 export async function sendDeployedSummaryDigest({ testRecipient, now } = {}) {
   const today = now ? new Date(now) : new Date();
-  const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
   if (!testRecipient) {
     const state = await getState();
-    if (state?.lastSentMonthKey === monthKey) {
-      logger.info(`[DEPLOYED-SUMMARY-DIGEST] ${monthKey} already sent — skipping duplicate run.`);
-      return { ok: true, monthKey, skipped: true };
+    if (state?.lastSentDateKey === dateKey) {
+      logger.info(`[DEPLOYED-SUMMARY-DIGEST] ${dateKey} already sent — skipping duplicate run.`);
+      return { ok: true, dateKey, skipped: true };
     }
   }
 
   try {
-    const data = await getDeployedSummaryData();
-    const latest = data.rows[0];
-    if (!latest) throw new Error('No Deployed Summary data available');
+    const { buffer, filename, latest, recentCount, finalBillingCount, diff } = await buildDeployedSummaryExcel({ now });
 
-    const { containers } = await getDeployedDetailData(latest.month, 'closing', null, null);
-
-    const { subject, body, html } = buildDigestEmail({ latest });
+    const { subject, body, html } = buildDigestEmail({ latest, recentCount, finalBillingCount, diff });
     const finalSubject = testRecipient ? `[TEST] ${subject}` : subject;
     const to = testRecipient || REPORT_RECIPIENTS.join(', ');
-
-    const buffer = buildWorkbookBuffer(data, containers);
-    const filename = `Deployed-Summary-${latest.month.replace(/\s+/g, '-')}.xlsx`;
 
     const res = await sendMail({
       to, subject: finalSubject, body, html,
       attachments: [{ filename, content: buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }]
     });
-    logger.info(`[DEPLOYED-SUMMARY-DIGEST] ${latest.month} — Closing: ${latest.closing.total} -> ${to} — ${res.ok ? 'sent' : `FAILED: ${res.error}`}`);
+    logger.info(`[DEPLOYED-SUMMARY-DIGEST] ${latest.month} (${dateKey}) — Closing: ${latest.closing.total}, recently updated: ${recentCount}, final billing this month: ${finalBillingCount} -> ${to} — ${res.ok ? 'sent' : `FAILED: ${res.error}`}`);
 
     if (!testRecipient) {
-      await recordRun({ monthKey, closing: latest.closing.total, ok: res.ok, error: res.error });
+      await recordRun({ dateKey, closing: latest.closing.total, ok: res.ok, error: res.error });
     }
 
-    return { ok: res.ok, monthKey, month: latest.month, closing: latest.closing.total, error: res.error };
+    return { ok: res.ok, dateKey, month: latest.month, closing: latest.closing.total, recentCount, finalBillingCount, error: res.error };
   } catch (e) {
     const error = e?.message || String(e);
-    logger.error(`[DEPLOYED-SUMMARY-DIGEST] ${monthKey} FAILED to build/send:`, error);
+    logger.error(`[DEPLOYED-SUMMARY-DIGEST] ${dateKey} FAILED to build/send:`, error);
     if (!testRecipient) {
-      await recordRun({ monthKey, closing: null, ok: false, error });
+      await recordRun({ dateKey, closing: null, ok: false, error });
     }
-    return { ok: false, monthKey, error };
+    return { ok: false, dateKey, error };
   }
 }

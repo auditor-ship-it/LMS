@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PageHeader, Card, Button, StatusBadge, SearchBar, FilterBar, Pagination, DataGrid, StatCard, renderCellValue, ConfirmDialog, Icon
 } from '../../components/ui/index.js';
@@ -9,7 +9,7 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage, useAuth } from '../../shared/auth/index.js';
-import { fetchExpiryList, actionExpiryRow, actionExpiryRowSync, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
+import { fetchExpiryList, actionExpiryRowSync, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
@@ -143,7 +143,6 @@ export function LeaseExpiryPage() {
      across a reload risks it silently pointing at different rows once
      positions shift. */
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
-  const [bulkBusy, setBulkBusy] = useState('');
   useEffect(() => { setSelectedKeys(new Set()); }, [data]);
 
   /* Off-Lease confirmation — OffLeaseModal.jsx, mirroring RejectModal's
@@ -164,6 +163,12 @@ export function LeaseExpiryPage() {
   const [renewItem, setRenewItem] = useState(null);
   const [renewBusy, setRenewBusy] = useState(false);
   const [renewError, setRenewError] = useState('');
+  // Bulk Renew's "do the rest one at a time" queue — explicit request
+  // 2026-10-27, confirmed via direct question ("open them one at a time").
+  // A ref, not state: it's only ever read/written from inside event
+  // handlers (startBulkRenew/advanceOrCloseRenew below), never rendered, so
+  // there's no reason to trigger a re-render just to update it.
+  const renewQueueRef = useRef([]);
 
   // "Renew via Sales CRM" — separate from the Renew button above, which
   // still drives THIS app's own internal renewal-status workflow
@@ -345,6 +350,34 @@ export function LeaseExpiryPage() {
     setRenewItem({ containerNo: item.row?.[0], rowNum: item._rowNum, draft: null });
   };
 
+  /** Bulk "Renew" button — explicit request 2026-10-27: opens the SAME
+   *  in-place Update Agreement form openRenew uses above, for the FIRST
+   *  selected container; the rest wait in renewQueueRef and open one after
+   *  another as each one's Save/Submit completes (advanceOrCloseRenew
+   *  below) — never marks anything or writes anywhere upfront, exactly
+   *  like a single Renew click, just repeated. */
+  const startBulkRenew = () => {
+    if (!selectedItems.length) return;
+    const [first, ...rest] = selectedItems;
+    renewQueueRef.current = rest;
+    openRenew(first);
+  };
+
+  /** Called after a Save or Submit succeeds (or the modal is cancelled) —
+   *  opens the next queued container's form, or closes out if the queue
+   *  (or a single, non-bulk Renew) is empty. */
+  const advanceOrCloseRenew = () => {
+    if (renewQueueRef.current.length) {
+      const [next, ...rest] = renewQueueRef.current;
+      renewQueueRef.current = rest;
+      openRenew(next);
+    } else {
+      setRenewItem(null);
+      setSelectedIdx(null);
+      setSelectedKeys(new Set()); // close the bulk bar — everything that was queued is done
+    }
+  };
+
   /* Shared by Save and Submit below. Save/Submit on Renew & Document's own
      page can assume the container is ALREADY 'Documents Pending' (that's
      how it got into that page's list) — but this is the FIRST click ever
@@ -398,10 +431,9 @@ export function LeaseExpiryPage() {
       const result = await saveDocumentDraft(body);
       if (result === 'INVALID_STATE') setRenewError('Could not save — try again.');
       else {
-        setRenewItem(null);
-        setSelectedIdx(null);
         await reload();
         invalidate('deployed-sheet');
+        advanceOrCloseRenew();
       }
     } catch (e) {
       setRenewError(apiErrorMessage(e));
@@ -424,10 +456,9 @@ export function LeaseExpiryPage() {
       else if (result === 'MISSING_PO') setRenewError('A PO number/file URL is required first.');
       else if (result === 'MISSING_AGR') setRenewError('A signed agreement copy URL is required first.');
       else {
-        setRenewItem(null);
-        setSelectedIdx(null);
         await reload();
         invalidate('deployed-sheet');
+        advanceOrCloseRenew();
       }
     } catch (e) {
       setRenewError(apiErrorMessage(e));
@@ -487,38 +518,16 @@ export function LeaseExpiryPage() {
     }
   };
 
-  /* Bulk versions of the two actions above — run in parallel (independent
-     writes to different rows), one write each, no shared form data to
-     collect first, so there's no modal: click, confirm the count, done. A
-     per-container failure is reported by container number rather than
-     failing the whole batch silently. */
-  const handleBulkAction = async (status) => {
-    if (!selectedItems.length) return;
-    const containers = selectedItems.map((it) => it.row?.[0]);
-    setBulkBusy(status);
-    setActionError('');
-    try {
-      const results = await Promise.allSettled(
-        selectedItems.map((it) => actionExpiryRow(it.row?.[0], new Date().toISOString(), status, it._rowNum))
-      );
-      const alreadyProcessed = results
-        .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_PROCESSED' ? containers[i] : null))
-        .filter(Boolean);
-      const failed = results
-        .map((r, i) => (r.status === 'rejected' ? containers[i] : null))
-        .filter(Boolean);
-      const notes = [];
-      if (alreadyProcessed.length) notes.push(`Already actioned by someone else: ${alreadyProcessed.join(', ')}.`);
-      if (failed.length) notes.push(`Failed: ${failed.join(', ')}.`);
-      if (notes.length) setActionError(notes.join(' '));
-      await reload();
-      invalidate('deployed-sheet');
-    } catch (e) {
-      setActionError(apiErrorMessage(e));
-    } finally {
-      setBulkBusy('');
-    }
-  };
+  /* Bulk Off-Lease still works the old way (see handleBulkOffLease below —
+     it opens its own modal). Bulk RENEW used to call a Promise.allSettled
+     write-every-row-then-navigate-away version here — explicit follow-up
+     2026-10-27 ("phel renew kar raha tho direct yah open ho raha tha...
+     aesa nahi hona chahiye"): that navigation to Renew & Document was
+     rejected after the fact — "Renew" must open the SAME in-place "Update
+     Agreement" form the single-row flow already uses (openRenew below),
+     right here on this page, not go anywhere else. Confirmed via direct
+     question: for 2+ selected, open them ONE AT A TIME — see
+     startBulkRenew/advanceOrCloseRenew below, not this function anymore. */
 
   const handleBulkOffLease = () => {
     if (!selectedItems.length) return;
@@ -603,10 +612,10 @@ export function LeaseExpiryPage() {
               <div className={styles.bulkBar}>
                 <span className={styles.bulkCount}>{selectedItems.length} selected</span>
                 <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear</Button>
-                <Button size="sm" variant="primary" loading={bulkBusy === 'Documents Pending'} disabled={!!bulkBusy} onClick={() => handleBulkAction('Documents Pending')}>
+                <Button size="sm" variant="primary" onClick={startBulkRenew}>
                   Renew ({selectedItems.length})
                 </Button>
-                <Button size="sm" variant="secondary" disabled={!!bulkBusy} onClick={handleBulkOffLease}>
+                <Button size="sm" variant="secondary" onClick={handleBulkOffLease}>
                   Off-Lease ({selectedItems.length})
                 </Button>
               </div>
@@ -709,7 +718,7 @@ export function LeaseExpiryPage() {
         item={renewItem}
         submitting={renewBusy}
         error={renewError}
-        onClose={() => setRenewItem(null)}
+        onClose={() => { renewQueueRef.current = []; setRenewItem(null); }}
         onSubmit={handleRenewSubmit}
         onSave={handleRenewSave}
       />
