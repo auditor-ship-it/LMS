@@ -95,7 +95,7 @@ export function ContainerDetailPage({ isActive }) {
   );
 
   if (!container) return <ErrorState message="No container selected" />;
-  if (loading) return <LoadingState label="Loading stage data…" />;
+  if (loading) return <LoadingState label="Loading stage data…" showElapsed />;
   if (error) return <ErrorState message={error} onRetry={reload} />;
   /* A container off-leased by more than one client has more than one
      record — without a leaseId to pick one, show the same disambiguation

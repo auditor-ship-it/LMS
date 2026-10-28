@@ -245,6 +245,23 @@ export function PoAgreementTrackerPage() {
           </div>
         </div>
 
+        {!selected && <div className={styles.legend}>
+          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.warn}`} />Overdue or due within 30 days (row highlighted)</span>
+          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
+          <span className={styles.legendDivider} />
+          {/* Explicit, repeated request 2026-10-19: no red checkbox state
+              anymore — just green (covered) or blank (not). The two dots
+              above are for the Agreement/PO Date TEXT columns only, which
+              still show red/green. */}
+          {/* Updated 2026-10-23 to match resolveCoverageRange's own doc
+              comment — keep these in sync. */}
+          {dataView === 'po' ? (
+            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own start date to PO valid-upto when on file — otherwise just the valid-upto month, or Jan through valid-upto if already overdue)</span>
+          ) : (
+            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto when on file — otherwise just the valid-upto month, or Jan through valid-upto if already overdue)</span>
+          )}
+        </div>}
+
         {!error && !loading && !!filtered.length && !selected && (
           <div className={styles.totals}>
             <span><strong>{agreementDueCount}</strong> agreement{agreementDueCount === 1 ? '' : 's'} due in {displayedYear}</span>
@@ -386,23 +403,6 @@ export function PoAgreementTrackerPage() {
             </table>
           </div>
         )}
-
-        {!selected && <div className={styles.legend}>
-          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.warn}`} />Overdue or due within 30 days (row highlighted)</span>
-          <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
-          <span className={styles.legendDivider} />
-          {/* Explicit, repeated request 2026-10-19: no red checkbox state
-              anymore — just green (covered) or blank (not). The two dots
-              above are for the Agreement/PO Date TEXT columns only, which
-              still show red/green. */}
-          {/* Updated 2026-10-23 to match resolveCoverageRange's own doc
-              comment — keep these in sync. */}
-          {dataView === 'po' ? (
-            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own start date to PO valid-upto when on file — otherwise just the valid-upto month, or Jan through valid-upto if already overdue)</span>
-          ) : (
-            <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto when on file — otherwise just the valid-upto month, or Jan through valid-upto if already overdue)</span>
-          )}
-        </div>}
       </Card>
     </>
   );
