@@ -2185,6 +2185,7 @@ function CabinTable({ fields, size, values, disabled, onChange }) {
                     className={`${styles.cabinQty} ${short ? styles.cabinShort : ''}`}
                     value={raw ?? ''}
                     onChange={(e) => onChange(f.key, e.target.value)}
+                    onWheel={(e) => e.target.blur()}
                     disabled={disabled}
                     aria-label={`${f.cabin.item} available`}
                   />
@@ -2359,7 +2360,22 @@ function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
   if (type === 'number') {
     return (
       <Labeled label={label} required={required}>
-        <input type="number" step="any" value={value || ''} onChange={(e) => onChange(e.target.value)} disabled={disabled} />
+        {/* onWheel blur — explicit request 2026-10-29 ("not scolling amout
+            increse and descre"): a focused number input's native behavior
+            changes its value when the mouse wheel scrolls over it, which
+            reads as the page silently scrolling the number up/down instead
+            of the page itself — blurring on wheel hands scrolling back to
+            the page immediately, the same fix used site-wide for this exact
+            browser quirk. Affects every number field here (SD Amount,
+            Return Transportation PO Amount, etc.), not just one. */}
+        <input
+          type="number"
+          step="any"
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          onWheel={(e) => e.target.blur()}
+          disabled={disabled}
+        />
       </Labeled>
     );
   }

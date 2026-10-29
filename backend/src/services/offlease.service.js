@@ -485,6 +485,15 @@ const OL_CONTAINER_PHOTOS_COL = 336;
  *  OL_CONTAINER_PHOTOS_COL above. Added 2026-10-17 (explicit request). */
 const OL_FINAL_BILLING_REMARK_COL = 352;
 
+/** Stage 1's "SD Amount" — the security deposit amount on file at
+ *  intimation time, explicit request 2026-10-29 ("add the sd amounts").
+ *  Outside Stage 1's own startCol..endCol range (10-17), same reasoning as
+ *  OL_FINAL_BILLING_REMARK_COL above. Distinct from Stage 5's own "Security
+ *  Deposit Amount" (col 35) and Stage 6's "SD Amount to be Refunded"
+ *  (refunds.service.js) — both filled much later in the process; this one
+ *  is captured up front. */
+const OL_SD_AMOUNT_COL = 353;
+
 /** Stage 1A's "Client to Client" decision (alongside Approve/Send Back/
  *  Reject) — the new client this container is going straight to. Added
  *  2026-09-23 (explicit request). See saveOffLeaseApprovalClientToClient. */
@@ -2752,6 +2761,9 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       // Final Billing Remark (col_352) — plain text, same reasoning as the
       // other Stage 1 *_EXTRA_COLS fields above.
       result[`col_${OL_FINAL_BILLING_REMARK_COL}`] = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
+      // SD Amount (col_353) — a number, same reasoning/fmtNumCell as Return
+      // Transportation PO Amount (col_318) just above.
+      result[`col_${OL_SD_AMOUNT_COL}`] = fmtNumCell(row[OL_SD_AMOUNT_COL]);
 
       /* "Sent back from Stage 1A" banner — explicit request 2026-10-01. See
          saveOffLeaseSendBackFromApproval's doc comment: Send Back writes
@@ -5900,6 +5912,11 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
       // fix today.
       const billingRemarkVal = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
       if (billingRemarkVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_FINAL_BILLING_REMARK_COL] || 'Final Billing Remark', value: billingRemarkVal });
+
+      // SD Amount (col_353) — explicit request 2026-10-29, same "show it in
+      // the approval panel too" reasoning as Final Billing Remark above.
+      const sdAmountVal = fmtNumCell(row[OL_SD_AMOUNT_COL]);
+      if (sdAmountVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_SD_AMOUNT_COL] || 'SD Amount', value: sdAmountVal });
     }
 
     /* Gate In (internal 7) and a repair-not-required Inspection Checklist
@@ -6079,14 +6096,18 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData, filter)
   // does — ApprovalDetail.jsx pulls that ONE column out explicitly, by this
   // same header text, as a deliberate exception rather than widening the
   // generic filter.
-  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337, 319, 317, 318];
+  // 353 (SD Amount, OL_SD_AMOUNT_COL) appended 2026-10-29, same "approver's
+  // own view" reasoning as 336/337/319/317/318 above — explicit request
+  // ("add the sd amounts").
+  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337, 319, 317, 318, 353];
   const dateCols = new Set([7, 8, 10, 11, 13]);
   const displayHeaders = [
     'Container No', 'Lease ID', 'Size', 'Type', 'Client Code', 'Client Name',
     'Location', 'Deployed Date', 'Valid Upto', 'Rate',
-    'OL Intimation Date', 'OL Date', 'Email Notification', 'Final Billing Date',
+    'OL Intimation Date', 'Expected Off-Lease Date', 'Email Notification', 'Final Billing Date',
     'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name',
-    'Return Transportation PO Required', 'Return Transportation PO', 'Return Transportation PO Amount'
+    'Return Transportation PO Required', 'Return Transportation PO', 'Return Transportation PO Amount',
+    'SD Amount'
   ];
 
   // Stage 1's own completion timestamp — 2 columns before its status column,

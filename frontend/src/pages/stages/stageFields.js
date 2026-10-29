@@ -278,9 +278,21 @@ const MACHINE_FIELDS = [
 export const STAGE_FIELDS = {
   1: [
     { key: 'col_10', label: 'Off-Lease Intimation Date', type: 'date', required: true },
-    { key: 'col_11', label: 'Off-Lease Date', type: 'date', required: true },
+    // Renamed 2026-10-29 (explicit request, "this is Off-Lease Date rename
+    // expt Off-Lease Date") — col_11 is filled in at intimation time,
+    // before the container has actually left, so "Expected" is the
+    // accurate word; the column/header text itself (OL Date,
+    // olHeaders.generated.js) is unchanged, only this form's own label.
+    { key: 'col_11', label: 'Expected Off-Lease Date', type: 'date', required: true },
     { key: 'col_12', label: 'Email Notification', type: 'file' },
     { key: 'col_13', label: 'Final Billing Date', type: 'date', required: true },
+    // Explicit request 2026-10-29 ("add the sd amounts", re-added same day
+    // after a momentary revert) — the security deposit amount on file at
+    // intimation time, see OL_SD_AMOUNT_COL's own doc comment on the
+    // backend for why this is separate from the later-stage SD fields
+    // (Stage 5's own Security Deposit Amount, Stage 6's SD Amount to be
+    // Refunded). Made required the same day ("complusory").
+    { key: 'col_353', label: 'SD Amount', type: 'number', required: true },
     /* Return Transportation PO Required/PO/Amount — Stage 1's own form, per
        the original spec ("Return PO will be created/processed at [Stage
        1]"). Briefly lived on a since-removed internal Stage 10 ("LR &

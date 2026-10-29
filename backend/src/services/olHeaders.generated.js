@@ -218,4 +218,15 @@ export const OL_HEADERS = [
      OL Intimation Date. Keep this entry if this file is ever regenerated
      from the live header row. */
   "Final Billing Remark",
+  /* Index 353 — same deliberate, hand-added exception as above: added
+     2026-10-29 (explicit request, "add the sd amounts", re-added after a
+     momentary revert the same day) for Stage 1's own "SD Amount" field
+     (col_353, OL_SD_AMOUNT_COL in offlease.service.js) — the security
+     deposit amount on file at intimation time, captured early rather than
+     only at Stage 5 Final Billing's own, separate "Security Deposit
+     Amount" column (col_35) or Stage 6's "SD Amount to be Refunded"
+     (refunds.service.js) — neither of those is filled yet this early in
+     the process. Keep this entry if this file is ever regenerated from the
+     live header row. */
+  "SD Amount",
 ];

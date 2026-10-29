@@ -157,12 +157,19 @@ export async function saveRenewalDraft(req, res) {
 
 /** POST /api/expiry/renewal/decide-approval — Pushpa's Approve/Reject
  *  decision, explicit request 2026-09-29. `decision` is 'approved' or
- *  'rejected'; see decideRenewalApproval's own doc comment. */
+ *  'rejected'; see decideRenewalApproval's own doc comment.
+ *
+ *  Switched the 'rejected' ("Send Back") decision to the Mongo-first
+ *  decideRenewalApprovalRejectFast 2026-10-29 ("pls solve this error", the
+ *  same Sheets-quota failure already fixed for Save/Submit, now hit here
+ *  too) — see that function's own doc comment for why 'approved' still
+ *  goes through the original, unchanged, live path. */
 export async function decideRenewalApproval(req, res) {
   const { containerNo, decision, remarks, rowNum } = req.body;
-  res.json({
-    result: await expiryService.decideRenewalApproval(containerNo, decision, remarks, req.user.email, rowNum)
-  });
+  const result = decision === 'rejected'
+    ? await expiryService.decideRenewalApprovalRejectFast(containerNo, remarks, req.user.email, rowNum)
+    : await expiryService.decideRenewalApproval(containerNo, decision, remarks, req.user.email, rowNum);
+  res.json({ result });
 }
 
 /* ---- Renew Approval Pending live remarks (explicit request 2026-10-05) ---- */
