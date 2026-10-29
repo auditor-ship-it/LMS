@@ -24,7 +24,7 @@ function readFileAsBase64(file) {
  *  there's nothing on Drive to view yet), or already on file from a prior
  *  Save/Submit ("done" — View opens the existing Drive URL). The whole
  *  control (except View, which stops propagation) opens the file picker. */
-function AttachedFileField({ pendingFile, existingUrl, accept, onSelected }) {
+function AttachedFileField({ pendingFile, existingUrl, accept, onSelected, onClear }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
 
@@ -71,6 +71,24 @@ function AttachedFileField({ pendingFile, existingUrl, accept, onSelected }) {
         >
           View
         </a>
+      )}
+      {/* Explicit request 2026-10-29 ("by mistake file upload mujhe cancle
+          kar na hai... one cross clik then cut option"): a file picked by
+          mistake had no way back to empty — clicking the card again only
+          opened the picker for a REPLACEMENT, never cleared it. preventDefault
+          too, not just stopPropagation — this sits inside a <label>, so a
+          plain click would otherwise still fire the label's own "open file
+          picker" default behavior even with propagation stopped. */}
+      {state === 'pending' && onClear && (
+        <button
+          type="button"
+          className={styles.attachedClear}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClear(); }}
+          aria-label="Remove selected file"
+          title="Remove selected file"
+        >
+          <Icon name="x" size="sm" />
+        </button>
       )}
       <input ref={inputRef} type="file" accept={accept} onChange={handleChange} disabled={busy} hidden />
     </label>
@@ -238,6 +256,7 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             existingUrl={form.existingSignedCopyUrl}
             accept={ACCEPT}
             onSelected={(file) => setForm((f) => ({ ...f, signedCopy: file }))}
+            onClear={() => setForm((f) => ({ ...f, signedCopy: null }))}
           />
         </div>
 
@@ -253,6 +272,7 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
               existingUrl={form.existingPoFileUrl}
               accept={ACCEPT}
               onSelected={(file) => setForm((f) => ({ ...f, poFile: file }))}
+              onClear={() => setForm((f) => ({ ...f, poFile: null }))}
             />
           </div>
         </div>

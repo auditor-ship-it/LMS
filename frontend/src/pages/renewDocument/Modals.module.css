@@ -105,3 +105,17 @@
   text-decoration: none;
 }
 .attachedView:hover { background: var(--accent-soft); }
+
+.attachedClear {
+  margin-left: auto;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.attachedClear:hover { background: var(--error-bg, #fdecec); border-color: var(--error); color: var(--error); }
