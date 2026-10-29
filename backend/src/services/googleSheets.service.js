@@ -55,7 +55,18 @@ function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
  *      after all 5 attempts exhaust — so every other concurrent request's
  *      next guard-1 check sees it within milliseconds instead of ~15s later.
  */
-async function withQuotaRetry(label, fn) {
+/* Exported 2026-10-29 ("why again again this error") so googleDrive.service.js
+   can wrap its own live calls (uploadToDrive especially) in the SAME
+   retry/backoff/global-lock protection every Sheets call already has. Drive
+   and Sheets draw from the same shared Google Cloud project quota (same
+   service account — see this function's own doc comment above), but
+   uploadToDrive had none of this: a transient quota blip there threw
+   straight up and failed the WHOLE Save/Submit instantly, even on the
+   already-Mongo-first Renew & Document form — the Sheets WRITE for that form
+   no longer needs to be synchronous at all (saveRenewalDraftFast/
+   completeDocStageFast, expiry.service.js), but the file upload that runs
+   BEFORE either of them is called was still a single unprotected live call. */
+export async function withQuotaRetry(label, fn) {
   let lastErr;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
     const lock = getGlobalQuotaLock();

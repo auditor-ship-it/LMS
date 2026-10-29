@@ -96,8 +96,31 @@ export async function getMongoRowsWithKeys(sheetName) {
  * now busts this cache too on every successful patch, which fixes every one
  * of its callers at once rather than requiring each to separately know about
  * and invalidate both layers. 8s remains the bound for anything that reaches
- * this cache WITHOUT going through a patchMongoMirrorRow write in between. */
-const MONGO_RAW_CACHE_TTL_SECS = 8;
+ * this cache WITHOUT going through a patchMongoMirrorRow write in between.
+ *
+ * RAISED 8s -> 60s 2026-10-28 ("it's taking so much time to load details...
+ * 20-25s to 2s max"): the 8s window meant almost every real container-detail
+ * load (which alone reads 4-5 of this cache's sheets, one of them 1700+
+ * rows) was still cache-cold for most of its own reads, let alone a
+ * SEPARATE request moments later — so the cache mainly absorbed bursts of
+ * near-simultaneous requests, not the much more common "staff member
+ * browsing through several containers in the same minute" pattern. Safe to
+ * raise because every write path that bypasses the Mongo-first *Fast
+ * functions already busts this cache explicitly on success
+ * (patchMongoMirrorRow/appendMongoMirrorRow/upsertMongoMirrorRowByKey/
+ * softDeleteMongoMirrorByKey all call cacheRemove(`mongo_raw_v1:...`) — see
+ * each one's own doc comment) — so "my own just-completed action shows
+ * stale" is already independent of this TTL, not bounded by it. BUG FOUND
+ * AND FIXED same day as this raise: approve.service.js's 3 direct Operation-
+ * sheet writes were the one remaining caller that bypassed ALL of the above
+ * (it only busted its own APPROVE_DATA_CACHE_KEY) — now also busts this
+ * cache explicitly, closing the only gap a longer TTL would have made
+ * meaningfully worse. Direct edits made in the live spreadsheet OUTSIDE
+ * this app were never bounded by this TTL to begin with — Mongo itself
+ * doesn't have that edit until the next scheduled reconcile (sheetsReconcile
+ * .job.js, up to 5 min) regardless of this cache, so 60s changes nothing
+ * for that case either. */
+const MONGO_RAW_CACHE_TTL_SECS = 60;
 
 export async function getSheetDataFromMongo(sheetName) {
   return cacheGetOrLoad(`mongo_raw_v1:${sheetName}`, MONGO_RAW_CACHE_TTL_SECS, async () => {

@@ -1129,6 +1129,14 @@ async function _scanSheetForLeaseInfo(sheetName, want) {
     // Read-only lookup, no write follows — also on the regular container-
     // detail path (getOffLeaseContainerDetail -> _findLeaseInfoForContainer),
     // not just the admin diagnostics below. Safe for the Mongo mirror.
+    //
+    // PERF FIX 2026-10-28 ("very much time to loading" / "20-25s to 2s
+    // max"): New Lease and (especially) Operation sheet (1732 rows, ~15s
+    // full read — confirmed live) used to be read fresh on every single
+    // container-detail load. getSheetDataFromMongo now carries its own 60s
+    // cache (raised from 8s the same day, see that file's own doc comment)
+    // — a dedicated wrapper cache here would just be a second layer on top
+    // of that one, so this now calls it directly.
     const { headers, rows } = await getSheetDataFromMongo(sheetName);
     if (!rows.length) return info;
     const cols = _orderScanCols(headers);
@@ -1205,14 +1213,38 @@ async function _findOrderNosForContainer(want) {
  *  tolerant-but-not-alias-fooled comparison every other FMS lookup in this
  *  file already uses, same "prefer client-matched, fall back to
  *  container-only if that filters out everything" rescue as matchByContainer. */
-async function _lookupStage9OrderNos(containerNo, clientName) {
+/** `rawPromise`, optional (PERF FIX 2026-10-28, "very much time to loading"):
+ *  the STAGE-9 sheet read itself never depends on `clientName` — only the
+ *  filtering below does — so getOffLeaseContainerDetail can kick this read
+ *  off the moment it knows the container, in parallel with
+ *  _findLeaseInfoForContainer, instead of waiting for leaseInfo to resolve
+ *  first and only then starting a cold ~17-24s STAGE-9 read. Defaults to
+ *  starting the read itself so the other call site (line ~3092, which
+ *  already has nothing else to overlap this with) is unaffected.
+ *
+ *  `requireClientMatch`, optional (BUG FOUND AND FIXED 2026-10-28,
+ *  "coustomwr name is diffrent order no wrong fethc", container
+ *  TCKU2842760): the "fall back to every hit for this container number,
+ *  regardless of client" rescue below exists for a real client genuinely
+ *  spelled differently between systems (see clientMatches' own doc comment,
+ *  SZLU9181535) — but it's indiscriminate: given a trustworthy `clientName`
+ *  that matches NOTHING because the container number was simply reused by a
+ *  DIFFERENT, unrelated past customer, it just as happily returns that
+ *  unrelated customer's order. TCKU2842760 is currently Luthra Projects',
+ *  but its only STAGE-9 row is an old "Mantra Events And Promotions"
+ *  booking of the same box — getOffLeaseContainerDetail's display (where
+ *  the client name shown right next to this order is the one the user
+ *  actually trusts) must not attribute Mantra Events' order to Luthra.
+ *  Default false/unset keeps the existing rescue for the other call site
+ *  (getOffLeaseCardEnrichment), which isn't reported broken. */
+async function _lookupStage9OrderNos(containerNo, clientName, rawPromise, requireClientMatch = false) {
   const want = normKey(containerNo);
   if (!want) return [];
   // BUG FOUND AND FIXED 2026-10-19 — was a raw getSheetDataFromMongo call,
   // bypassing stage8.service.js's 330s warm FMS cache entirely and paying
   // the full ~17-22s cold STAGE-9 read on most detail-page loads (see
   // readStage9RawRows's own doc comment). Same data, same shape, just cached.
-  const { headers, rows } = await readStage9RawRows();
+  const { headers, rows } = await (rawPromise || readStage9RawRows());
   const contCol = headers.findIndex((h) => /container number/i.test(String(h || '')));
   const ordCol = headers.findIndex((h) => /order received number/i.test(String(h || '')));
   const custCol = headers.findIndex((h) => /customer name/i.test(String(h || '')));
@@ -1221,7 +1253,7 @@ async function _lookupStage9OrderNos(containerNo, clientName) {
   const picked = clientName && custCol >= 0
     ? hits.filter((r) => clientMatches(safeStr(r[custCol]), clientName))
     : [];
-  const chosen = picked.length ? picked : hits;
+  const chosen = picked.length ? picked : (requireClientMatch && clientName ? [] : hits);
   const seen = new Set();
   const orders = [];
   for (const r of chosen) {
@@ -5364,27 +5396,35 @@ async function _buildContainerStageTatMap(row, headers, gfRow, gatedIn, repairSk
   const clientName = row[5];
   const map = {};
 
-  let entryAt = null;
-  try {
-    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
-    const updCol = _findOlColumnMulti(dh, ['update']);
-    const stsCol = _findOlColumnMulti(dh, ['status']);
-    if (updCol >= 0) {
-      const k = normKey(container);
-      for (const r of dr) {
-        if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
-        if (normKey(r[0]) === k) { entryAt = parseStamp(safeStr(r[updCol]).trim()); break; }
-      }
-    }
-  } catch (e) { /* best-effort — a missing entry stamp just leaves Stage 1's tat null */ }
+  /* PERF FIX 2026-10-28 ("very much time to loading"): entryAt's Deployed-
+     sheet read and fms's STAGE-8/9/10 lookup don't depend on each other —
+     awaiting them one after another paid the SUM of both reads for every
+     container-detail load. Promise.all so it pays the MAX instead (same
+     fix as getOffLeaseContainerDetail's own doc comment above). */
+  const [entryAt, fms] = await Promise.all([
+    (async () => {
+      try {
+        const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+        const updCol = _findOlColumnMulti(dh, ['update']);
+        const stsCol = _findOlColumnMulti(dh, ['status']);
+        if (updCol >= 0) {
+          const k = normKey(container);
+          for (const r of dr) {
+            if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+            if (normKey(r[0]) === k) return parseStamp(safeStr(r[updCol]).trim());
+          }
+        }
+        return null;
+      } catch (e) { return null; /* best-effort — a missing entry stamp just leaves Stage 1's tat null */ }
+    })(),
+    getMatchedFmsForContainer(container, clientName).catch(() => null)
+  ]);
 
   const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
   const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim().toLowerCase() : '';
   const approvedAt = (apStatus === 'approved' && apTsCol >= 0) ? parseStamp(row[apTsCol]) : null;
 
-  let fms = null;
-  try { fms = await getMatchedFmsForContainer(container, clientName); } catch (e) { fms = null; }
   const stage89At = (fms?.movement && fms?.transport)
     ? _laterStamp(parseStamp(fms.movement.timestamp), parseStamp(fms.transport.lastUpdated))
     : null;
@@ -5456,32 +5496,35 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
 
   const res = { found: false, container: safeStr(containerNo), orderNos: '' };
 
+  /* PERF FIX 2026-10-28 ("very much time to loading", confirmed live at
+     15.85s): these 4 reads (New Lease scan, Off-Lease Tracking sheet,
+     access gate, STAGE-9 order lookup) were awaited one after another even
+     though only STAGE-9's lookup actually depends on another's RESULT
+     (leaseInfo.clientName) — the other three are fully independent, so the
+     sequential chain was paying the SUM of their latencies instead of the
+     MAX. Kick off the two that don't depend on leaseInfo immediately, await
+     leaseInfo, then start STAGE-9's lookup alongside whatever's left of
+     those two instead of after them.
+
+     Read-only lookups: served from the Mongo mirror, with no
+     _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to
+     widen the sheet before a WRITE — on this path it only added a Sheets
+     round trip to a read, and on an exhausted quota it failed the whole
+     container detail. Same fix already applied to the dashboard and the
+     stage lists. */
+  const olSheetPromise = getSheetDataFromMongo(OL_SHEET);
+  const gatePromise = _offLeaseAccessGate(user);
+  /* Follow-up PERF FIX, same day: STAGE-9's own sheet read doesn't need
+     leaseInfo at all (only the filtering below does, via clientName) — start
+     it now too, so its cold ~17-24s read overlaps leaseInfo's own chain
+     (New Lease scan, plus its Operation-sheet fallback when New Lease finds
+     nothing) instead of only starting after leaseInfo resolves. */
+  const stage9RawPromise = readStage9RawRows();
+
   const leaseInfo = await _findLeaseInfoForContainer(want);
   res.orderNos = leaseInfo.orders.join(', ');
 
-  /* SOURCE, same decision as getOffLeaseCardEnrichment (2026-10-01, see that
-     function's own doc comment): the external FMS dispatch sheet (STAGE-9)
-     carries this container's REAL current transportation order, while
-     _findLeaseInfoForContainer's New Lease scan can return a stale/grouped
-     order from the original multi-container lease record (confirmed live:
-     EMCU5367505 — New Lease groups it with 4 other containers under OR444,
-     but STAGE-9's own dispatch row for this exact container is OR414). This
-     page (Container Lookup / Record) was missed when that fix was applied
-     elsewhere, so it kept showing the lease-level value. Best-effort: keep
-     the lease-level orderNos above as the fallback when STAGE-9 has nothing
-     for this container yet. */
-  try {
-    const stage9Orders = await _lookupStage9OrderNos(containerNo, leaseInfo.clientName);
-    if (stage9Orders.length) res.orderNos = stage9Orders.join(', ');
-  } catch (e) { /* best-effort only — keep the lease-level fallback above */ }
-
-  /* Read-only lookup: served from the Mongo mirror, with no
-     _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to widen
-     the sheet before a WRITE — on this path it only added a Sheets round trip
-     to a read, and on an exhausted quota it failed the whole container detail.
-     Same fix already applied to the dashboard and the stage lists. */
-  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
-  const gate = await _offLeaseAccessGate(user);
+  const [{ headers, rows }, gate] = await Promise.all([olSheetPromise, gatePromise]);
   /* Same Gate In / repair-skip bypass getOffLeaseData and
      getOffLeaseDashboardData use — see stage3Form.service.js and the doc
      comment on _classifyOffLeaseStages. Resolved per MATCH below (each
@@ -5602,6 +5645,36 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
   res.deployedDate = formatDateVal(row[7]);
   res.validUpto = formatDateVal(row[8]);
   res.rate = safeAmt(row[9]);
+
+  /* BUG FOUND AND FIXED 2026-10-28 ("coustomwr name is diffrent order no
+     wrong fethc", container TCKU2842760): this STAGE-9 lookup used to run
+     filtered by leaseInfo.clientName — from _findLeaseInfoForContainer's
+     New Lease/Operation-sheet SCAN, computed above BEFORE this record's
+     actual client (res.clientName, from Off-Lease Tracking's own row[5] —
+     the authoritative client field everywhere else in this function, see
+     _fillBlanksFromDeployed's own "never the client" note) was even known.
+     When that scan's client was wrong, blank, or simply a DIFFERENT past
+     lease of the same container number, _lookupStage9OrderNos' own
+     "client-matched, else fall back to container-only" rescue silently
+     grabbed an unrelated customer's order: TCKU2842760 is currently
+     Luthra Projects' container, but its only STAGE-9 row belongs to a much
+     earlier "Mantra Events And Promotions" booking of the same box — the
+     page showed Client "Luthra Projects" right next to Order "OR246,
+     OR247", which is actually Mantra Events' order, not Luthra's.
+     Re-run with the now-confirmed real client instead — same SOURCE
+     reasoning as getOffLeaseCardEnrichment (2026-10-01): the external FMS
+     dispatch sheet (STAGE-9) carries this container's REAL current
+     transportation order, while the lease-level scan above can return a
+     stale/grouped order from an unrelated record — but it must be scoped
+     to the right client to mean anything. stage9RawPromise was already
+     kicked off before leaseInfo even resolved (see its own comment above),
+     so this is just the in-memory filter, not a second sheet read —
+     Best-effort: keep the lease-level orderNos (already set above) as the
+     fallback when STAGE-9 has nothing for this container+client. */
+  try {
+    const stage9Orders = await _lookupStage9OrderNos(containerNo, res.clientName, stage9RawPromise, true);
+    if (stage9Orders.length) res.orderNos = stage9Orders.join(', ');
+  } catch (e) { /* best-effort only — keep the lease-level fallback above */ }
 
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
@@ -5904,21 +5977,31 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
   }
   res.stages = stages;
 
-  /* Invoices for the report come from the Accounts & Collection API — the same
-     call and the same response the Stage 1 panel renders, so the print view,
-     PDF and Excel can never disagree with it. The Google Sheet is deliberately
-     NOT consulted: no fallback, no merge. */
-  try {
-    const { getOutstandingForContainer } = await import('./accountsApi.service.js');
-    res.outstanding = await getOutstandingForContainer(res.container || containerNo, res.clientName);
-  } catch (e) {
-    console.error('[OL-DETAIL] outstanding fetch failed:', e?.message || e);
-    res.outstanding = null;
-  }
+  /* PERF FIX 2026-10-28 ("very much time to loading"): the Accounts API
+     round trip and _fillBlanksFromDeployed's own Deployed-sheet read (a
+     SEPARATE full read from the one _buildContainerStageTatMap already did
+     above for entryAt — confirmed live, each taking 6-7s on a cold cache)
+     don't depend on each other at all — res.outstanding and the
+     size/type/location/dates fields are disjoint. Run them together instead
+     of paying both in sequence.
 
-  /* Fill base fields still blank in the Off-Lease sheet (Rate, Location,
-     dates) from the Deployed sheet. Never the client — see helper's note. */
-  await _fillBlanksFromDeployed(res, want);
+     Invoices for the report come from the Accounts & Collection API — the
+     same call and the same response the Stage 1 panel renders, so the print
+     view, PDF and Excel can never disagree with it. The Google Sheet is
+     deliberately NOT consulted: no fallback, no merge. */
+  const outstandingPromise = (async () => {
+    try {
+      const { getOutstandingForContainer } = await import('./accountsApi.service.js');
+      return await getOutstandingForContainer(res.container || containerNo, res.clientName);
+    } catch (e) {
+      console.error('[OL-DETAIL] outstanding fetch failed:', e?.message || e);
+      return null;
+    }
+  })();
+  // Fill base fields still blank in the Off-Lease sheet (Rate, Location,
+  // dates) from the Deployed sheet. Never the client — see helper's note.
+  const [outstanding] = await Promise.all([outstandingPromise, _fillBlanksFromDeployed(res, want)]);
+  res.outstanding = outstanding;
 
   const apLower = approval.toLowerCase();
   const stage1 = stages.find((s) => s.stage === 1);

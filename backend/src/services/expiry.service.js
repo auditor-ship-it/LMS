@@ -1282,7 +1282,7 @@ async function _ensureRenewalSubmittedDateHeader(hdrs0) {
  * Signed Copy/Remarks, and only get promoted into the real columns by
  * decideRenewalApproval on an Approve decision.
  */
-const APPROVAL_STATUS_COL = 40;     // AO — '' | 'Pending' | 'Approved' | 'Rejected'
+const APPROVAL_STATUS_COL = 40;     // AO — '' | 'Pending' | 'Approved' | 'Sent Back' (older rows: 'Rejected' — see decideRenewalApproval's own comment)
 const APPROVAL_REMARKS_COL = 41;    // AP
 const APPROVAL_DATE_COL = 42;       // AQ
 const APPROVER_COL = 43;            // AR
@@ -1664,8 +1664,21 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     if (String(matchedRow[APPROVAL_STATUS_COL] || '').trim().toLowerCase() !== 'pending') return 'INVALID_STATE';
 
     const stamp = dmyTime(new Date());
+    /* BUG FOUND AND FIXED 2026-10-29 ("mail reject... database col mai bhi
+       reject aaraha hai", re: Renew Approval's "Send Back" button): the
+       2026-10-10 relabel only changed what the UI/email SAID, deliberately
+       leaving the stored cell value as 'Rejected' (see that commit's own
+       comment, still on CompleteDocumentModal.jsx) to avoid touching every
+       read site. Now writing 'Sent Back' here too, since the raw sheet
+       column and the email were still confusingly showing "Reject" even
+       though the button and banner say "Send Back". Every read site that
+       compares against this value (RenewDocumentPage.jsx's status filter/
+       badge, CompleteDocumentModal.jsx's banner) now accepts EITHER string
+       — see isRenewalSentBack below — so existing rows already written as
+       'Rejected' keep displaying correctly; only NEW decisions write the
+       new label. */
     const updates = [
-      { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_STATUS_COL)}${targetRow}`, values: [[decision === 'approved' ? 'Approved' : 'Rejected']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_STATUS_COL)}${targetRow}`, values: [[decision === 'approved' ? 'Approved' : 'Sent Back']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_REMARKS_COL)}${targetRow}`, values: [[remarks || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_DATE_COL)}${targetRow}`, values: [[stamp]] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVER_COL)}${targetRow}`, values: [[callerEmail || '']] }
@@ -1683,9 +1696,26 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       try {
         const salePersonColIdx = hdrs0.findIndex((h) => String(h || '').trim().toLowerCase() === 'sale person');
         const salePersonName = salePersonColIdx >= 0 ? safeStr(matchedRow[salePersonColIdx]) : '';
+        /* Explicit request 2026-10-29 ("jo renew kiya hai uska data and
+           remaks... sab bhi dikh na chahiye hai"): the email used to carry
+           only Container/Client/Submitted By/the send-back reason — none of
+           what was actually SUBMITTED (what the email is about in the first
+           place). Same AA-AD/AS-AY draft columns formFromDraft's own
+           pre-fill reads (CompleteDocumentModal.jsx) — this is the exact
+           same submission, just read straight from the sheet instead of
+           round-tripping through the frontend. */
         await _sendRenewalRejectionEmail({
           container: containerNo, clientName, remarks: remarks || '',
-          submittedBy, salePersonName
+          submittedBy, salePersonName,
+          renewedDate: fmtCellDate(matchedRow[26]),
+          validTillDate: fmtCellDate(matchedRow[27]),
+          signedCopyUrl: safeStr(matchedRow[28]),
+          submissionRemarks: safeStr(matchedRow[29]),
+          poNo: safeStr(matchedRow[DRAFT_PO_NO_COL]),
+          poFileUrl: safeStr(matchedRow[DRAFT_PO_FILE_COL]),
+          poValidity: fmtCellDate(matchedRow[DRAFT_PO_VALIDITY_COL]),
+          poValue: safeStr(matchedRow[DRAFT_PO_VALUE_COL]),
+          billingCycle: safeStr(matchedRow[DRAFT_BILLING_CYCLE_COL])
         });
       } catch (e) { console.error('[RENEWAL-REJECTION-EMAIL]', e.message); }
 
@@ -1853,33 +1883,71 @@ async function _sendRenewalApprovalRequestEmail(info) {
   console.log(`[RENEWAL-APPROVAL-EMAIL] sent for ${info.container}`);
 }
 
-/** Sent by decideRenewalApproval on a Reject decision — explicit request
+/** Sent by decideRenewalApproval on a Send Back decision — explicit request
  *  2026-09-29 — to the row's own Sale Person (resolved by name via
  *  emailForSalePerson; silently skipped if that name isn't one of the
  *  mapped logins, same "best effort" shape the rest of this file's
- *  notifications already use) and unconditionally to Shivani Dhall. */
-async function _sendRenewalRejectionEmail(info) {
+ *  notifications already use) and unconditionally to Shivani Dhall.
+ *
+ *  BUG FOUND AND FIXED 2026-10-29 ("this not reject iam send back button"):
+ *  this still said "Rejected"/"rejected" throughout, even though the
+ *  button, the on-screen banner and (as of today) the stored sheet value
+ *  all say "Sent Back" — the ONE place still using the old wording. Renamed
+ *  the subject, body copy and the "Rejection Remarks" field label; function
+ *  name/log-tag left as-is (internal only, nobody reads those). */
+async function _sendRenewalRejectionEmail(info, toOverride) {
   const salePersonEmail = info.salePersonName ? emailForSalePerson(info.salePersonName) : null;
-  const toList = [salePersonEmail, 'shivani.dhall@crystalgroup.in'].filter(Boolean);
+  const toList = toOverride ? [toOverride] : [salePersonEmail, 'shivani.dhall@crystalgroup.in'].filter(Boolean);
   if (!toList.length) return;
   const to = toList.join(', ');
 
-  const fields = [
+  const identityFields = [
     ['Container No', info.container || ''],
     ['Client Name', info.clientName || ''],
-    ['Submitted By', info.submittedBy || ''],
-    ['Rejection Remarks', info.remarks || '-']
+    ['Submitted By', info.submittedBy || '']
   ];
-  const subject = `Renewal Rejected – ${info.container || 'Unknown Container'}`;
-  const body = `Pushpa Shetty rejected this renewal request. It has been sent back to Renew & Document's Pending list for correction.\n\n`
-    + fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n';
+  /* What was actually submitted — explicit request 2026-10-29 ("jo renew
+     kiya hai uska data... sab bhi dikh na chahiye hai"), see
+     decideRenewalApproval's own comment on where these come from. Only the
+     Agreement OR the PO side is usually filled (never both mandatory — same
+     "basis" convention CompleteDocumentModal.jsx's own fields use), so blank
+     ones just show '-' rather than implying something's missing. */
+  const submissionFields = [
+    ['Renewed Date', info.renewedDate || ''],
+    ['Agreement Valid Till', info.validTillDate || ''],
+    ['Signed Copy', info.signedCopyUrl || ''],
+    ['PO No', info.poNo || ''],
+    ['PO File', info.poFileUrl || ''],
+    ['PO Valid Date', info.poValidity || ''],
+    ['PO Value', info.poValue || ''],
+    ['Billing Cycle', info.billingCycle || ''],
+    ['Submission Remarks', info.submissionRemarks || '']
+  ];
+  const sendBackFields = [
+    ['Send Back Remarks', info.remarks || '']
+  ];
+  const subject = `Renewal Sent Back – ${info.container || 'Unknown Container'}`;
+  const plainLine = ([label, val]) => `${label}: ${val || '-'}`;
+  const body = `Pushpa Shetty sent this renewal request back. It is back in Renew & Document's Pending list for correction.\n\n`
+    + identityFields.map(plainLine).join('\n') + '\n\n'
+    + 'Submitted:\n' + submissionFields.map(plainLine).join('\n') + '\n\n'
+    + sendBackFields.map(plainLine).join('\n') + '\n';
   const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
-  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s || '-'}</td>`;
-  const html = `
-    <p>Pushpa Shetty rejected this renewal request. It has been sent back to Renew &amp; Document's Pending list for correction.</p>
+  const isUrl = (s) => /^https?:\/\//i.test(String(s || ''));
+  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${isUrl(s) ? `<a href="${s}">Open</a>` : (s || '-')}</td>`;
+  const section = (title, fields) => `
+    <p style="font-family:Arial,sans-serif;font-weight:bold;margin-top:16px;">${title}</p>
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
       ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
     </table>
+  `;
+  const html = `
+    <p>Pushpa Shetty sent this renewal request back. It is back in Renew &amp; Document's Pending list for correction.</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${identityFields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+    </table>
+    ${section('Submitted', submissionFields)}
+    ${section('Send Back Reason', sendBackFields)}
   `;
   await sendMail({ to, subject, body, html });
   console.log(`[RENEWAL-REJECTION-EMAIL] sent for ${info.container} to ${to}`);

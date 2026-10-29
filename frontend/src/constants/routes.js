@@ -11,6 +11,7 @@ export const ROUTES = {
   OFF_LEASE_EFFICIENCY: '/off-lease-efficiency',
   DEPLOYED_SUMMARY: '/deployed-summary',
   PO_AGREEMENT_TRACKER: '/po-agreement-tracker',
+  OFF_LEASE_SOP: '/off-lease-sop',
   ROLES_ACCESS: '/roles-access',
   API_ACCESS: '/api-access',
   SYNC_STATUS: '/sync-status',

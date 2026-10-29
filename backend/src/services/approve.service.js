@@ -302,6 +302,16 @@ async function _getApproveDataCore(doWrite) {
   }
   if (acWrites.length && doWrite) { // write only from trigger/manual (not on load)
     await batchUpdateValues(acWrites.map((w) => ({ range: `'${SHEETS.OPERATION}'!AC${w.rowNum}:AE${w.rowNum}`, values: [w.values] })));
+    /* BUG FOUND AND FIXED 2026-10-28 (needed before the general
+       getSheetDataFromMongo cache's TTL could safely be extended — see that
+       file's own doc comment): this writes straight to the Operation sheet
+       but only busted this file's OWN APPROVE_DATA_CACHE_KEY — the general
+       `mongo_raw_v1:Operation sheet` cache every other reader of this sheet
+       shares (including _scanSheetForLeaseInfo's lease-info lookup on the
+       Off-Lease container-detail page) was never told this write happened,
+       so it could keep serving the pre-approval snapshot for up to that
+       cache's own TTL regardless of how fresh APPROVE_DATA_CACHE_KEY was. */
+    cacheRemove(`mongo_raw_v1:${SHEETS.OPERATION}`);
   }
 
   /* List: skip approved (incl auto) -> only FRESH new leases remain */
@@ -464,6 +474,7 @@ export async function saveActionData(containerNo, actionType, timestamp, status,
     if (actionType === 'approve') {
       await updateRange(SHEETS.OPERATION, `AC${targetRow}:AE${targetRow}`, [[dmyTime(new Date(timestamp)), status, userEmail || '']]);
       cacheRemove(APPROVE_DATA_CACHE_KEY);
+      cacheRemove(`mongo_raw_v1:${SHEETS.OPERATION}`); // see bulk auto-approve's own comment above
     }
     return 'OK';
   });
@@ -498,6 +509,7 @@ export async function saveApproveLeaseByContainer(containerNo, timestamp, status
 
     await updateRange(SHEETS.OPERATION, `AC${rn}:AE${rn}`, [[dmyTime(new Date(timestamp)), status || '', userEmail || '']]);
     cacheRemove(APPROVE_DATA_CACHE_KEY);
+    cacheRemove(`mongo_raw_v1:${SHEETS.OPERATION}`); // see bulk auto-approve's own comment above
     return 'OK';
   });
 }

@@ -24,13 +24,22 @@ const RESULT_CODE_TEXT = {
 };
 
 // Status filter — explicit request: the table's own Status column already
-// distinguishes a row rejected-and-returned by Pushpa (approvalStatus ===
-// 'Rejected', shown as "Sent Back") from one never submitted yet (shown as
-// '—'); this just lets that same distinction be filtered on.
+// distinguishes a row sent-back by Pushpa (approvalStatus === 'Sent Back',
+// shown as "Sent Back") from one never submitted yet (shown as '—'); this
+// just lets that same distinction be filtered on.
 const STATUS_FILTER_OPTIONS = [
   { value: 'sentBack', label: 'Sent Back' },
   { value: 'awaitingUpload', label: 'Awaiting Upload' }
 ];
+
+/* decideRenewalApproval wrote 'Rejected' for this state until 2026-10-29
+ * ("this not reject iam send back button"), when the stored value itself
+ * was renamed to 'Sent Back' to match the button/banner/email wording — but
+ * existing rows already written as 'Rejected' before that change still
+ * carry the old value, so both are treated as the same state everywhere
+ * this gets compared, rather than old rows silently losing their badge/
+ * filter match. */
+const isSentBack = (status) => status === 'Sent Back' || status === 'Rejected';
 
 /**
  * Runs `fn` for each item ONE AT A TIME, in the same { status, value|reason }
@@ -181,8 +190,8 @@ export function RenewDocumentPage() {
   const filtered = useMemo(() => {
     const term = debouncedSearch.trim().toLowerCase();
     let out = rows;
-    if (statusFilter === 'sentBack') out = out.filter((r) => r.approvalStatus === 'Rejected');
-    else if (statusFilter === 'awaitingUpload') out = out.filter((r) => r.approvalStatus !== 'Rejected');
+    if (statusFilter === 'sentBack') out = out.filter((r) => isSentBack(r.approvalStatus));
+    else if (statusFilter === 'awaitingUpload') out = out.filter((r) => !isSentBack(r.approvalStatus));
     if (term) out = out.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
     return out;
   }, [rows, debouncedSearch, statusFilter]);
@@ -255,7 +264,15 @@ export function RenewDocumentPage() {
         billingCycle: item.draftBillingCycle || '',
         submittedDate: item.renewalSubmittedDate || '',
         approvalStatus: item.approvalStatus || '',
-        approvalRemarks: item.approvalRemarks || ''
+        approvalRemarks: item.approvalRemarks || '',
+        // Explicit request 2026-10-28 ("send back for renew approval
+        // document aatmnent show pls"): a Sent-Back record already has a
+        // previously-uploaded signed copy/PO file on it (that's WHY Pushpa
+        // could review it in the first place) — show a link to what's
+        // already on file, not just a blank "Choose file" button, so the
+        // submitter can see/compare before deciding whether to replace it.
+        signedCopyUrl: item.draftSignedCopyUrl || '',
+        poFileUrl: item.draftPoFileUrl || ''
       }
     });
   };
@@ -533,7 +550,7 @@ export function RenewDocumentPage() {
                 // list itself (what it looked like opening each row to find
                 // out), not only inside the detail modal's own banner.
                 <td key="status" className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
-                  {item.approvalStatus === 'Rejected' ? <StatusBadge status="Sent Back" dot /> : '—'}
+                  {isSentBack(item.approvalStatus) ? <StatusBadge status="Sent Back" dot /> : '—'}
                 </td>
               ]}
               renderActions={(item) => (
