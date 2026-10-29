@@ -203,5 +203,17 @@ export const SIDEBAR_KEYS = [
   // admin page (no prior sidebarKey could exist). Same backfilled-to-
   // true-for-existing-rows mechanism as every other entry above, via
   // roles.service.js's _ensureSidebarHeaderWidth.
-  { key: 'syncStatus', label: 'Sync Status' }
+  { key: 'syncStatus', label: 'Sync Status' },
+  // Appended 2026-10-28, explicit request — SOP/Video are new standalone
+  // reference pages (no prior sidebarKey could exist). Same backfilled-to-
+  // true-for-existing-rows mechanism as every other entry above, via
+  // roles.service.js's _ensureSidebarHeaderWidth.
+  { key: 'offLeaseSop', label: 'Off-Lease SOP' },
+  // Superseded same day — SOP and Video were consolidated into one sidebar
+  // item with SOP/Video as tabs on one page (nav.js), so this key no longer
+  // has a matching sidebarKey anywhere. Left in place, inert, rather than
+  // removed — same "do not remove a slot, it would shift every later
+  // entry's position" rule as _retiredReturnDashboard/_retiredAgreementForm
+  // above.
+  { key: 'offLeaseSopVideo', label: 'Off-Lease SOP Video' }
 ];

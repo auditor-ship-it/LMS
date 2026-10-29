@@ -49,3 +49,59 @@
 }
 
 .footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
+/* ---- file upload / already-attached control — matches StageDetailModal's
+   own FileFieldInput card ("File attached / Click to replace / View"),
+   explicit request 2026-10-28 ---- */
+.attachedCard {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1.5px dashed var(--line-strong, var(--line));
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.attachedCard:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+.attachedCard_pending {
+  border-style: solid;
+  border-color: var(--amber-c);
+  background: var(--amber-soft, var(--surface-2));
+}
+.attachedCard_done {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+.attachedCard_busy { opacity: 0.7; cursor: progress; }
+
+.attachedIcon { width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.attachedCard_done .attachedIcon { color: var(--success); }
+.attachedCard_pending .attachedIcon { color: var(--warn); }
+
+.attachedText { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.attachedName {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachedHint { font-size: 10.5px; color: var(--text-3); }
+
+.attachedView {
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--accent);
+  text-decoration: none;
+}
+.attachedView:hover { background: var(--accent-soft); }

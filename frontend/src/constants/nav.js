@@ -36,6 +36,15 @@ export const NAV_TREE = {
   label: 'Lease Management System',
   items: [
     { key: 'myTask', label: 'My Task', path: ROUTES.MY_TASK, icon: 'check-circle', sidebarKey: 'myTask', section: 'Overview' },
+    // Explicit request 2026-10-28 ("add overview SOP and Video"), then
+    // consolidated same day ("one navigation... click sop open iframe to
+    // sop and click video then open iframe") — ONE sidebar entry, SOP and
+    // Video as tabs on that one page (pages/sop/DriveEmbedPage.jsx), not
+    // two separate sidebar items. 'offLeaseSopVideo' stays reserved as an
+    // inert SIDEBAR_KEYS slot (permissions.config.js) from the earlier,
+    // superseded two-item version — same "do not remove a slot" convention
+    // as that file's own retired-keys comment.
+    { key: 'offLeaseSop', label: 'SOP', path: ROUTES.OFF_LEASE_SOP, icon: 'info', sidebarKey: 'offLeaseSop', section: 'Overview' },
     { key: 'verify', label: 'Verify Lease', path: ROUTES.VERIFY_LEASE, icon: 'search', sidebarKey: 'verify', section: 'Agreements', taskKey: 'pendingVerify' },
     // Removed from the sidebar app-wide 2026-09-11 (explicit request) — the
     // page/route/backend are untouched, so it's still reachable directly

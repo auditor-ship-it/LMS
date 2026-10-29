@@ -1,6 +1,81 @@
-import { useEffect, useState } from 'react';
-import { Modal, Button, FileUpload } from '../../components/ui/index.js';
+import { useEffect, useRef, useState } from 'react';
+import { Modal, Button } from '../../components/ui/index.js';
+import { Icon } from '../../components/ui/Icon.jsx';
 import styles from './Modals.module.css';
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64Data = String(reader.result).split(',')[1] || '';
+      resolve({ base64Data, mimeType: file.type || 'application/octet-stream', fileName: file.name });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Explicit request 2026-10-28 ("do not show this [plain text link], show
+ *  example this"): same "File attached / Click to replace / View" card
+ *  StageDetailModal's own FileFieldInput uses for an uploaded file, not the
+ *  plain FileUpload button + separate text link this replaces. Three
+ *  states, same as that reference: nothing chosen/attached ("empty"), a
+ *  file just picked this session but not yet uploaded ("pending" — no View,
+ *  there's nothing on Drive to view yet), or already on file from a prior
+ *  Save/Submit ("done" — View opens the existing Drive URL). The whole
+ *  control (except View, which stops propagation) opens the file picker. */
+function AttachedFileField({ pendingFile, existingUrl, accept, onSelected }) {
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+
+  const handleChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      onSelected(await readFileAsBase64(file));
+    } finally {
+      setBusy(false);
+      e.target.value = '';
+    }
+  };
+
+  const state = busy ? 'busy' : pendingFile ? 'pending' : existingUrl ? 'done' : 'empty';
+
+  return (
+    <label className={`${styles.attachedCard} ${styles[`attachedCard_${state}`]}`}>
+      <Icon name={state === 'done' ? 'check' : 'upload'} className={styles.attachedIcon} />
+      <span className={styles.attachedText}>
+        {state === 'busy' && <span className={styles.attachedName}>Reading…</span>}
+        {state === 'pending' && (
+          <>
+            <span className={styles.attachedName}>{pendingFile.fileName}</span>
+            <span className={styles.attachedHint}>Not saved yet</span>
+          </>
+        )}
+        {state === 'done' && (
+          <>
+            <span className={styles.attachedName}>File attached</span>
+            <span className={styles.attachedHint}>Click to replace</span>
+          </>
+        )}
+        {state === 'empty' && <span className={styles.attachedName}>Choose file</span>}
+      </span>
+      {state === 'done' && (
+        <a
+          href={existingUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={styles.attachedView}
+          onClick={(e) => e.stopPropagation()}
+        >
+          View
+        </a>
+      )}
+      <input ref={inputRef} type="file" accept={accept} onChange={handleChange} disabled={busy} hidden />
+    </label>
+  );
+}
 
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
 
@@ -31,7 +106,15 @@ function formFromDraft(draft) {
     poValue: draft.poValue || '',
     billingCycle: draft.billingCycle || '',
     signedCopy: null,
-    poFile: null
+    poFile: null,
+    // Explicit request 2026-10-28: a Sent-Back record already carries a
+    // previously-uploaded file — link to it (new tab) rather than re-upload
+    // being the only way to see what's already on file. Not re-sent on
+    // Save/Submit unless a NEW file is chosen (handleDocSubmit/handleDocSave
+    // only upload when payload.signedCopy/poFile is set) — these two are
+    // display-only.
+    existingSignedCopyUrl: draft.signedCopyUrl || '',
+    existingPoFileUrl: draft.poFileUrl || ''
   };
 }
 
@@ -98,12 +181,16 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
         )}
 
         {/* Explicit request 2026-09-29 (approval workflow), relabelled
-            2026-10-10 ("Reject" -> "Send Back" — the stored approvalStatus
-            value is still 'Rejected', only the displayed wording changed):
-            Pushpa sent this one back — say why, front and centre, so the
-            submitter isn't wondering why a "completed" Submit is back here
-            to redo. */}
-        {!bulk && item?.draft?.approvalStatus === 'Rejected' && (
+            2026-10-10 ("Reject" -> "Send Back" — only the displayed wording
+            changed that day, the stored approvalStatus value stayed
+            'Rejected'), then 2026-10-29 ("this not reject iam send back
+            button") the STORED value itself was renamed to 'Sent Back' too
+            — accepting either here so a row already sent back before that
+            change still shows this banner (same isSentBack reasoning as
+            RenewDocumentPage.jsx's own helper): Pushpa sent this one back —
+            say why, front and centre, so the submitter isn't wondering why
+            a "completed" Submit is back here to redo. */}
+        {!bulk && (item?.draft?.approvalStatus === 'Sent Back' || item?.draft?.approvalStatus === 'Rejected') && (
           <p className={styles.error}>
             Sent back by Pushpa{item.draft.approvalRemarks ? `: ${item.draft.approvalRemarks}` : ' — no remarks given.'} Fix and Submit again.
           </p>
@@ -140,28 +227,34 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             or on an agreement basis with no PO. Provide whichever this
             container is actually being renewed on; the backend only needs
             at least one of the two before Documents Pending can clear. */}
-        <label className={styles.field}>
+        {/* Not a <label> like the other fields — AttachedFileField renders its
+            OWN <label> (it must, to wrap its hidden file input), and nesting
+            a <label> inside another makes clicking this field's caption text
+            also open the file picker. */}
+        <div className={styles.field}>
           <span className={styles.label}>Signed Copy (Agreement basis)</span>
-          <FileUpload
-            label={form.signedCopy ? `Selected: ${form.signedCopy.fileName}` : 'Choose signed copy'}
+          <AttachedFileField
+            pendingFile={form.signedCopy}
+            existingUrl={form.existingSignedCopyUrl}
             accept={ACCEPT}
             onSelected={(file) => setForm((f) => ({ ...f, signedCopy: file }))}
           />
-        </label>
+        </div>
 
         <div className={styles.grid2}>
           <label className={styles.field}>
             <span className={styles.label}>PO No (PO basis)</span>
             <input type="text" value={form.poNo} onChange={set('poNo')} />
           </label>
-          <label className={styles.field}>
+          <div className={styles.field}>
             <span className={styles.label}>PO File (PO basis)</span>
-            <FileUpload
-              label={form.poFile ? `Selected: ${form.poFile.fileName}` : 'Choose PO file'}
+            <AttachedFileField
+              pendingFile={form.poFile}
+              existingUrl={form.existingPoFileUrl}
               accept={ACCEPT}
               onSelected={(file) => setForm((f) => ({ ...f, poFile: file }))}
             />
-          </label>
+          </div>
         </div>
 
         <div className={styles.grid2}>
