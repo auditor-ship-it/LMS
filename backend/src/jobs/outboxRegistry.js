@@ -12,7 +12,7 @@ import {
   saveOffLeaseHold, saveOffLeaseSendBackToStage1, saveOffLeaseSendRejectedToStage1, saveOffLeaseVoucherRaised,
   saveOffLeaseSendBackFromApproval
 } from '../services/offlease.service.js';
-import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending, saveRenewalDraft, completeDocStage } from '../services/expiry.service.js';
+import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending, saveRenewalDraft, completeDocStage, decideRenewalApproval } from '../services/expiry.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
@@ -29,7 +29,8 @@ export const OUTBOX_REGISTRY = {
   'expiry.saveExpiryRemark': saveExpiryRemark,
   'expiry.sendExpiryToPending': sendExpiryToPending,
   'expiry.saveRenewalDraft': saveRenewalDraft,
-  'expiry.completeDocStage': completeDocStage
+  'expiry.completeDocStage': completeDocStage,
+  'expiry.decideRenewalApproval': decideRenewalApproval
 };
 
 export function resolveReplay(kind) {

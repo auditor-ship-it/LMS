@@ -1647,7 +1647,7 @@ export async function completeDocStageFast(containerNo, renewedDate, validTill, 
  * in the main system is touched. Notifies the row's own Sale Person +
  * Shivani Dhall, per the request.
  */
-export async function decideRenewalApproval(containerNo, decision, remarks, callerEmail, knownRow) {
+export async function decideRenewalApproval(containerNo, decision, remarks, callerEmail, knownRow, skipEmail = false) {
   await checkActionPermission('renewApproval', callerEmail);
   if (decision !== 'approved' && decision !== 'rejected') throw new AppError('decision must be "approved" or "rejected"');
 
@@ -1693,7 +1693,12 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
       cacheRemove(DEPLOYED_RAW_CACHE_KEY);
 
-      try {
+      // skipEmail — set when decideRenewalApprovalRejectFast already sent
+      // this from Mongo data moments ago and this call is just its
+      // background replay catching the real Sheets cell up; same
+      // "send once, from whichever path got there first" convention as
+      // completeDocStageFast's own skipEmail.
+      if (!skipEmail) try {
         const salePersonColIdx = hdrs0.findIndex((h) => String(h || '').trim().toLowerCase() === 'sale person');
         const salePersonName = salePersonColIdx >= 0 ? safeStr(matchedRow[salePersonColIdx]) : '';
         /* Explicit request 2026-10-29 ("jo renew kiya hai uska data and
@@ -1782,6 +1787,89 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
 
     return 'Approved — renewal applied';
   });
+}
+
+/**
+ * Mongo-first fast path for decideRenewalApproval's REJECTED/"Send Back"
+ * branch only — explicit request 2026-10-29 ("pls solve this error", the
+ * same "Google Sheets API rate limit" failure already fixed for Save/
+ * Submit, now hit on Pushpa's own Approve/Send Back decision). Same design
+ * as saveRenewalDraftFast/completeDocStageFast above: always succeeds to
+ * Mongo first, the real Sheets write replays in the background once quota
+ * allows, with a persistent log of exactly what's still pending.
+ *
+ * Deliberately NOT covering the 'approved' decision: that branch reads
+ * several OLD cell values live (for the Renewal Log's audit trail) and then
+ * promotes the staged draft into the REAL Agreement/PO/PO PDF/Billing
+ * Cycle/PO Validity columns plus a separate Renewal Log append — a
+ * materially bigger, financial-document-adjacent write than this one's 4
+ * cells, and not the action failing in the report that prompted this fix
+ * (Pushpa was Sending Back, not Approving). Still goes through the
+ * original, unchanged, live decideRenewalApproval — same robustness it
+ * always had, not worse than before this fix.
+ */
+export async function decideRenewalApprovalRejectFast(containerNo, remarks, callerEmail, knownRow) {
+  await checkActionPermission('renewApproval', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  /* Headers ARE read here, unlike saveRenewalDraftFast/completeDocStageFast
+     above — this path needs them for the SAME salePersonName/clientName
+     resolution the live decideRenewalApproval uses (by header name, not a
+     fixed index — Sale Person's column position isn't guaranteed). Fetched
+     separately from the row/key resolution below rather than destructuring
+     getSheetDataFromMongo's own `rows`: that function's rows are NOT
+     guaranteed to be in sheet-row order (no .sort() — see its own
+     definition in mongoSheetData.service.js), unlike getMongoRowsWithKeys'
+     rows, which ARE explicitly sorted by the row_N suffix. Using
+     getSheetDataFromMongo's unordered rows with _resolveDeployedRow's own
+     positional "row = i+2" math would risk patching the WRONG container's
+     row — caught in review before this ever ran. Both calls are still pure
+     Mongo (the second internally cached too, mongo_raw_v1:Deployed sheet),
+     so this stays just as resilient to a Sheets quota outage either way. */
+  const [{ headers: hdrs0 }, docs] = await Promise.all([
+    getSheetDataFromMongo(SHEETS.DEPLOYED),
+    getMongoRowsWithKeys(SHEETS.DEPLOYED)
+  ]);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  const matchedRow = found.row;
+  if (String(matchedRow[APPROVAL_STATUS_COL] || '').trim().toLowerCase() !== 'pending') return 'INVALID_STATE';
+
+  const stamp = dmyTime(new Date());
+  const patch = {
+    [`row.${APPROVAL_STATUS_COL}`]: 'Sent Back',
+    [`row.${APPROVAL_REMARKS_COL}`]: remarks || '',
+    [`row.${APPROVAL_DATE_COL}`]: stamp,
+    [`row.${APPROVER_COL}`]: callerEmail || ''
+  };
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+
+  const submittedBy = safeStr(matchedRow[SUBMITTED_BY_COL]);
+  const clientName = _deployedClientName(hdrs0, matchedRow);
+
+  try {
+    const salePersonColIdx = hdrs0.findIndex((h) => String(h || '').trim().toLowerCase() === 'sale person');
+    const salePersonName = salePersonColIdx >= 0 ? safeStr(matchedRow[salePersonColIdx]) : '';
+    await _sendRenewalRejectionEmail({
+      container: containerNo, clientName, remarks: remarks || '',
+      submittedBy, salePersonName,
+      renewedDate: fmtCellDate(matchedRow[26]),
+      validTillDate: fmtCellDate(matchedRow[27]),
+      signedCopyUrl: safeStr(matchedRow[28]),
+      submissionRemarks: safeStr(matchedRow[29]),
+      poNo: safeStr(matchedRow[DRAFT_PO_NO_COL]),
+      poFileUrl: safeStr(matchedRow[DRAFT_PO_FILE_COL]),
+      poValidity: fmtCellDate(matchedRow[DRAFT_PO_VALIDITY_COL]),
+      poValue: safeStr(matchedRow[DRAFT_PO_VALUE_COL]),
+      billingCycle: safeStr(matchedRow[DRAFT_BILLING_CYCLE_COL])
+    });
+  } catch (e) { console.error('[RENEWAL-REJECTION-EMAIL]', e.message); }
+
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.decideRenewalApproval', [containerNo, 'rejected', remarks, callerEmail, resolvedRow, true], { actor: callerEmail });
+
+  return 'Sent Back — sent back to Pending';
 }
 
 /* ★★★ RENEWAL LOG — every renewal (Update Lease Period + Complete Document
