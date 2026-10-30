@@ -74,6 +74,7 @@ import { sendPoAgreementDigest } from '../services/poAgreementDigest.service.js'
 import { sendDeployedSummaryDigest } from '../services/deployedSummaryDigest.service.js';
 import { saveDeployedSheetSnapshotIfNeeded } from '../services/deployedSheetSnapshot.service.js';
 import { sendRenewalReminderDigest } from '../services/renewalReminderDigest.service.js';
+import { expireOldHolds } from '../services/offlease.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -111,6 +112,17 @@ export function registerCronJobs() {
      which would miss most of the month for taking a fresh snapshot if the
      process happened to restart and lose whichever day it first landed on. */
   cron.schedule('5 9 * * *', safeRun('deployedSheetSnapshot', () => saveDeployedSheetSnapshotIfNeeded()));
+
+  /* Daily, 9:10 AM — explicit request 2026-10-30 ("hold mai 7 din tak hi
+     hold pe rahega, 7 days ho gye na stage 1 intimation stage mai wapas
+     show karwayega"): any Off-Lease Stage 1 record on Hold for more than 7
+     days auto-reverts to the normal Stage 1 pending queue — see
+     expireOldHolds's own doc comment for the exact rule (applies to every
+     held row, no date-specific exemption; re-clicking Hold just starts a
+     fresh 7-day window). Daily is plenty for a 7-day threshold — offset
+     from the other 9:00/9:05 AM jobs above so none of their Sheets reads
+     land in the same instant. */
+  cron.schedule('10 9 * * *', safeRun('expireOldHolds', () => expireOldHolds()));
 
   /* 1st of every month, 6:00 AM — explicit request 2026-10-07: the complete
      PREVIOUS calendar month's Renew + Off-Lease activity, to Pushpa Shetty
@@ -155,7 +167,7 @@ export function registerCronJobs() {
   // renewalReminderDigest.service.js for what it would send.
   // cron.schedule('*/5 * * * *', safeRun('renewalReminderDigest', () => sendRenewalReminderDigest()));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), deployedSheetSnapshot (daily 9:05 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (STOPPED 2026-10-30, was every 5 min testing cadence)');
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), deployedSheetSnapshot (daily 9:05 AM), expireOldHolds (daily 9:10 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (STOPPED 2026-10-30, was every 5 min testing cadence)');
 }
 
 /**

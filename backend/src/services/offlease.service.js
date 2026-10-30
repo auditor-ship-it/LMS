@@ -4608,6 +4608,75 @@ export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail, k
   return 'OK';
 }
 
+const OL_HOLD_MAX_DAYS = 7;
+
+/**
+ * 7-DAY HOLD AUTO-EXPIRY — explicit request 2026-10-30 ("hold mai 7 din tak
+ * hi hold pe rahega, 7 days ho gye na stage 1 intimation stage mai wapas
+ * show karwayega"): a container put on Hold (saveOffLeaseHold above)
+ * automatically reverts to Stage 1's normal pending queue once its Hold
+ * Timestamp is more than 7 days old — exactly the same effect as a manual
+ * Send Back To Stage 1 (clears the same 3 hold columns, same row, no
+ * duplicate ever created), just system-triggered instead of a person
+ * clicking the button. Intended to be called from a daily cron
+ * (jobs/index.js) — 7 days is a coarse enough threshold that checking once
+ * a day is plenty; it doesn't need the reconciliation job's 5-minute cycle.
+ *
+ * Explicitly confirmed with the user this applies to EVERY held row, with
+ * no separate "hold until a specific date" override or exemption — even a
+ * row held for a genuine, longer reason (e.g. a multi-month customer
+ * lock-in clause written into its Hold Remarks) still expires after 7 days
+ * like any other. If it still needs to stay held, the KAM just clicks Hold
+ * again from Stage 1 once it reappears there — same button, no new UI —
+ * which starts a fresh 7-day window.
+ *
+ * NO checkActionPermission call, deliberately — same precedent as
+ * runAutoApproval/copyApprovedData (see approve.service.js's own header
+ * comment: "getApproveData / runAutoApproval have NO checkActionPermission
+ * call... they were only ever invoked from a time trigger, never through a
+ * permission-gated UI action"). There is no real logged-in user here to
+ * check a grant against, and routing this through the normal Fast+outbox-
+ * replay path would require the replay to carry a real permitted user's
+ * email, which doesn't exist for a system-triggered action — so this
+ * writes the live sheet directly instead, exactly like those two existing
+ * cron-only functions do.
+ */
+export async function expireOldHolds() {
+  await _ensureOffLeaseSheet();
+  return withSheetLock(OL_SHEET, async () => {
+    const { rows } = await getSheetData(OL_SHEET);
+    const now = new Date();
+    const expired = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!_isOnHold(row)) continue;
+      const heldAt = parseDate(row[OL_HOLD_TIMESTAMP_COL]);
+      if (!heldAt) continue; // unparseable timestamp — leave it alone rather than guess
+      const ageDays = (now - heldAt) / 86400000;
+      if (ageDays < OL_HOLD_MAX_DAYS) continue;
+
+      const rn = i + 2;
+      const cellUpdates = OL_HOLD_ALL_COLS.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
+      await batchUpdateValues(cellUpdates);
+
+      try {
+        const patch = {};
+        for (const c of OL_HOLD_ALL_COLS) patch[`row.${c}`] = '';
+        await getCollection(OL_SHEET).updateOne({ key: `row_${i}` }, { $set: patch });
+      } catch (e) {
+        console.error('[OL-HOLD-EXPIRE] mirror update failed (reconcile will correct):', e?.message || e);
+      }
+
+      const containerNo = safeStr(row[0]);
+      expired.push(containerNo);
+      console.log(`[OL-HOLD-EXPIRE] ${containerNo} — hold expired after ${Math.floor(ageDays)}d, reverted to Stage 1 queue`);
+    }
+
+    return expired;
+  });
+}
+
 /**
  * Stage 7 (Payment Status)'s "Voucher Raised" — the pipeline's own custom
  * middle step, explicit request 2026-10-03. No field of its own to submit
@@ -5381,6 +5450,23 @@ export async function getOffLeaseDashboardData(user) {
   }
 
   return { kpis, items, ...(_stale ? { _stale, _staleSince } : {}) };
+}
+
+/**
+ * Public API "total Off-Lease" report — explicit request 2026-10-30 ("this
+ * is report not aese api for total offlease"): a flat list of every
+ * Off-Lease Tracking record, same `{ data, count }` shape convention as the
+ * existing public reports/renewal-log and reports/new-lease endpoints
+ * (expiry.service.js), rather than the in-app Dashboard's own nested
+ * `{ kpis, items }` shape — a public API consumer doing their own
+ * reporting/BI just wants the flat row list. Reuses
+ * getOffLeaseDashboardData's own `items` array wholesale (same per-row
+ * fields, same sale-person access gate) — no separate aggregation or sheet
+ * read of its own.
+ */
+export async function getOffLeaseTotalReport(user) {
+  const { items } = await getOffLeaseDashboardData(user);
+  return { data: items, count: items.length };
 }
 
 /**
