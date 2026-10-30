@@ -5,13 +5,12 @@
  * container whose Agreement or PO is within 15 days of expiry or already
  * overdue. Table listing each qualifying container's No, Client Name,
  * Location, Order No, the relevant date and its overdue/due-soon status,
- * plus a single per-row "Open" action link — see
- * renewalReminderLink.service.js for what that link shows and does (ONE
- * link per container as of the 2026-10-30 redesign — "click the renew and
- * offlease two button make one button" — Off-Lease/Renew are now both
- * offered on that one landing page, not two separate email links). Falls
- * back to a shared /lease-expiry link for a row when no-login links aren't
- * configured (RENEWAL_REMINDER_LINK_SECRET unset).
+ * plus a single per-row "Open" link — see renewalReminderLink.service.js
+ * for what clicking it does (as of the final 2026-10-30 redesign: SSOs the
+ * clicker in as the container's resolved KAM and lands them on the REAL
+ * Lease Expiry page with that container already selected — not a separate
+ * replica page). Falls back to a shared /lease-expiry link for a row when
+ * no-login links aren't configured (RENEWAL_REMINDER_LINK_SECRET unset).
  *
  * BUG FOUND AND FIXED 2026-10-30: the previous version of this file read
  * `item.container`/`item.clientName` — fields that don't exist anywhere on
@@ -37,10 +36,10 @@
  *    Status to "Off-Lease", which getExpiryDataByFilter's 'pending' filter
  *    excludes entirely — this check is a second, independent safety net,
  *    not the only thing guarding against it.)
- *  - A container+action already recorded in
- *    renewalReminderLink.service.js's _renewal_reminder_actions — an
- *    action already confirmed via a reminder link (covers "renew", which
- *    has no other natural signal the moment a KAM is merely notified).
+ *  - A container already recorded in renewalReminderLink.service.js's
+ *    _renewal_reminder_actions — opened via a reminder link already (the
+ *    SSO itself is the signal; there's no separate "action confirmed" step
+ *    anymore now that clicking lands on the real, authenticated page).
  *
  * RECIPIENT: auditor@crystalgroup.in only, for now — explicit instruction
  * 2026-10-29/30. Production (the container's own KAM + a shared inbox
@@ -99,7 +98,7 @@ export async function sendRenewalReminderDigest() {
     const isDocsPending = String(item.actionStatus || '').trim().toLowerCase() === 'documents pending';
     if (isDocsPending) continue;
     if (trackedContainers.has(container.toUpperCase())) continue;
-    if (alreadyActioned.has(`${container}|${item._rowNum}|renew`) || alreadyActioned.has(`${container}|${item._rowNum}|offlease`)) continue;
+    if (alreadyActioned.has(`${container}|${item._rowNum}`)) continue;
 
     const agrDays = daysUntil(item.agreementDate, today);
     const poDays = daysUntil(item.poDate, today);

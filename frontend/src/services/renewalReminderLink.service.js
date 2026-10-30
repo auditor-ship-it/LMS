@@ -1,8 +1,10 @@
-import { getRenewalReminderLinkTarget, confirmRenewalReminderLinkAction } from '../api/renewalReminderLink.api.js';
+import { startRenewalReminderSso } from '../api/renewalReminderLink.api.js';
 
-export async function fetchRenewalReminderLinkTarget(token) {
-  return getRenewalReminderLinkTarget({ token });
-}
-export async function submitRenewalReminderLinkConfirm(token, action) {
-  return confirmRenewalReminderLinkAction({ token, action });
+/** Kicks off the renewal reminder's no-login SSO — `searchParams` is the
+ *  email link's own URLSearchParams (token=, plus the display-only
+ *  container=/row= — see mintRenewalReminderLink's own doc comment). Same
+ *  "forward as a plain object" shape sso.service.js's own start functions
+ *  use. */
+export async function startRenewalReminderLinkSso(searchParams) {
+  return startRenewalReminderSso(Object.fromEntries(searchParams.entries()));
 }
