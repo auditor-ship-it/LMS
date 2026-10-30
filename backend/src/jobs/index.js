@@ -147,25 +147,15 @@ export function registerCronJobs() {
      through each cycle. */
   cron.schedule('0 10 25-31,1,2 * *', safeRun('deployedSummaryDigest', () => sendDeployedSummaryDigest()));
 
-  /* TEMPORARY TESTING CADENCE — every 5 minutes, explicit request
-     2026-10-30 ("Testing only — dial back once approved"). This is NOT the
-     intended production frequency; it's deliberately fast so the feature
-     (per-container Renew/Off-Lease action links — see
-     renewalReminderLink.service.js) can be reviewed quickly. MUST be
-     dialed back to a sane cadence (the twice-daily 10:00 AM/5:00 PM this
-     replaced) once the feature is approved — ask if this is still every 5
-     minutes and it's been a while, that's a sign this was forgotten.
-     Otherwise unchanged from Phase 1: no stop at the expiry date itself —
-     keeps firing until the container's own renewal or off-lease process is
-     actually started (see renewalReminderDigest.service.js's own doc
-     comment for the exact stop condition). Still sent only to
-     auditor@crystalgroup.in (test) — production recipients remain a
-     deliberate follow-up. No idempotency guard needed, unlike the monthly/
-     date-range jobs above — this is meant to re-fire every single
-     scheduled time, that's the whole point of a reminder. */
-  cron.schedule('*/5 * * * *', safeRun('renewalReminderDigest', () => sendRenewalReminderDigest()));
+  // STOPPED 2026-10-30 — explicit request ("mail stop for this... stop the
+  // mails agrment and po reminder") after the every-5-minute testing
+  // cadence below kept re-sending a 160-container digest. Left as a plain
+  // comment (not deleted) so this can be re-enabled later at a sane
+  // cadence once the feature itself is revisited — see
+  // renewalReminderDigest.service.js for what it would send.
+  // cron.schedule('*/5 * * * *', safeRun('renewalReminderDigest', () => sendRenewalReminderDigest()));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), deployedSheetSnapshot (daily 9:05 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (every 5 min — TEMPORARY testing cadence)');
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), deployedSheetSnapshot (daily 9:05 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (STOPPED 2026-10-30, was every 5 min testing cadence)');
 }
 
 /**
