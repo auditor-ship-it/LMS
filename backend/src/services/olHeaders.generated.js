@@ -229,4 +229,23 @@ export const OL_HEADERS = [
      the process. Keep this entry if this file is ever regenerated from the
      live header row. */
   "SD Amount",
+  /* Indices 354-355 — same deliberate, hand-added exception as above: added
+     2026-10-30 for Transportation's "Move To Stage" Reason = "Purchased"
+     path (col_354/355, OL_MOVE_NEW_ORDER_NO_COL/OL_MOVE_PROOF_FILE_COL in
+     offlease.service.js) — the new Order No a sold container's purchase
+     was billed under, and a proof document (invoice/sale confirmation).
+     Keep these 2 entries if this file is ever regenerated from the live
+     header row. */
+  "Move New Order No", "Move Proof File",
+  /* Index 356 — same deliberate, hand-added exception as above: added
+     2026-10-30 for Stage 5's (Billing Reconciliation) own "Ledger" file
+     upload (col_356, OL_BILLING_LEDGER_COL in offlease.service.js). Keep
+     this entry if this file is ever regenerated from the live header row. */
+  "Billing Ledger",
+  /* Index 357 — same deliberate, hand-added exception as above: added
+     2026-10-30, same batch as "Billing Ledger" above, for Stage 5's own
+     "Final Payable Amount (post adjustment, if any)" field (col_357,
+     OL_FINAL_PAYABLE_AMOUNT_COL in offlease.service.js). Keep this entry
+     if this file is ever regenerated from the live header row. */
+  "Final Payable Amount",
 ];

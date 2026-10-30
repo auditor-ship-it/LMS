@@ -374,7 +374,12 @@ export const STAGE_FIELDS = {
     { key: 'col_310', label: 'Adjust Security Deposit if applicable', type: 'radio', options: YES_NO },
     { key: 'col_311', label: 'Security Deposit Amount', type: 'number' },
     { key: 'col_315', label: 'Reconcile entire billing cycle', type: 'radio', options: YES_NO },
-    { key: 'col_316', label: 'Remark', type: 'text' }
+    { key: 'col_316', label: 'Remark', type: 'text' },
+    // col_356/357, not 317/318 — outside this stage's own 305-316 range,
+    // see OL_BILLING_LEDGER_COL/OL_FINAL_PAYABLE_AMOUNT_COL's doc comments
+    // in offlease.service.js.
+    { key: 'col_356', label: 'Ledger', type: 'file' },
+    { key: 'col_357', label: 'Final Payable Amount (post adjustment, if any)', type: 'number' }
   ],
 
   6: [

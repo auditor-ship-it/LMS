@@ -36,11 +36,21 @@ function addDays(dateStr, days) {
    sending values for them. SD Amount to be Refunded/SD Calculation (the old
    numeric fields) are likewise superseded by the renamed Invoice
    Amount/Invoice(file) fields below. */
-export function makeEmptyForm(containerNo = '') {
+/* vendorName/invoiceAmount defaults — explicit request 2026-10-30 ("vendor
+   name fethc the clint name andd stage 5 data show sd amounts"): opened
+   from Off-Lease Stage 6, Vendor Name starts pre-filled from the
+   container's own Client Name (there's no separate vendor for an SD
+   refund — it's always the client being refunded), and SD Amount starts
+   pre-filled from Stage 5's (Billing Reconciliation) own Security Deposit
+   Amount, already captured there — same reasoning as col_306/308's own
+   pre-fill on that form. Still a plain editable field either way, not
+   locked like Container No/Client Name/Off-Lease ID — a reconciler can
+   override either if the actual vendor or figure differs. */
+export function makeEmptyForm(containerNo = '', vendorName = '', invoiceAmount = '') {
   return {
     containerNo,
-    vendorName: '',
-    invoiceAmount: '', amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
+    vendorName,
+    invoiceAmount, amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
     cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
     invoiceFile: null, piFile: null, attachmentsFile: null
   };
@@ -68,8 +78,8 @@ export function makeEmptyForm(containerNo = '') {
  * submitted from the standalone SD Refunds page, which has no container
  * context to pull them from.
  */
-export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientName, lockedOffLeaseId }) {
-  const [form, setForm] = useState(() => makeEmptyForm(lockedContainerNo || ''));
+export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientName, lockedOffLeaseId, defaultSdAmount }) {
+  const [form, setForm] = useState(() => makeEmptyForm(lockedContainerNo || '', lockedClientName || '', defaultSdAmount || ''));
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitOk, setSubmitOk] = useState(false);
