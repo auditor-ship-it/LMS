@@ -1695,7 +1695,10 @@ async function _sendOffLeaseNotification(row) {
     ['Location', safeStr(row[6])],
     ['Deployed Date', safeStr(row[7])],
     ['Valid Upto', safeStr(row[8])],
-    ['Rate', safeStr(row[9])],
+    // Rate — removed from this email, explicit request 2026-10-30 ("rate
+    // nahi jana chahiye hai maild pe"): rate/amount data shouldn't go out
+    // in this notification. row[9] itself is untouched — only this one
+    // field list entry is gone.
     ['OL Intimation Date', safeStr(row[10])],
     ['OL Date', safeStr(row[11])],
     ['Email Notification URL', safeStr(row[12])],

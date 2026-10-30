@@ -20,6 +20,7 @@ import publicRoutes from './routes/public.routes.js';
 import ssoRoutes from './routes/sso.routes.js';
 import refundsRoutes from './routes/refunds.routes.js';
 import refundReviewRoutes from './routes/refundReview.routes.js';
+import renewalReminderLinkRoutes from './routes/renewalReminderLink.routes.js';
 
 /**
  * Lease Management's own, standalone backend — a narrower copy of the
@@ -99,6 +100,9 @@ export function createApp() {
   // No-login, signed-link review (see refundReview.routes.js's own comment) —
   // same "must stay reachable with no session" posture as /api/sso below.
   app.use('/api/refund-review', refundReviewRoutes);
+  // No-login, signed-link renewal reminder action (Renew/Off-Lease) — same
+  // posture as /api/refund-review above. See renewalReminderLink.routes.js.
+  app.use('/api/renewal-reminder-link', renewalReminderLinkRoutes);
   // Public, read-only, key-gated — no LMS session/login involved. See
   // publicApiAuth.middleware.js + routes/public.routes.js for the auth model.
   app.use('/api/public/v1', publicRoutes);

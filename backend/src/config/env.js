@@ -110,6 +110,16 @@ export const env = {
      token. */
   refundReviewSecret: process.env.REFUND_REVIEW_SECRET || '',
 
+  /* Renewal reminder's no-login Renew/Off-Lease action links (explicit
+     request 2026-10-30) — same signed-token mechanism as the two above
+     (utils/jwtLite.js), own dedicated secret — same "a leaked secret must
+     not also unlock an unrelated flow's links" reasoning as refundReviewSecret
+     vs salesCrmHandoffSecret. Optional on purpose, same "degrades
+     gracefully" convention: unset, the digest email falls back to the
+     Phase 1 shared /lease-expiry link instead of minting an unusable
+     token — see renewalReminderLink.service.js's mintRenewalReminderLink. */
+  renewalReminderLinkSecret: process.env.RENEWAL_REMINDER_LINK_SECRET || '',
+
   mongoUri: process.env.MONGODB_URI,
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
@@ -132,6 +142,10 @@ if (!env.salesCrmRenewalFormUrl || !env.salesCrmHandoffSecret) {
 
 if (!env.refundReviewSecret) {
   console.warn('[env] REFUND_REVIEW_SECRET not set — Refunds approval emails/sheet links will fall back to the session-required review page instead of a no-login link. Set REFUND_REVIEW_SECRET (any long random string) to enable it.');
+}
+
+if (!env.renewalReminderLinkSecret) {
+  console.warn('[env] RENEWAL_REMINDER_LINK_SECRET not set — the renewal reminder digest will fall back to the shared /lease-expiry link instead of per-container no-login action links. Set RENEWAL_REMINDER_LINK_SECRET (any long random string) to enable it.');
 }
 
 if (!env.googleDriveFolderId) {
