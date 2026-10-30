@@ -494,6 +494,29 @@ const OL_FINAL_BILLING_REMARK_COL = 352;
  *  is captured up front. */
 const OL_SD_AMOUNT_COL = 353;
 
+/** Stage 5's (Billing Reconciliation) "Ledger" file upload — explicit
+ *  request 2026-10-30 ("one upload file option" / "ledger file u0load
+ *  name"). col_356, not part of OL_STAGE5_EXTRA_COLS's own 305-316
+ *  positional array (adding a 13th slot there would mean touching all 3 of
+ *  that array's destructuring call sites for one unrelated field) — read
+ *  as its own standalone line in getOffLeaseStageDetail's Stage 5 block,
+ *  same reasoning OL_CONTAINER_PHOTOS_COL/OL_FINAL_BILLING_REMARK_COL/
+ *  OL_SD_AMOUNT_COL above already use for landing outside their own
+ *  stage's contiguous range. No write-side wiring needed — saveOffLeaseStage
+ *  writes any col_N key in its payload generically (see that function's own
+ *  "Write stage data" loop). */
+const OL_BILLING_LEDGER_COL = 356;
+
+/** Stage 5's (Billing Reconciliation) "Final Payable Amount (post
+ *  adjustment, if any)" — explicit request 2026-10-30, same batch as
+ *  OL_BILLING_LEDGER_COL above and outside this stage's own range for the
+ *  same reason (see that constant's own doc comment). Distinct from
+ *  col_306 "Outstanding Amount" — that's the raw figure before any
+ *  adjustment; this is what's actually payable once Adjust Security
+ *  Deposit (col_310/311) and any other reconciliation adjustment are
+ *  applied. */
+const OL_FINAL_PAYABLE_AMOUNT_COL = 357;
+
 /** Stage 1A's "Client to Client" decision (alongside Approve/Send Back/
  *  Reject) — the new client this container is going straight to. Added
  *  2026-09-23 (explicit request). See saveOffLeaseApprovalClientToClient. */
@@ -2863,6 +2886,9 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result[`col_${accruedRentalDate}`] = fmtCell(row[accruedRentalDate]);
       result[`col_${reconcileCycle}`] = safeStr(row[reconcileCycle]);
       result[`col_${remark}`] = safeStr(row[remark]);
+      // Drive URL, safeStr not fmtCell — see OL_BILLING_LEDGER_COL's own doc comment.
+      result[`col_${OL_BILLING_LEDGER_COL}`] = safeStr(row[OL_BILLING_LEDGER_COL]);
+      result[`col_${OL_FINAL_PAYABLE_AMOUNT_COL}`] = fmtNumCell(row[OL_FINAL_PAYABLE_AMOUNT_COL]);
 
       result._inspectionEstimateTotal = _olInspectionEstimateTotal(row);
 
@@ -2915,9 +2941,16 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
        range (info.startCol..endCol, 100-106) never reaches Stage 5's
        (29-44/305-316) or the payment columns (326-329), so both need their
        own explicit read, same reasoning as Stage 5's own _stage1Data read
-       just above. */
-    if (Number(stage) === 8) {
-      for (const eci of OL_STAGE8_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+       just above.
+       ALSO BUILT for stage 11 (SD Refunds, internal — display Stage 6) —
+       explicit request 2026-10-30 ("stage 5 data filed dat shoe stage 6
+       show"): the SD Refund reviewer needs the same Billing Reconciliation
+       reference the Payment Status step already got, one stage earlier in
+       the pipeline (OL_ACTIVE_STAGE_NUMS has 11 immediately after 5, before
+       8) — OL_STAGE8_EXTRA_COLS' own read above stays stage-8-only, only
+       _stage5Data is shared. */
+    if (Number(stage) === 8 || Number(stage) === 11) {
+      if (Number(stage) === 8) for (const eci of OL_STAGE8_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
 
       const [rentalsBilled, outstanding, dateBilledTill, repairCharges, transportBilled,
         adjustDeposit, depositAmount, , , , reconcileCycle, remark] = OL_STAGE5_EXTRA_COLS;
@@ -2931,7 +2964,10 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
         adjustSecurityDeposit: safeStr(row[adjustDeposit]),
         securityDepositAmount: fmtNumCell(row[depositAmount]),
         reconcileEntireCycle: safeStr(row[reconcileCycle]),
-        remark: safeStr(row[remark])
+        remark: safeStr(row[remark]),
+        // Added same day as OL_BILLING_LEDGER_COL/OL_FINAL_PAYABLE_AMOUNT_COL.
+        ledgerFileUrl: safeStr(row[OL_BILLING_LEDGER_COL]),
+        finalPayableAmount: fmtNumCell(row[OL_FINAL_PAYABLE_AMOUNT_COL])
       };
     }
 
@@ -2975,6 +3011,8 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       remarks: safeStr(row[OL_MOVE_REMARKS_COL]),
       commentType: safeStr(row[OL_MOVE_COMMENT_TYPE_COL]),
       date: safeStr(row[OL_MOVE_DATE_COL]),
+      newOrderNo: safeStr(row[OL_MOVE_NEW_ORDER_NO_COL]),
+      proofFileUrl: safeStr(row[OL_MOVE_PROOF_FILE_COL]),
       jumpTargetInternal,
       jumpTargetDisplay: jumpTargetInternal != null ? displayStageNum(jumpTargetInternal) : null,
       canSendBackHere: (jumpTargetInternal != null && jumpTargetInternal === Number(stage)) || ctcSendBackFromBilling
@@ -3681,10 +3719,20 @@ const OL_MOVE_DATE_COL = 296;
 const OL_MOVE_JUMP_TARGET_COL = 297;
 const OL_MOVE_CLIENT_SCOPE_COL = 298;
 const OL_MOVE_ARRIVAL_DATE_COL = 299;
+/* Reason = "Purchased" only — explicit request 2026-10-30 ("one profe to
+   tyoe new order no and file upload to"): the new Order No the customer's
+   purchase was billed under, and a proof document (invoice/sale
+   confirmation). Not contiguous with 290-299 above — those ran straight
+   into 300-302 (Hold, offlease.service.js's OL_HOLD_*_COL) and 303-304
+   (Stage 5 extras) long ago; 354 is the next free column, right after
+   OL_SD_AMOUNT_COL (353), same reasoning OL_FINAL_BILLING_REMARK_COL's own
+   doc comment gives for landing outside its stage's contiguous range. */
+const OL_MOVE_NEW_ORDER_NO_COL = 354;
+const OL_MOVE_PROOF_FILE_COL = 355;
 const OL_MOVE_ALL_COLS = [
   OL_MOVE_REASON_COL, OL_MOVE_NEW_CLIENT_COL, OL_MOVE_REMARKS_COL, OL_MOVE_BY_COL,
   OL_MOVE_TIMESTAMP_COL, OL_MOVE_COMMENT_TYPE_COL, OL_MOVE_DATE_COL, OL_MOVE_JUMP_TARGET_COL,
-  OL_MOVE_CLIENT_SCOPE_COL, OL_MOVE_ARRIVAL_DATE_COL
+  OL_MOVE_CLIENT_SCOPE_COL, OL_MOVE_ARRIVAL_DATE_COL, OL_MOVE_NEW_ORDER_NO_COL, OL_MOVE_PROOF_FILE_COL
 ];
 
 /** Stage 2's "Client to Client" — REDESIGNED 2026-09-24 (explicit request):
@@ -3915,7 +3963,7 @@ function _jumpSkipsStage(jumpTargetInternal, s) {
  * duplication is fine), getting one of these two branches subtly out of
  * sync would silently write inconsistent columns.
  */
-function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }) {
+function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, newOrderNo, proofFileUrl }) {
   const r = safeStr(reason).trim();
   if (!OL_MOVE_REASONS.includes(r)) throw new AppError(`Reason must be one of: ${OL_MOVE_REASONS.join(', ')}`);
   const rmk = safeStr(remarks).trim();
@@ -3926,10 +3974,30 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
   // whatever normally sits between Transportation and that stage. Container
   // No, DO No and Movement Type on the original record are untouched either
   // way. Date (the lifting date) is required for every reason except
-  // 'Purchased' — explicit request 2026-10-03 ("purchased select not ask the
-  // lifting date"): a purchase has no lifting event of its own to date.
+  // 'Purchased' (explicit request 2026-10-03 — a purchase has no lifting
+  // event of its own to date) and 'Other' (explicit request 2026-10-30,
+  // "other add the only remaks" — see that reason's own doc comment below).
   const d = safeStr(date).trim();
-  if (r !== 'Purchased' && !d) throw new AppError('Date is required');
+  if (r !== 'Purchased' && r !== 'Other' && !d) throw new AppError('Date is required');
+
+  // 'Purchased' ALWAYS lands on Billing directly — explicit request
+  // 2026-10-30 ("stage to mved stage 5 dircet"): a sold container has no
+  // Gate In/Inspection left to do, so unlike the other three reasons this
+  // one is never a client-chosen destination. The passed `moveToStage` is
+  // ignored entirely (not merely defaulted) — a stale/tampered value here
+  // must never land it anywhere except Billing.
+  if (r === 'Purchased') {
+    const orderNo = safeStr(newOrderNo).trim();
+    if (!orderNo) throw new AppError('New Order No is required');
+    const proof = safeStr(proofFileUrl).trim();
+    if (!proof) throw new AppError('Proof file is required');
+    return {
+      reason: r, newClientName: '', clientScope: '', arrivalDate: '',
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal: OL_BILLING_INTERNAL,
+      newOrderNo: orderNo, proofFileUrl: proof
+    };
+  }
+
   const display = parseInt(moveToStage, 10);
   const jumpTargetInternal = OL_INTERNAL_BY_DISPLAY.get(display);
   if (!OL_JUMP_TARGET_INTERNALS.includes(jumpTargetInternal)) {
@@ -3942,7 +4010,7 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
     const arrival = safeStr(arrivalDate).trim();
     return {
       reason: r, newClientName: clientName, clientScope: '', arrivalDate: arrival,
-      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal, newOrderNo: '', proofFileUrl: ''
     };
   }
 
@@ -3952,28 +4020,27 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
     const arrival = safeStr(arrivalDate).trim();
     return {
       reason: r, newClientName: '', clientScope: scope, arrivalDate: arrival,
-      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal, newOrderNo: '', proofFileUrl: ''
     };
   }
 
-  if (r === 'Purchased') {
-    return {
-      reason: r, newClientName: '', clientScope: '', arrivalDate: '',
-      remarks: rmk, commentType: '', date: d, jumpTargetInternal
-    };
-  }
-
-  // 'Other'
+  // 'Other' — explicit request 2026-10-30 ("other add the only remaks"):
+  // Comment/Type is no longer required (still accepted if given, just
+  // optional now), matching Purchased's own exemption from the STAGE-8/DO
+  // gate above (see _skipsStage8Gate) — a container moved for some other
+  // reason entirely, with nothing on file for it either, can still move
+  // with just a Remarks note and a destination.
   const ct = safeStr(commentType).trim();
-  if (!ct) throw new AppError('Comment / Type is required');
   return {
     reason: r, newClientName: '', clientScope: '', arrivalDate: '',
-    remarks: rmk, commentType: ct, date: d, jumpTargetInternal
+    remarks: rmk, commentType: ct, date: d, jumpTargetInternal, newOrderNo: '', proofFileUrl: ''
   };
 }
 
 function _moveColumnValues(shaped, userEmail, stamp) {
   return {
+    [OL_MOVE_NEW_ORDER_NO_COL]: shaped.newOrderNo,
+    [OL_MOVE_PROOF_FILE_COL]: shaped.proofFileUrl,
     [OL_MOVE_REASON_COL]: shaped.reason,
     [OL_MOVE_NEW_CLIENT_COL]: shaped.newClientName,
     [OL_MOVE_CLIENT_SCOPE_COL]: shaped.clientScope,
@@ -4013,6 +4080,24 @@ async function _assertStage8MovementFound(containerNo, clientName) {
   if (!fms?.movement) {
     throw new AppError('No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.');
   }
+}
+
+/**
+ * Reason = "Purchased" (the container was sold outright, never transported
+ * onward) is exempt from the STAGE-8 gate above — explicit request
+ * 2026-10-30 ("sale container... not any condition"). A sold container
+ * structurally never gets a real STAGE-8 movement record (there is no
+ * transport event to match), so enforcing that gate for this one reason
+ * made it unreachable for the exact containers it exists for.
+ *
+ * Reason = "Other" is ALSO exempt — explicit follow-up request the same
+ * day ("other add the only remaks"): a genuinely miscellaneous move, with
+ * nothing on file for it either, shouldn't be blocked on a STAGE-8 match
+ * that may never come. Client Scope / Client to Client keep the gate
+ * unchanged (Client to Client never needed it in the first place — see
+ * this function's only caller's own doc comment). */
+function _skipsStage8Gate(reason) {
+  return reason === 'Purchased' || reason === 'Other';
 }
 
 /**
@@ -4075,7 +4160,7 @@ export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEma
 
     const row = rows[rn - 2] || [];
     if (_isMovedOut(row)) return 'ALREADY_PROCESSED';
-    await _assertStage8MovementFound(containerNo, safeStr(row[5]));
+    if (!_skipsStage8Gate(shaped.reason)) await _assertStage8MovementFound(containerNo, safeStr(row[5]));
 
     const stamp = dmyTime(new Date());
     const values = _moveColumnValues(shaped, userEmail, stamp);
@@ -4129,7 +4214,7 @@ export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, use
   const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
   if (_isMovedOut(found.row)) return 'ALREADY_PROCESSED';
-  await _assertStage8MovementFound(containerNo, safeStr(found.row[5]));
+  if (!_skipsStage8Gate(shaped.reason)) await _assertStage8MovementFound(containerNo, safeStr(found.row[5]));
 
   const stamp = dmyTime(new Date());
   const values = _moveColumnValues(shaped, userEmail, stamp);

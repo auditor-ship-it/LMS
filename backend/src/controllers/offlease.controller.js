@@ -201,9 +201,11 @@ export async function nextLeaseId(req, res) {
  *  Permission ('offlease6') is checked inside the service, same as saveStage
  *  above. */
 export async function saveMoveToStage(req, res) {
-  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, rowNum } = req.body || {};
+  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, newOrderNo, proofFileUrl, rowNum } = req.body || {};
   const message = await offLeaseService.saveOffLeaseMoveToStageFast(
-    req.params.containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }, req.user.email, rowNum
+    req.params.containerNo,
+    { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, newOrderNo, proofFileUrl },
+    req.user.email, rowNum
   );
   res.json({ message });
 }

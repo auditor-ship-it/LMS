@@ -255,6 +255,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     setValues((prev) => (String(prev.col_308 ?? '').trim() !== '' ? prev : { ...prev, col_308: String(est) }));
   }, [stageNumber, data]);
 
+  /* Billing's "Date - Billed Till" (col_307) — explicit request 2026-10-30
+     ("auto fetch the final bi9lling date"): same blank-only pre-fill
+     pattern as col_306/col_308 above, from Stage 1's own Final Billing Date
+     (data._stage1Data.finalBillingDate — already fetched and shown
+     read-only in Stage1DataNote just above this form, but never used to
+     fill this field itself until now). Needs the same dd-mm-yyyy ->
+     yyyy-mm-dd conversion the main data-load effect above does for every
+     date field, since this runs from the raw _stage1Data value, not
+     through that effect's own field loop. */
+  useEffect(() => {
+    if (stageNumber !== BILLING_STAGE) return;
+    const raw = String(data?._stage1Data?.finalBillingDate ?? '').trim();
+    const m = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (!m) return;
+    const iso = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    setValues((prev) => (String(prev.col_307 ?? '').trim() !== '' ? prev : { ...prev, col_307: iso }));
+  }, [stageNumber, data]);
+
   useEffect(() => {
     if (inline) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -722,6 +740,10 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   until this clears its final required approval for the
                   bill's amount bracket — see sdFinalApproved. */}
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
+                <Stage5DataNote data={data?._stage5Data} />
+              )}
+
+              {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
                 <div className={sdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
                   {!sdRefunds ? (
                     <p className={styles.sectionHint}>Loading…</p>
@@ -732,6 +754,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                         lockedContainerNo={containerNo}
                         lockedClientName={data?.col_5}
                         lockedOffLeaseId={data?.col_1}
+                        defaultSdAmount={data?._stage5Data?.securityDepositAmount}
                         onSubmitted={reloadSdRefunds}
                       />
                     </>
@@ -1356,6 +1379,46 @@ function Stage1DataNote({ data }) {
 }
 
 /**
+ * Stage 5's (Billing Reconciliation) own data, read-only reference —
+ * explicit request 2026-10-30 ("stage 5 data filed dat shoe stage 6 show"):
+ * the SD Refund reviewer needs this same figure set Payment Status already
+ * got one stage later (getOffLeaseStageDetail's _stage5Data, built for
+ * internal stage 8 AND 11 — see that block's own doc comment). Mirrors
+ * Stage1DataNote's own shape/placement, just for the stage after it.
+ */
+function Stage5DataNote({ data }) {
+  if (!data) return null;
+  return (
+    <div className={styles.outstandingRow}>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Outstanding Amount (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.outstandingAmount || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Date - Billed Till (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.dateBilledTill || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Final Payable Amount (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.finalPayableAmount || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Security Deposit Amount (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.securityDepositAmount || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Ledger (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.ledgerFileUrl ? renderCellValue(data.ledgerFileUrl) : '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Remark (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.remark || '—'}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * A labelled block of read-only values from one of the FMS tabs. Renders
  * nothing at all when that tab was not consulted for this stage, and an
  * explicit note when it was consulted but found no match — "no row matched" is
@@ -1655,14 +1718,16 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * doc comment on the backend. That destination stage then offers Send Back
  * (SendBackPanel below) to undo it.
  *
- * Reason = "Client Scope" additionally captures a free-text Scope. Reason =
- * "Other" additionally captures a free-text Comment / Type. Both stay
- * gated on `fmsFound` exactly as before: `fmsChecked` locks the whole form
- * until the STAGE-8 check above resolves at all; once resolved, these two
- * reasons stay locked until a STAGE-8 record IS found (explicit,
- * twice-confirmed request 2026-09-24 — a deliberate reversal of this
- * feature's original "escape hatch for containers with none" framing).
- * Enforced again server-side (saveOffLeaseMoveToStage/Fast).
+ * Reason = "Client Scope" additionally captures a free-text Scope, and
+ * stays gated on `fmsFound` exactly as before: `fmsChecked` locks the whole
+ * form until the STAGE-8 check above resolves at all; once resolved, it
+ * stays locked until a STAGE-8 record IS found (explicit, twice-confirmed
+ * request 2026-09-24 — a deliberate reversal of this feature's original
+ * "escape hatch for containers with none" framing). Enforced again
+ * server-side (saveOffLeaseMoveToStage/Fast). Reason = "Other" additionally
+ * captures a free-text Comment / Type — it ORIGINALLY had the same gate as
+ * Client Scope, but is now exempt from it (see the "Purchased"/"Other"
+ * paragraph below).
  *
  * Reason = "Client to Client" is REDESIGNED, same day, on top of that
  * (explicit follow-up request): it no longer needs fmsFound at all, and no
@@ -1674,17 +1739,29 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * background job matches that DO against STAGE-8 and finalizes the jump on
  * its own — nothing left to do here once the draft is saved.
  *
- * `doFetched` — explicit request 2026-09-25, on top of everything above: the
- * whole section (not just the submit button — the Reason dropdown itself)
- * stays closed for ALL THREE reasons until a DO Number is on file for this
- * container — OL_SHEET's own col_48 (set by the "Client to Client" Send Back
- * re-fetch, saveOffLeaseSendBack's _populateTransportationFromClientToClientLease)
- * OR, for every other container (col_48 is never written for a non-Client-
- * to-Client row — see _doNumberFromFms's own doc comment, bug found
- * 2026-10-03), the live STAGE-9 match shown in the FMS panel just above.
- * This sits ABOVE the per-reason checks above, not in place of them — Client
- * Scope/Other's own fmsChecked/fmsFound lock is unchanged once this outer
- * gate opens.
+ * `doFetched` — explicit request 2026-09-25: the Reason dropdown stays
+ * restricted to "Purchased"/"Other" only until a DO Number is on file for
+ * this container — OL_SHEET's own col_48 (set by the "Client to Client"
+ * Send Back re-fetch, saveOffLeaseSendBack's
+ * _populateTransportationFromClientToClientLease) OR, for every other
+ * container (col_48 is never written for a non-Client-to-Client row — see
+ * _doNumberFromFms's own doc comment, bug found 2026-10-03), the live
+ * STAGE-9 match shown in the FMS panel just above. Client Scope's own
+ * fmsChecked/fmsFound lock is unchanged once a DO Number opens up the
+ * other reasons.
+ *
+ * "Purchased" and "Other" ARE BOTH EXEMPT from the doFetched gate above and
+ * the fmsChecked/fmsFound gate below — "Purchased" from explicit request
+ * 2026-10-30 ("sale container... not any condition": a container sold
+ * outright is never transported, so it structurally never gets a DO Number
+ * or a STAGE-8 movement record — gating it on either made it unreachable
+ * for the exact containers it was added for), "Other" from the same day's
+ * explicit follow-up ("other add the only remaks" — a genuinely
+ * miscellaneous move shouldn't be blocked on a STAGE-8 match that may
+ * never come either; Comment/Type and Lifting Date both became optional
+ * for it at the same time, only Remarks + a destination are needed now).
+ * Both mirrored server-side in _skipsStage8Gate/_prepareMoveToStage.
+ * Client Scope/Client to Client are unaffected.
  */
 function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound, doFetched, alreadyMoved, ctcPending, onMoved }) {
   const [reason, setReason] = useState('');
@@ -1695,9 +1772,25 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
   const [remarks, setRemarks] = useState('');
   const [date, setDate] = useState('');
   const [moveToStage, setMoveToStage] = useState('');
+  // Reason = "Purchased" only — explicit request 2026-10-30. proofFile holds
+  // the SAME {base64Data, mimeType, fileName} payload shape the outer form's
+  // own pendingFiles does (FileFieldInput's onFile), uploaded at submit time
+  // via uploadStageFile — this section has no pendingFiles plumbing of its
+  // own from the parent, so it manages this one file locally instead.
+  const [newOrderNo, setNewOrderNo] = useState('');
+  const [proofFile, setProofFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(null); // { label } once moved or saved as pending
+
+  // 'Purchased' always lands on Stage 5 — Final Billing — never a client
+  // choice (see _prepareMoveToStage's own doc comment on the backend,
+  // which ignores whatever moveToStage is sent for this reason anyway).
+  // Kept in sync here too so the "Move To Stage" field below can just
+  // display it read-only rather than needing its own separate codepath.
+  useEffect(() => {
+    if (reason === 'Purchased') setMoveToStage('5');
+  }, [reason]);
 
   // Already recorded (this modal was reopened after a Move) — show what was
   // saved instead of an editable form; there's nothing left to submit here,
@@ -1713,8 +1806,12 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
           {alreadyMoved.clientScope ? ` (${alreadyMoved.clientScope})` : ''}
           {alreadyMoved.commentType ? ` — ${alreadyMoved.commentType}` : ''}
           {alreadyMoved.date ? ` · Lifting ${alreadyMoved.date}` : ''}
+          {alreadyMoved.newOrderNo ? ` · Order No: ${alreadyMoved.newOrderNo}` : ''}
           {alreadyMoved.remarks ? ` · ${alreadyMoved.remarks}` : ''}
           {target ? ` · Moved to ${target.label}` : ''}
+          {alreadyMoved.proofFileUrl && (
+            <> · <a href={alreadyMoved.proofFileUrl} target="_blank" rel="noreferrer">Proof file</a></>
+          )}
         </p>
       </div>
     );
@@ -1743,28 +1840,31 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
     );
   }
 
-  // Explicit request 2026-09-25: Move To Stage stays fully closed — not even
-  // the Reason dropdown — until this container's own DO Number is already on
-  // file (col_48). Fetch DO first, THEN Move To Stage opens.
-  if (!doFetched) {
-    return (
-      <div className={styles.fmsWrap}>
-        <h3 className={styles.sectionTitle}>Move To Stage</h3>
-        <p className={styles.sectionHint}>
-          Locked until this container's DO Number is fetched into Transportation — nothing to move yet.
-        </p>
-      </div>
-    );
-  }
-
   const handleMove = async () => {
     if (!reason) { setError('Select a Reason first.'); return; }
     setError('');
 
-    if (reason !== 'Purchased' && !date) { setError('Date is required.'); return; }
+    if (reason !== 'Purchased' && reason !== 'Other' && !date) { setError('Date is required.'); return; }
     if (!moveToStage) { setError('Select a Move To Stage destination.'); return; }
     const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => o.value === moveToStage);
     const destLabel = target?.label || `Stage ${moveToStage}`;
+
+    if (reason === 'Purchased') {
+      const orderNo = newOrderNo.trim();
+      if (!orderNo) { setError('New Order No is required.'); return; }
+      if (!proofFile) { setError('Proof file is required.'); return; }
+      setBusy(true);
+      try {
+        const proofFileUrl = await uploadStageFile(proofFile);
+        await submitMoveToStage(containerNo, { reason, remarks: remarks.trim(), date, moveToStage: '5', newOrderNo: orderNo, proofFileUrl, rowNum });
+        setDone({ label: `Purchased (Order No ${orderNo}) — moved directly to Stage 5 – Final Billing` });
+      } catch (e) {
+        setError(apiErrorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
 
     if (reason === 'Client to Client') {
       const name = newClientName.trim();
@@ -1790,13 +1890,10 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
       if (!scope) { setError('Scope is required.'); return; }
       payload.clientScope = scope;
       successLabel = `Client Scope (${scope}) — moved directly to ${destLabel}`;
-    } else if (reason === 'Purchased') {
-      successLabel = `Purchased — moved directly to ${destLabel}`;
     } else {
       const ct = commentType.trim();
-      if (!ct) { setError('Comment / Type is required.'); return; }
       payload.commentType = ct;
-      successLabel = `Other (${ct}) — moved directly to ${destLabel}`;
+      successLabel = ct ? `Other (${ct}) — moved directly to ${destLabel}` : `Other — moved directly to ${destLabel}`;
     }
 
     setBusy(true);
@@ -1825,16 +1922,29 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
   /* Client to Client no longer needs fmsChecked/fmsFound at all — see this
      component's own doc comment. Client Scope/Other keep the REVERSED
      2026-09-24 gate (locked until STAGE-8 IS found), unaffected by the
-     Client to Client redesign. */
+     Client to Client redesign. 'Purchased' is exempt from every gate below
+     — see this component's own doc comment. */
   const isCtc = reason === 'Client to Client';
-  const locked = busy || !canMove || (!isCtc && (!fmsChecked || !fmsFound));
+  const isPurchased = reason === 'Purchased';
+  const isOther = reason === 'Other';
+  const locked = busy || !canMove || (!isCtc && !isPurchased && !isOther && (!fmsChecked || !fmsFound));
+  // 'Client Scope' stays restricted until a DO Number is on file — see the
+  // doFetched doc comment above. 'Purchased' and 'Other' are both exempt
+  // (explicit request 2026-10-30, "other add the only remaks").
+  const reasonOptions = doFetched ? MOVE_REASON_OPTIONS : ['Purchased', 'Other'];
 
   return (
     <div className={styles.fmsWrap}>
       <h3 className={styles.sectionTitle}>Move To Stage</h3>
+      {!doFetched && (
+        <p className={styles.sectionHint}>
+          Locked for "Client Scope" and "Client to Client" until this container's DO Number is fetched into
+          Transportation — "Purchased" (sold outright) and "Other" can both move without one.
+        </p>
+      )}
       <div className={styles.fieldGrid}>
         <Field
-          field={{ key: 'reason', label: 'Reason', type: 'select', options: MOVE_REASON_OPTIONS }}
+          field={{ key: 'reason', label: 'Reason', type: 'select', options: reasonOptions }}
           value={reason}
           onChange={(v) => { setReason(v); setError(''); }}
           disabled={busy || !canMove}
@@ -1865,11 +1975,29 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
         )}
         {reason === 'Other' && (
           <Field
-            field={{ key: 'commentType', label: 'Comment / Type', type: 'text', required: true }}
+            field={{ key: 'commentType', label: 'Comment / Type (optional)', type: 'text' }}
             value={commentType}
             onChange={setCommentType}
             disabled={locked}
           />
+        )}
+        {isPurchased && (
+          <>
+            <Field
+              field={{ key: 'newOrderNo', label: 'New Order No', type: 'text', required: true }}
+              value={newOrderNo}
+              onChange={setNewOrderNo}
+              disabled={locked}
+            />
+            <Field
+              field={{ key: 'proofFile', label: 'Proof (Invoice / Sale Confirmation)', type: 'file', required: true }}
+              value=""
+              pendingFileName={proofFile?.fileName}
+              onFile={setProofFile}
+              onChange={() => {}}
+              disabled={locked}
+            />
+          </>
         )}
         {reason && (
           <>
@@ -1879,7 +2007,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
               onChange={setRemarks}
               disabled={locked}
             />
-            {reason !== 'Purchased' && (
+            {reason !== 'Purchased' && reason !== 'Other' && (
               <Field
                 field={{ key: 'moveDate', label: 'Lifting Date', type: 'date', required: true }}
                 value={date}
@@ -1891,16 +2019,19 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
               field={{ key: 'moveToStage', label: 'Move To Stage', type: 'select', options: MOVE_JUMP_TARGET_OPTIONS, required: true }}
               value={moveToStage}
               onChange={setMoveToStage}
-              disabled={locked}
+              disabled={locked || isPurchased}
             />
+            {isPurchased && (
+              <p className={styles.sectionHint}>A purchased container always moves directly to Stage 5 – Final Billing.</p>
+            )}
           </>
         )}
       </div>
 
       {error && <div className={styles.error}>{error}</div>}
       {!canMove && <p className={styles.sectionHint}>You don't have permission to move this stage.</p>}
-      {canMove && !isCtc && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
-      {canMove && !isCtc && fmsChecked && !fmsFound && (
+      {canMove && !isCtc && !isPurchased && !isOther && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
+      {canMove && !isCtc && !isPurchased && !isOther && fmsChecked && !fmsFound && (
         <p className={styles.sectionHint}>
           No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.
         </p>
