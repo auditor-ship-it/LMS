@@ -137,8 +137,15 @@ router.get('/deployed-summary/detail', requirePublicApiKey('deployedsummary'), a
 
 /* ---------------- reports (read-only) ----------------
    The Reports page's own Off-Lease section is GET /offlease/dashboard,
-   already covered by the 'offlease' domain above — not duplicated here. */
+   already covered by the 'offlease' domain above — not duplicated here.
+   reports/off-lease below is a DIFFERENT shape for the same underlying
+   data: a flat { data, count } row list (same convention as the two
+   renewal/new-lease reports here), for a reporting/BI consumer that wants
+   the plain record list rather than the Dashboard's nested { kpis, items }
+   — explicit request 2026-10-30 ("report not aese api for total
+   offlease"). Still gated on the 'reports' key domain, not 'offlease'. */
 router.get('/reports/renewal-log', requirePublicApiKey('reports'), asyncHandler(reuse(expiryController.renewalLog)));
 router.get('/reports/new-lease', requirePublicApiKey('reports'), asyncHandler(reuse(expiryController.newLeaseReport)));
+router.get('/reports/off-lease', requirePublicApiKey('reports'), asyncHandler(reuse(offLeaseController.getTotalReport)));
 
 export default router;

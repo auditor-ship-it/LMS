@@ -535,6 +535,15 @@ export async function getDashboardData(req, res) {
   res.json(data);
 }
 
+/** GET /api/public/v1/reports/off-lease — flat "total Off-Lease" report for
+ *  the public API, explicit request 2026-10-30. See
+ *  offlease.service.js's getOffLeaseTotalReport for the shape/reasoning —
+ *  same { data, count } convention as reports/renewal-log and
+ *  reports/new-lease (expiry.controller.js). */
+export async function getTotalReport(req, res) {
+  res.json(await offLeaseService.getOffLeaseTotalReport(req.user));
+}
+
 /* ---- Dashboard live remarks ---- */
 
 export async function getRemarkThread(req, res) {

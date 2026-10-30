@@ -8,9 +8,10 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised, submitHold } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
+import { HoldModal } from './HoldModal.jsx';
 import { RefundSubmitForm } from '../refunds/RefundSubmitForm.jsx';
 import { exportLookupToPdf } from '../offLease/lookupExport.js';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
@@ -85,6 +86,31 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [saveError, setSaveError] = useState('');
   const [reportBusy, setReportBusy] = useState(false);
 
+
+  /* Stage 1 (Intimation) "Hold" — explicit bug report 2026-10-30 ("HOLD
+     button not show"): this action already existed from the Stage 1
+     pending-queue LIST (StagePageBase.jsx's row-level Hold button, same
+     HoldModal/submitHold), but was never offered from inside this
+     per-container detail form — the only way to hold a record was to find
+     it in that separate list view first. Same capture-a-remark-first shape
+     as Send Back below, reusing the same HoldModal the list view uses. */
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdBusy, setHoldBusy] = useState(false);
+  const [holdError, setHoldError] = useState('');
+  const handleHoldSubmit = async (remarks) => {
+    setHoldBusy(true);
+    setHoldError('');
+    try {
+      await submitHold(containerNo, remarks, rowNum);
+      setHoldOpen(false);
+      onSaved?.();
+      onClose();
+    } catch (e) {
+      setHoldError(apiErrorMessage(e));
+    } finally {
+      setHoldBusy(false);
+    }
+  };
 
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
@@ -821,6 +847,11 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     Send Back to Stage 1
                   </Button>
                 )}
+                {!readOnly && stageNumber === 1 && !data?._skipped && canAct('offlease1') && (
+                  <Button type="button" variant="secondary" disabled={busy} onClick={() => setHoldOpen(true)}>
+                    Hold
+                  </Button>
+                )}
                 {/* visibleFields, not the raw fields array — explicit case
                     2026-10-03: Stage 7 (Payment Status)'s only field (UTR
                     Number) stays showIf-hidden until VR is done, and a Save
@@ -854,6 +885,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
         placeholder="What needs fixing before this can be resubmitted? (optional)"
         submitLabel="Send Back"
         variant="secondary"
+      />
+
+      <HoldModal
+        open={holdOpen}
+        item={{ row: [containerNo] }}
+        submitting={holdBusy}
+        error={holdError}
+        onClose={() => { setHoldOpen(false); setHoldError(''); }}
+        onSubmit={handleHoldSubmit}
       />
 
     </div>
