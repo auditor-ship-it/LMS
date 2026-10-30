@@ -46,7 +46,10 @@ export default function App() {
         <Route path="/refund-review" element={<RefundReviewPage />} />
         {/* No-login renewal reminder action (explicit request 2026-10-30) —
             reached only via the signed ?token= link minted into the renewal
-            reminder digest email. Same posture as /refund-review above. See
+            reminder digest email. Unlike /refund-review, this one SSOs the
+            clicker in as the container's resolved KAM and renders the REAL
+            Lease Expiry page (an explicitly confirmed trade-off — see
+            renewalReminderLink.service.js's ssoIntoLeaseExpiry). See
             pages/renewalReminderLink/RenewalReminderLinkPage.jsx. */}
         <Route path="/renewal-reminder-review" element={<RenewalReminderLinkPage />} />
         <Route

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   PageHeader, Card, Button, StatusBadge, SearchBar, FilterBar, Pagination, DataGrid, StatCard, renderCellValue, ConfirmDialog, Icon
 } from '../../components/ui/index.js';
@@ -183,6 +184,31 @@ export function LeaseExpiryPage() {
   // selecting a row by container number could open a DIFFERENT row with the
   // same container. _idx (position in this load) is always unique per row.
   const rows = useMemo(() => (data?.data || []).map((r, i) => ({ ...r, _idx: i })), [data]);
+
+  /* Renewal reminder email links (RenewalReminderLinkPage.jsx) carry
+     ?container=&row= so the SSO'd-in KAM lands straight on that one
+     container's detail panel instead of the bare list — row is
+     getExpiryDataByFilter's own `_rowNum`, container needs a trim since the
+     comma-joined multi-order display value (see ContainerCell above) is
+     never what a single row's own container cell holds. Only fires once
+     per load: an explicit click (setSelectedIdx elsewhere) must always win
+     over this, never get silently overridden by a stale query param still
+     sitting in the URL. */
+  const [searchParams] = useSearchParams();
+  const autoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (autoSelectedRef.current) return;
+    if (!rows.length) return;
+    const wantContainer = searchParams.get('container');
+    const wantRowRaw = searchParams.get('row');
+    if (!wantContainer || !wantRowRaw) return;
+    const wantRow = Number(wantRowRaw);
+    const match = rows.find((r) => r._rowNum === wantRow && String(r.row?.[0] || '').trim() === wantContainer.trim());
+    if (match) {
+      autoSelectedRef.current = true;
+      setSelectedIdx(match._idx);
+    }
+  }, [rows, searchParams]);
 
   // System-wide: rate/amount/pricing columns are hidden from every data grid.
   const visibleColIdx = useMemo(
