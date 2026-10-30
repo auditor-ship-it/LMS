@@ -8,6 +8,7 @@ import { SsoLeaseExpiryPage } from '../pages/sso/SsoLeaseExpiryPage.jsx';
 import { SsoRenewDocumentPage } from '../pages/sso/SsoRenewDocumentPage.jsx';
 import { SsoApprovalPendingPage } from '../pages/sso/SsoApprovalPendingPage.jsx';
 import { RefundReviewPage } from '../pages/refundReview/RefundReviewPage.jsx';
+import { RenewalReminderLinkPage } from '../pages/renewalReminderLink/RenewalReminderLinkPage.jsx';
 import { IconSprite } from '../components/ui/IconSprite.jsx';
 import { ROUTES } from '../constants/routes.js';
 
@@ -43,6 +44,11 @@ export default function App() {
             is created here; the token itself authorizes the one row/stage it
             names. See pages/refundReview/RefundReviewPage.jsx. */}
         <Route path="/refund-review" element={<RefundReviewPage />} />
+        {/* No-login renewal reminder action (explicit request 2026-10-30) —
+            reached only via the signed ?token= link minted into the renewal
+            reminder digest email. Same posture as /refund-review above. See
+            pages/renewalReminderLink/RenewalReminderLinkPage.jsx. */}
+        <Route path="/renewal-reminder-review" element={<RenewalReminderLinkPage />} />
         <Route
           path="/"
           element={(
