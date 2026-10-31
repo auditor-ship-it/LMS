@@ -11,24 +11,35 @@
  * logins and still miss anyone outside that map).
  */
 import { getExpiryDataByFilter } from './expiry.service.js';
-import { emailForSalePerson, canonicalSalePersonName } from './salePersonAccess.service.js';
+import { notificationEmailForSalePerson, canonicalSalePersonName } from './salePersonAccess.service.js';
 import { sendMail } from './email.service.js';
 import { logger } from '../utils/logger.js';
 
-/* Any salesperson name that isn't one of the 6 explicitly mapped logins
- * (emailForSalePerson returns null) has no known inbox — their leases are
- * bundled into one email here instead of silently dropped. Explicit request
- * 2026-09-04; same fallback address every other cross-team notification in
- * this app already uses (see offlease.service.js's _sendOffLeaseNotification,
- * expiry.service.js's _sendRenewalNotification). */
-const FALLBACK_EMAIL = 'support@crystalgroup.in';
+/* Any salesperson name notificationEmailForSalePerson can't resolve (not one
+ * of the 6 scoped logins, and not Pushpa Shetty's own extra entry — most
+ * commonly the "Unassigned" group, a company the CRM has no owner for at
+ * all) has no known inbox — their leases are bundled into one email here
+ * instead of silently dropped.
+ *
+ * CHANGED 2026-10-31 (explicit request: "to mails chnage support pushpa ko
+ * hi jaye" — this fallback should go to Pushpa, not support) — was
+ * support@crystalgroup.in (the same shared fallback every other cross-team
+ * notification in this app still uses, e.g. offlease.service.js's
+ * _sendOffLeaseNotification, expiry.service.js's _sendRenewalNotification;
+ * this constant is LOCAL to this file, so the change is scoped to just the
+ * Lease Expiry digest, not those other notifications). */
+const FALLBACK_EMAIL = 'pushpa.shetty@crystalgroup.in';
 
-/* Explicit request 2026-10-23: CC these three on every real (non-test) Lease
+/* Explicit request 2026-10-23: CC these on every real (non-test) Lease
  * Expiry digest sent to a salesperson, so they see every overdue/expiring
  * lease across the whole sales team, not just their own per-person total
  * from poAgreementDigest/deployedSummaryDigest. Omitted on a `testRecipient`
- * run — a manual test send must never CC real stakeholders. */
-const CC_RECIPIENTS = ['shivani.dhall@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'pushpa.shetty@crystalgroup.in'];
+ * run — a manual test send must never CC real stakeholders.
+ * PC@crystalgroup.in added 2026-10-31 (explicit request: "jo yah sale ke cc
+ * mai... PC@crystalgroup.in ko jana chhaiye jo bhi sale person ko ja raha
+ * hai mails usmai" — whichever mail goes to a sale person, PC should be CC'd
+ * on it too). */
+const CC_RECIPIENTS = ['shivani.dhall@crystalgroup.in', 'mansi.agarwal@crystalgroup.in', 'pushpa.shetty@crystalgroup.in', 'PC@crystalgroup.in'];
 
 /* overdue = already expired; critical/warning = expiring within 30 days —
  * both need a Renew/Off-Lease decision, not just what's already lapsed.
@@ -146,7 +157,7 @@ export async function sendLeaseExpiryDigest({ testOnly, testRecipient } = {}) {
   const results = [];
   for (const [salesperson, rows] of groups) {
     if (testOnly && salesperson !== testOnly) continue;
-    const email = testRecipient || emailForSalePerson(salesperson) || FALLBACK_EMAIL;
+    const email = testRecipient || notificationEmailForSalePerson(salesperson) || FALLBACK_EMAIL;
     const { subject, body, html } = buildDigestEmail(salesperson, rows);
     const finalSubject = testRecipient ? `[TEST] ${subject}` : subject;
     const cc = testRecipient ? undefined : CC_RECIPIENTS.join(', ');
@@ -159,7 +170,7 @@ export async function sendLeaseExpiryDigest({ testOnly, testRecipient } = {}) {
      pipeline actually works even when there happens to be nothing to
      report, rather than silently no-op. */
   if (testOnly && !results.length) {
-    const email = testRecipient || emailForSalePerson(testOnly) || FALLBACK_EMAIL;
+    const email = testRecipient || notificationEmailForSalePerson(testOnly) || FALLBACK_EMAIL;
     const { subject, body, html } = buildDigestEmail(testOnly, []);
     const finalSubject = testRecipient ? `[TEST] ${subject}` : subject;
     const cc = testRecipient ? undefined : CC_RECIPIENTS.join(', ');
