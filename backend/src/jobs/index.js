@@ -75,6 +75,7 @@ import { sendDeployedSummaryDigest } from '../services/deployedSummaryDigest.ser
 import { saveDeployedSheetSnapshotIfNeeded } from '../services/deployedSheetSnapshot.service.js';
 import { sendRenewalReminderDigest } from '../services/renewalReminderDigest.service.js';
 import { expireOldHolds } from '../services/offlease.service.js';
+import { sendOffLeaseStageDigest } from '../services/offLeaseStageDigest.service.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -97,6 +98,16 @@ export function registerCronJobs() {
      their own Lease Expiry rows (overdue + expiring soon) — see
      leaseExpiryDigest.service.js for the grouping/send logic. */
   cron.schedule('0 9 * * *', safeRun('leaseExpiryDigest', () => sendLeaseExpiryDigest()));
+
+  /* Daily, 10:00 AM and 5:00 PM — explicit request 2026-10-31 ("offlease
+     mai yah pending hai sub 10 bhje and samjho ko 5 bhje"): one separate
+     email per Off-Lease stage to that stage's own responsible person,
+     listing what's pending there right now — see
+     offLeaseStageDigest.service.js for the exact stage-owner table and
+     data source. Comma-separated hour list ('10,17'), same safe syntax
+     this file's own header note already covers for a day-of-month list
+     ('25-31,1,2') — not the range+step pattern that note warns against. */
+  cron.schedule('0 10,17 * * *', safeRun('offLeaseStageDigest', () => sendOffLeaseStageDigest()));
 
   /* Daily, 9:05 AM — explicit request 2026-10-27 ("sep deployed sheet and
      oct deployed... kya kya change nahi hua hai" — what changed from one
@@ -167,7 +178,7 @@ export function registerCronJobs() {
   // renewalReminderDigest.service.js for what it would send.
   // cron.schedule('*/5 * * * *', safeRun('renewalReminderDigest', () => sendRenewalReminderDigest()));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), deployedSheetSnapshot (daily 9:05 AM), expireOldHolds (daily 9:10 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (STOPPED 2026-10-30, was every 5 min testing cadence)');
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), offLeaseStageDigest (daily 10:00 AM & 5:00 PM), deployedSheetSnapshot (daily 9:05 AM), expireOldHolds (daily 9:10 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (STOPPED 2026-10-30, was every 5 min testing cadence)');
 }
 
 /**

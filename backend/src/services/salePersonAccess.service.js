@@ -92,22 +92,28 @@ function stripTemporaryAssignmentSuffix(name) {
 
 /* Alternate spellings the SAME person genuinely appears under — used for
  * BOTH display grouping (canonicalSalePersonName) and access matching
- * (matchIdentity). Two confirmed cases:
+ * (matchIdentity). Confirmed cases:
  *   - "Laveena" / "Lavina" (2026-09-07): the CRM has both as distinct
  *     assignedTo values (6 real Lease Expiry rows resolved to "Lavina"),
  *     which zeroed out Laveena's own login (contactsales@crystalgroup.in) —
  *     her exact-match scope never matched the misspelled variant.
- *   - "Pushpa Shetty" / "Pushpalata" / "Pushpalata Shetty" (2026-09-30,
- *     explicit request): confirmed live, the Deployed sheet's OWN stale
- *     fallback cell carries both "Pushpalata" (5 rows) and "Pushpalata
- *     Shetty" (5 rows) for companies the CRM doesn't currently recognise —
- *     both the same person, per the request. Deliberately does NOT include
- *     bare "Pushpa" — that is the Sales CRM's own live `assignedTo` spelling
- *     (203 leads, the dominant, authoritative value; confirmed it is the
- *     ONLY spelling the CRM itself ever uses), not a second stale variant of
- *     the same kind, and this file's very first header comment already flags
- *     "Pushpa" as historically treated as potentially ambiguous — folding it
- *     in was not asked for and would be a much bigger, unverified merge.
+ *   - "Pushpa Shetty" / "Pushpalata" / "Pushpalata Shetty" / "Pushpa"
+ *     (2026-09-30, extended 2026-10-31): confirmed live, the Deployed
+ *     sheet's OWN stale fallback cell carries both "Pushpalata" (5 rows)
+ *     and "Pushpalata Shetty" (5 rows) for companies the CRM doesn't
+ *     currently recognise — both the same person, per the request.
+ *     Bare "Pushpa" (the CRM's own live `assignedTo` spelling, 203 leads)
+ *     was DELIBERATELY excluded here until 2026-10-31 — this file's own
+ *     header comment flagged it as potentially ambiguous, and folding it in
+ *     was "not asked for" at the time. Explicit request 2026-10-31
+ *     reverses that: confirmed live via a real Lease Expiry digest email
+ *     ("Hi Pushpa" / Sale Person "Pushpa Shetty, Unassigned") that fell
+ *     through to the FALLBACK_EMAIL instead of pushpa.shetty@crystalgroup.in
+ *     — bare "Pushpa" genuinely is the same person after all, at least for
+ *     every case seen so far. If a future row turns out to be a GENUINELY
+ *     different "Pushpa" (the ambiguity the original caution was about),
+ *     this alias will need narrowing again — it is not possible to tell
+ *     the two apart from the name alone.
  * The CRM is read-only (this app never writes assignments back), so a
  * spelling can't be fixed at the source; treat known aliases as the same
  * identity here instead. Add an entry only when a real person is confirmed
@@ -120,7 +126,7 @@ function stripTemporaryAssignmentSuffix(name) {
  * (compared case-insensitively). */
 const SALE_PERSON_ALIASES = {
   'Laveena': ['Lavina'],
-  'Pushpa Shetty': ['Pushpalata Shetty', 'Pushpalata']
+  'Pushpa Shetty': ['Pushpalata Shetty', 'Pushpalata', 'Pushpa']
 };
 
 /**
@@ -211,7 +217,38 @@ const EMAIL_BY_SALE_PERSON = Object.fromEntries(
  *  right salesperson — same map salePersonScopeFor uses, just inverted.
  *  Resolves through matchIdentity (genuine aliases AND a "-A" temporary
  *  suffix), so "Lavina", "Sagar" and "Sagar-A" all correctly resolve to the
- *  same address their base identity maps to. */
+ *  same address their base identity maps to.
+ *
+ *  IMPORTANT: also used by renewalReminderLink.service.js to pick who gets
+ *  SSO'd in (a REAL, full-access login, not just an email) — so this must
+ *  only ever resolve to one of the 6 genuinely scoped sales-rep logins in
+ *  SALE_PERSON_BY_EMAIL. pushpa.shetty@crystalgroup.in is deliberately NOT
+ *  in that map (she's UNSCOPED/HOD, not one of the 6) and must stay out of
+ *  this function for that reason — see notificationEmailForSalePerson below
+ *  for a safe way to reach her inbox for a plain email notification. */
 export function emailForSalePerson(name) {
   return EMAIL_BY_SALE_PERSON[matchIdentity(name)] || null;
+}
+
+/* A known notification inbox for a canonical sale-person-like name that
+ * ISN'T one of the 6 scoped logins emailForSalePerson resolves — currently
+ * just Pushpa Shetty (HOD, deliberately unscoped — see SALE_PERSON_BY_EMAIL's
+ * own doc comment). Kept OUT of EMAIL_BY_SALE_PERSON/emailForSalePerson on
+ * purpose (see that function's own doc comment on why) — this is for a
+ * plain notification email only, never for anything that logs someone in. */
+const EXTRA_NOTIFICATION_EMAIL_BY_CANONICAL_NAME = {
+  'Pushpa Shetty': 'pushpa.shetty@crystalgroup.in'
+};
+
+/** Same as emailForSalePerson, but also resolves a canonical name to a known
+ *  notification-only inbox outside the 6 scoped logins (currently just
+ *  Pushpa Shetty) — explicit request 2026-10-31: her own "Hi Pushpa" Lease
+ *  Expiry digest was falling through to the FALLBACK_EMAIL because bare
+ *  "Pushpa" (now aliased to "Pushpa Shetty" — see SALE_PERSON_ALIASES) has
+ *  no entry in SALE_PERSON_BY_EMAIL and never should, for the reason
+ *  emailForSalePerson's own doc comment gives. Safe to use for any plain
+ *  email notification; NEVER use this for an SSO/login decision — use
+ *  emailForSalePerson there instead. */
+export function notificationEmailForSalePerson(name) {
+  return emailForSalePerson(name) || EXTRA_NOTIFICATION_EMAIL_BY_CANONICAL_NAME[canonicalSalePersonName(name)] || null;
 }
