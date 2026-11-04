@@ -93,13 +93,20 @@ function buildChips(item, refundEntry) {
       : accountsStatus === 'rejected' ? 'rejected'
         : refundEntry?.currentStage === 'accounts' ? 'current' : 'future'
   };
-  const ceoNotApplicable = refundEntry && refundEntry.ceoRequired === false;
+  /* BUG FOUND AND FIXED 2026-11-04 (explicit spec: "Never skip CEO approval
+     before Accounts approval is completed") — ceoRequired is known from the
+     refund's Amount to Pay alone, available the moment it's submitted, so
+     this chip used to show 'done'/Skipped before Accounts (or even HOD) had
+     acted at all — live-confirmed on TRIU6617353. ceoResolved additionally
+     requires accountsStatus === 'approved'; until then this chip falls
+     through to its normal current/future tone, same as 6A/6B above. */
+  const ceoResolved = refundEntry && refundEntry.ceoRequired === false && accountsStatus === 'approved';
   const sdCeo = {
     key: 'sdCeo',
     label: '6C',
-    title: `Stage 6C · CEO Approval — ${ceoNotApplicable ? 'skipped' : (ceoStatus || 'pending')}`,
+    title: `Stage 6C · CEO Approval — ${ceoResolved ? 'skipped' : (ceoStatus || 'pending')}`,
     tab: 'sdRefundsCeo',
-    tone: ceoNotApplicable ? 'done'
+    tone: ceoResolved ? 'done'
       : ceoStatus === 'approved' ? 'done'
         : ceoStatus === 'rejected' ? 'rejected'
           : refundEntry?.currentStage === 'ceo' ? 'current' : 'future'
@@ -381,28 +388,63 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     const canEditNow = !readOnlyType && chip.tone === 'current' && canAct(`offlease${chip.stageNumber}`);
     setStageForm({ container: containerNo, rowNum, stageNumber: chip.stageNumber, readOnly: !canEditNow, identityOnly: readOnlyType });
   };
-  /* Keyed by container number -- the only link between this (Off-Lease's own
-     OL_SHEET) record and a Refunds-sheet entry, see refunds.service.js. A
-     container can in principle carry more than one refund row; the pending
-     one (still at hod/ceo) wins over an already-settled one so the chip
-     reflects what's actually waiting on someone right now. */
+  /* Keyed by container number + Lease ID (offLeaseId) composite — NOT
+     container alone. BUG FOUND AND FIXED 2026-11-04 (explicit report, live
+     on TRIU6617353): this container has two genuinely separate Off-Lease
+     Tracking rows (a re-lease to a different client after the first lease
+     ended — OF0048/Kirloskar, long finished, now sitting at Stage 5; and
+     OF0090/Zenfold, the current one, genuinely at Stage 6A). Matching by
+     container alone made OF0090's one real SD Refund entry (it carries its
+     own offLeaseId — refunds.service.js's _mapRow) get attached to BOTH
+     rows, painting Kirloskar's chips with Zenfold's live HOD/CEO status
+     even though Kirloskar never reached Stage 6 at all. Same bug class as
+     offlease.service.js's _lookupStage9OrderNos requireClientMatch fix —
+     a container number alone is never a safe join key in this app.
+     Falls back to the OLD container-only match ONLY when this container has
+     exactly ONE Off-Lease Tracking row to begin with (legacy refund entries
+     submitted before offLeaseId was captured have nowhere to leak onto —
+     there's only one row they could possibly belong to). Checking the
+     REFUND row count instead was tried first and is WRONG: live-verified on
+     TRIU6617353, which has exactly one refund row (so that condition says
+     "safe to fall back") but TWO Off-Lease Tracking rows — the fallback
+     would still have leaked OF0090's refund onto OF0048. It's the number of
+     ITEMS sharing a container that determines whether a container-only
+     match can ever be ambiguous, not the number of refund rows. */
   const refundByContainer = useMemo(() => {
-    const map = new Map();
+    const byComposite = new Map();
+    const byContainerSingle = new Map();
+    const isBetter = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
     for (const r of refundRows || []) {
-      const key = String(r.containerNo || '').trim().toUpperCase();
-      if (!key) continue;
-      const existing = map.get(key);
-      if (!existing || existing.currentStage === 'done' || existing.currentStage === 'rejected') {
-        map.set(key, r);
+      const container = String(r.containerNo || '').trim().toUpperCase();
+      if (!container) continue;
+      const leaseId = String(r.offLeaseId || '').trim().toUpperCase();
+      if (leaseId) {
+        const key = `${container}|${leaseId}`;
+        if (isBetter(byComposite.get(key))) byComposite.set(key, r);
       }
+      if (isBetter(byContainerSingle.get(container))) byContainerSingle.set(container, r);
     }
-    return map;
+    return { byComposite, byContainerSingle };
   }, [refundRows]);
 
+  const itemsByContainerCount = useMemo(() => {
+    const counts = new Map();
+    for (const it of items) {
+      const c = String(it.container || '').trim().toUpperCase();
+      if (c) counts.set(c, (counts.get(c) || 0) + 1);
+    }
+    return counts;
+  }, [items]);
+
   const rows = useMemo(() => items.map((it) => {
-    const refundEntry = refundByContainer.get(String(it.container || '').trim().toUpperCase());
+    const container = String(it.container || '').trim().toUpperCase();
+    const leaseId = String(it.leaseId || '').trim().toUpperCase();
+    let refundEntry = leaseId ? refundByContainer.byComposite.get(`${container}|${leaseId}`) : undefined;
+    if (!refundEntry && itemsByContainerCount.get(container) === 1) {
+      refundEntry = refundByContainer.byContainerSingle.get(container);
+    }
     return { it, chips: buildChips(it, refundEntry), status: statusOf(it, refundEntry) };
-  }), [items, refundByContainer]);
+  }), [items, refundByContainer, itemsByContainerCount]);
 
   if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;

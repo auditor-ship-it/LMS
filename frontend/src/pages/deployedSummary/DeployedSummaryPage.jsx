@@ -22,7 +22,11 @@ const GROUPS = [
 // now returns c.poNo (dashboard.service.js's getDeployedDetailData,
 // resolved by header via _resolveRenewalColumns), inserted here right after
 // Billing Type.
-const DETAIL_HEADERS = ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement'];
+// Billing Cycle/Rate added 2026-11-03 (explicit request: "deployed sheet
+// add the Rate, billing cycle, location") — Location was already here; Rate
+// is a deliberate exception to isRateOrAmountHeader's system-wide hiding,
+// same as the backend Excel export (deployedSummaryExcel.service.js).
+const DETAIL_HEADERS = ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'Billing Cycle', 'Rate', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement'];
 
 /** Triggers a browser download from an axios blob response — explicit
  *  request 2026-10-27 ("highlight nahi dikh raha hai color mai"): these
@@ -145,7 +149,7 @@ export function DeployedSummaryPage() {
       const { containers = [] } = await fetchDeployedDetail(months[0], 'closing', typeVal, sizeVal);
       const detailAoa = [
         ['Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type', 'Billing Type', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto'],
-        ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto])
+        ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto])
       ];
       const detailSheet = XLSX.utils.aoa_to_sheet(detailAoa);
       detailSheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }];
@@ -169,7 +173,7 @@ export function DeployedSummaryPage() {
     if (format === 'excel') {
       const wb = XLSX.utils.book_new();
       sections.forEach((sec) => {
-        const aoa = [DETAIL_HEADERS, ...sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
+        const aoa = [DETAIL_HEADERS, ...sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
         const sheet = XLSX.utils.aoa_to_sheet(aoa);
         sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
         XLSX.utils.book_append_sheet(wb, sheet, sec.label.slice(0, 31));
@@ -189,7 +193,7 @@ export function DeployedSummaryPage() {
         autoTable(doc, {
           startY: nextY + 3,
           head: [DETAIL_HEADERS],
-          body: sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
+          body: sec.containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
           styles: { fontSize: 7 },
           headStyles: { fillColor: [5, 35, 121] },
           margin: { top: 22 }
@@ -422,7 +426,7 @@ function DeployedDetailPanel({ selection, onClose }) {
   const filterLabel = selection.typeVal ? (selection.sizeVal ? `${selection.typeVal} — ${selection.sizeVal}` : selection.typeVal) : (selection.sizeVal ? `Size: ${selection.sizeVal}` : 'All Types');
 
   const rows = containers.map((c) => ({
-    row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
+    row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
     _rowNum: c.container
   }));
 
@@ -430,7 +434,7 @@ function DeployedDetailPanel({ selection, onClose }) {
 
   const exportDetailToExcel = () => {
     if (!containers.length) return;
-    const aoa = [DETAIL_HEADERS, ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
+    const aoa = [DETAIL_HEADERS, ...containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement])];
     const sheet = XLSX.utils.aoa_to_sheet(aoa);
     sheet['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
     const wb = XLSX.utils.book_new();
@@ -448,7 +452,7 @@ function DeployedDetailPanel({ selection, onClose }) {
     autoTable(doc, {
       startY: 26,
       head: [DETAIL_HEADERS],
-      body: containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
+      body: containers.map((c) => [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement]),
       styles: { fontSize: 8 },
       headStyles: { fillColor: [5, 35, 121] }
     });

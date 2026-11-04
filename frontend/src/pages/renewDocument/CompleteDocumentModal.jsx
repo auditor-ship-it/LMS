@@ -98,9 +98,10 @@ function AttachedFileField({ pendingFile, existingUrl, accept, onSelected, onCle
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
 
 const EMPTY_FORM = {
-  renewedDate: '', validTill: '', remarks: '', poNo: '', poValidity: '', poValue: '', billingCycle: '',
+  renewedDate: '', validTill: '', remarks: '', poNo: '', poRenewDate: '', poValidity: '', poValue: '', agreementValue: '', billingCycle: '',
   signedCopy: null, // {base64Data, mimeType, fileName}
-  poFile: null
+  poFile: null,
+  otherFile: null
 };
 
 /** Whatever's already in `item.draft` (a prior Save, or existing PO/Billing
@@ -120,19 +121,23 @@ function formFromDraft(draft) {
     validTill: toDateInputValue(draft.validTill),
     remarks: draft.remarks || '',
     poNo: draft.poNo || '',
+    poRenewDate: toDateInputValue(draft.poRenewDate),
     poValidity: toDateInputValue(draft.poValidity),
     poValue: draft.poValue || '',
+    agreementValue: draft.agreementValue || '',
     billingCycle: draft.billingCycle || '',
     signedCopy: null,
     poFile: null,
+    otherFile: null,
     // Explicit request 2026-10-28: a Sent-Back record already carries a
     // previously-uploaded file — link to it (new tab) rather than re-upload
     // being the only way to see what's already on file. Not re-sent on
     // Save/Submit unless a NEW file is chosen (handleDocSubmit/handleDocSave
-    // only upload when payload.signedCopy/poFile is set) — these two are
-    // display-only.
+    // only upload when payload.signedCopy/poFile/otherFile is set) — these
+    // three are display-only.
     existingSignedCopyUrl: draft.signedCopyUrl || '',
-    existingPoFileUrl: draft.poFileUrl || ''
+    existingPoFileUrl: draft.poFileUrl || '',
+    existingOtherFileUrl: draft.otherFileUrl || ''
   };
 }
 
@@ -158,7 +163,7 @@ function formFromDraft(draft) {
  * containers). `item` and `items` are mutually exclusive; bulk has no single
  * container's draft to pre-fill from, so it always starts blank.
  */
-export function CompleteDocumentModal({ open, item, items, submitting, error, onClose, onSubmit, onSave }) {
+export function CompleteDocumentModal({ open, item, items, queueProgress, submitting, error, onClose, onSubmit, onSave }) {
   const bulk = Array.isArray(items);
   const [form, setForm] = useState(() => (bulk ? EMPTY_FORM : formFromDraft(item?.draft)));
 
@@ -182,7 +187,17 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
     <Modal
       open={open}
       onClose={onClose}
-      title={bulk ? `Update Agreement — ${items.length} containers` : 'Update Agreement'}
+      title={
+        bulk ? `Update Agreement — ${items.length} containers`
+          // LeaseExpiryPage.jsx's "Renew (N)" button opens these ONE AT A
+          // TIME (never as `items`, see that file's startBulkRenew) —
+          // explicit report 2026-11-04 ("i am select the 7 container no
+          // pls chcek show 7 container no"): the modal gave no indication
+          // it was mid-sequence at all, just silently showing one container
+          // with nothing saying 6 more were queued behind it.
+          : queueProgress ? `Update Agreement — Container ${queueProgress.current} of ${queueProgress.total}`
+            : 'Update Agreement'
+      }
       width="540px"
     >
       <form onSubmit={handleSubmit} className={styles.form}>
@@ -196,6 +211,13 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             <span className={styles.label}>Container</span>
             <input type="text" value={item.containerNo || ''} disabled />
           </label>
+        )}
+
+        {!bulk && queueProgress && queueProgress.total - queueProgress.current > 0 && (
+          <p className={styles.hint}>
+            {queueProgress.total - queueProgress.current} more container{queueProgress.total - queueProgress.current === 1 ? '' : 's'} will open
+            automatically after this one{queueProgress.remaining?.length ? `: ${queueProgress.remaining.join(', ')}` : ''}.
+          </p>
         )}
 
         {/* Explicit request 2026-09-29 (approval workflow), relabelled
@@ -238,6 +260,13 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
             <span className={styles.label}>Agreement Valid Till</span>
             <input type="date" value={form.validTill} onChange={set('validTill')} />
           </label>
+          <label className={styles.field}>
+            {/* Added alongside PO Value, explicit request 2026-11-03 ("add
+                the two oprion po value and agremenet value") — same "not
+                required" reasoning as every other Agreement/PO field here. */}
+            <span className={styles.label}>Agreement Value</span>
+            <input type="number" step="any" value={form.agreementValue} onChange={set('agreementValue')} onWheel={(e) => e.target.blur()} placeholder="e.g. 450000" />
+          </label>
         </div>
 
         {/* Neither this nor the PO fields below are individually mandatory —
@@ -260,6 +289,21 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
           />
         </div>
 
+        {/* A third, generic attachment — explicit request 2026-11-04 ("add
+            this renew from other file upload") — for a renewal document
+            that's neither Signed Copy nor PO File (a covering letter, an
+            addendum, etc.). Optional, same as every other field here. */}
+        <div className={styles.field}>
+          <span className={styles.label}>Other File</span>
+          <AttachedFileField
+            pendingFile={form.otherFile}
+            existingUrl={form.existingOtherFileUrl}
+            accept={ACCEPT}
+            onSelected={(file) => setForm((f) => ({ ...f, otherFile: file }))}
+            onClear={() => setForm((f) => ({ ...f, otherFile: null }))}
+          />
+        </div>
+
         <div className={styles.grid2}>
           <label className={styles.field}>
             <span className={styles.label}>PO No (PO basis)</span>
@@ -279,12 +323,24 @@ export function CompleteDocumentModal({ open, item, items, submitting, error, on
 
         <div className={styles.grid2}>
           <label className={styles.field}>
+            {/* PO's own counterpart to Renewed Date — explicit request
+                2026-11-03 ("add the Po renew date"): when the PO itself was
+                renewed/raised, distinct from PO Valid Date below (the PO's
+                expiry). Not required, same reasoning as every other PO
+                field here. */}
+            <span className={styles.label}>PO Renew Date (PO basis)</span>
+            <input type="date" value={form.poRenewDate} onChange={set('poRenewDate')} />
+          </label>
+        </div>
+
+        <div className={styles.grid2}>
+          <label className={styles.field}>
             <span className={styles.label}>PO Valid Date</span>
             <input type="date" value={form.poValidity} onChange={set('poValidity')} />
           </label>
           <label className={styles.field}>
             <span className={styles.label}>PO Value</span>
-            <input type="number" step="any" value={form.poValue} onChange={set('poValue')} placeholder="e.g. 450000" />
+            <input type="number" step="any" value={form.poValue} onChange={set('poValue')} onWheel={(e) => e.target.blur()} placeholder="e.g. 450000" />
           </label>
         </div>
 

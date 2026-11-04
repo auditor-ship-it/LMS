@@ -319,7 +319,13 @@ function _deployedClientName(headers, row) {
 // expiry.service.js's identical copy of this header/function (both write
 // paths must agree on this sheet's shape — see this function's own doc
 // comment above).
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date', 'Old PO Date'];
+// 'PO Renew Date'/'PO Value'/'Agreement Value'/'Billing Cycle' appended
+// 2026-11-03 — MUST stay in sync with expiry.service.js's own copy of this
+// same array (both write-paths append to the SAME physical sheet). This
+// flow (Update Lease Period) has none of these fields of its own, same as
+// Renewed Date/PO Valid Date just before them — logged blank, same
+// reasoning the comment below already gives.
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date', 'Old PO Date', 'PO Renew Date', 'PO Value', 'Agreement Value', 'Billing Cycle'];
 
 async function _logRenewal(info) {
   try {
@@ -340,7 +346,7 @@ async function _logRenewal(info) {
       // This flow (Update Lease Period) has no Renewed Date/PO fields of
       // its own — only Old Agreement Date is available here (oldValidStr,
       // captured before the overwrite below).
-      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || '', info.oldPoDate || ''
+      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || '', info.oldPoDate || '', '', '', '', ''
     ];
     await appendRow(SHEETS.RENEWAL_LOG, logRow);
     // BUG FOUND AND FIXED 2026-10-16 ("refer the one mongo db file Renewal

@@ -170,6 +170,13 @@ export function LeaseExpiryPage() {
   // handlers (startBulkRenew/advanceOrCloseRenew below), never rendered, so
   // there's no reason to trigger a re-render just to update it.
   const renewQueueRef = useRef([]);
+  // { current, total, remaining } or null — explicit report 2026-11-04 ("i
+  // am select the 7 container no pls chcek show 7 container no"): the modal
+  // gave no indication it was mid-queue at all when opened via Bulk Renew,
+  // just silently showing one container. This IS state (not a ref, unlike
+  // renewQueueRef above) specifically so CompleteDocumentModal can render
+  // "Container 2 of 7" and the still-queued container numbers.
+  const [bulkRenewProgress, setBulkRenewProgress] = useState(null);
 
   // "Renew via Sales CRM" — separate from the Renew button above, which
   // still drives THIS app's own internal renewal-status workflow
@@ -386,6 +393,7 @@ export function LeaseExpiryPage() {
     if (!selectedItems.length) return;
     const [first, ...rest] = selectedItems;
     renewQueueRef.current = rest;
+    setBulkRenewProgress({ current: 1, total: selectedItems.length, remaining: rest.map((it) => it.row?.[0]).filter(Boolean) });
     openRenew(first);
   };
 
@@ -396,11 +404,13 @@ export function LeaseExpiryPage() {
     if (renewQueueRef.current.length) {
       const [next, ...rest] = renewQueueRef.current;
       renewQueueRef.current = rest;
+      setBulkRenewProgress((p) => (p ? { current: p.current + 1, total: p.total, remaining: rest.map((it) => it.row?.[0]).filter(Boolean) } : null));
       openRenew(next);
     } else {
       setRenewItem(null);
       setSelectedIdx(null);
       setSelectedKeys(new Set()); // close the bulk bar — everything that was queued is done
+      setBulkRenewProgress(null);
     }
   };
 
@@ -742,9 +752,10 @@ export function LeaseExpiryPage() {
       <CompleteDocumentModal
         open={!!renewItem}
         item={renewItem}
+        queueProgress={bulkRenewProgress}
         submitting={renewBusy}
         error={renewError}
-        onClose={() => { renewQueueRef.current = []; setRenewItem(null); }}
+        onClose={() => { renewQueueRef.current = []; setBulkRenewProgress(null); setRenewItem(null); }}
         onSubmit={handleRenewSubmit}
         onSave={handleRenewSave}
       />

@@ -101,7 +101,7 @@ export function ApprovalPendingPage() {
       <Card>
         <DataGrid
           className={styles.vTable}
-          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft PO No', 'Draft PO Validity', 'Draft PO Value', 'Draft PO PDF', 'Draft Billing Cycle']}
+          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft Other File', 'Draft Agreement Value', 'Draft PO No', 'Draft PO Renew Date', 'Draft PO Validity', 'Draft PO Value', 'Draft PO PDF', 'Draft Billing Cycle']}
           rows={rows}
           loading={loading}
           error={error}
@@ -121,7 +121,10 @@ export function ApprovalPendingPage() {
             // draftPoFileUrl already come off getExpiryDataByFilter('approval', ...),
             // just never rendered here.
             <td key="dsc">{renderCellValue(item.draftSignedCopyUrl)}</td>,
+            <td key="dof">{renderCellValue(item.draftOtherFileUrl)}</td>,
+            <td key="dav">{item.draftAgreementValue || '—'}</td>,
             <td key="dpo">{item.draftPoNo || '—'}</td>,
+            <td key="dprd">{item.draftPoRenewDate ? formatActionTimestamp(item.draftPoRenewDate) : '—'}</td>,
             <td key="dpoval">{item.draftPoValidity || '—'}</td>,
             <td key="dpoamt">{item.draftPoValue || '—'}</td>,
             <td key="dpopdf">{renderCellValue(item.draftPoFileUrl)}</td>,

@@ -130,11 +130,11 @@ export async function sendBackToPending(req, res) {
  *  lockout failed this whole call with a 500 and lost the user's filled-in
  *  form. See completeDocStageFast's own doc comment for the full design.) */
 export async function completeRenewalDocStage(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl } = req.body;
   res.json({
     result: await expiryService.completeDocStageFast(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
+      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl
     )
   });
 }
@@ -146,11 +146,11 @@ export async function completeRenewalDocStage(req, res) {
  *  saveRenewalDraftFast 2026-10-23 — same reason/design as
  *  completeRenewalDocStage above. */
 export async function saveRenewalDraft(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl } = req.body;
   res.json({
     result: await expiryService.saveRenewalDraftFast(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
+      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl
     )
   });
 }
