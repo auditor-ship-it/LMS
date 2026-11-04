@@ -19,6 +19,7 @@ import { RenewalHandoffModal } from './RenewalHandoffModal.jsx';
 import { CompleteDocumentModal } from '../renewDocument/CompleteDocumentModal.jsx';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
 import { distinctOptionsForColumn } from '../../utils/tableFilters.js';
+import { settleSequentially, describeBulkFailures } from '../../utils/bulkRenewalSubmit.js';
 import styles from './LeaseExpiryPage.module.css';
 
 // The KPI row shows one card per bucket. Critical/Warning/Safe are combined
@@ -164,19 +165,19 @@ export function LeaseExpiryPage() {
   const [renewItem, setRenewItem] = useState(null);
   const [renewBusy, setRenewBusy] = useState(false);
   const [renewError, setRenewError] = useState('');
-  // Bulk Renew's "do the rest one at a time" queue — explicit request
-  // 2026-10-27, confirmed via direct question ("open them one at a time").
-  // A ref, not state: it's only ever read/written from inside event
-  // handlers (startBulkRenew/advanceOrCloseRenew below), never rendered, so
-  // there's no reason to trigger a re-render just to update it.
-  const renewQueueRef = useRef([]);
-  // { current, total, remaining } or null — explicit report 2026-11-04 ("i
-  // am select the 7 container no pls chcek show 7 container no"): the modal
-  // gave no indication it was mid-queue at all when opened via Bulk Renew,
-  // just silently showing one container. This IS state (not a ref, unlike
-  // renewQueueRef above) specifically so CompleteDocumentModal can render
-  // "Container 2 of 7" and the still-queued container numbers.
-  const [bulkRenewProgress, setBulkRenewProgress] = useState(null);
+  /* Bulk Renew — REWORKED 2026-11-04. Briefly (2026-10-27 to 2026-11-04) this
+     opened the containers one at a time in a queue ("open them one at a
+     time", that day's own explicit request) — but the follow-up report that
+     same week ("mujhe hai na aesa chhaiye... ek hi form fill karu... sab ek
+     saath hona chhaiue... 7 container selct kar raha hu tho 7 hona chhaiye
+     hai sab mai update hona chhaiye hai") made clear that wasn't actually
+     wanted: ONE form, filled ONCE, applying to every selected container at
+     once — the same true-bulk mode (`items`, not `item`) CompleteDocumentModal
+     already supports and Renew & Document's own Bulk Save/Submit already
+     uses. renewBulkItems null = closed. */
+  const [renewBulkItems, setRenewBulkItems] = useState(null);
+  const [renewBulkBusy, setRenewBulkBusy] = useState(false);
+  const [renewBulkError, setRenewBulkError] = useState('');
 
   // "Renew via Sales CRM" — separate from the Renew button above, which
   // still drives THIS app's own internal renewal-status workflow
@@ -383,35 +384,15 @@ export function LeaseExpiryPage() {
     setRenewItem({ containerNo: item.row?.[0], rowNum: item._rowNum, draft: null });
   };
 
-  /** Bulk "Renew" button — explicit request 2026-10-27: opens the SAME
-   *  in-place Update Agreement form openRenew uses above, for the FIRST
-   *  selected container; the rest wait in renewQueueRef and open one after
-   *  another as each one's Save/Submit completes (advanceOrCloseRenew
-   *  below) — never marks anything or writes anywhere upfront, exactly
-   *  like a single Renew click, just repeated. */
+  /** Bulk "Renew" button — opens CompleteDocumentModal in its true-bulk
+   *  (`items`) mode: one form, filled once, applied to every selected
+   *  container (handleRenewBulkSave/handleRenewBulkSubmit below) — never
+   *  marks anything or writes anywhere upfront, same as a single Renew
+   *  click until Save/Submit is actually pressed. */
   const startBulkRenew = () => {
     if (!selectedItems.length) return;
-    const [first, ...rest] = selectedItems;
-    renewQueueRef.current = rest;
-    setBulkRenewProgress({ current: 1, total: selectedItems.length, remaining: rest.map((it) => it.row?.[0]).filter(Boolean) });
-    openRenew(first);
-  };
-
-  /** Called after a Save or Submit succeeds (or the modal is cancelled) —
-   *  opens the next queued container's form, or closes out if the queue
-   *  (or a single, non-bulk Renew) is empty. */
-  const advanceOrCloseRenew = () => {
-    if (renewQueueRef.current.length) {
-      const [next, ...rest] = renewQueueRef.current;
-      renewQueueRef.current = rest;
-      setBulkRenewProgress((p) => (p ? { current: p.current + 1, total: p.total, remaining: rest.map((it) => it.row?.[0]).filter(Boolean) } : null));
-      openRenew(next);
-    } else {
-      setRenewItem(null);
-      setSelectedIdx(null);
-      setSelectedKeys(new Set()); // close the bulk bar — everything that was queued is done
-      setBulkRenewProgress(null);
-    }
+    setRenewBulkError('');
+    setRenewBulkItems(selectedItems);
   };
 
   /* Shared by Save and Submit below. Save/Submit on Renew & Document's own
@@ -434,14 +415,26 @@ export function LeaseExpiryPage() {
      Sheets write before returning, so the read after it is guaranteed to
      see it — same fix already applied to the Sales OS SSO wizard's own
      equivalent flow (salesOsRenewal.service.js). */
+  /* BUG FOUND AND FIXED 2026-11-04 ("data save nahi ho raha hai... Draft
+     Agreement Value, Draft PO Renew Date, Draft PO Value pls chcek" — live
+     on HNKU6097218): this function builds the same payload shape
+     RenewDocumentPage.jsx's buildDocPayload does for the SAME shared
+     CompleteDocumentModal form (see this function's call sites below) —
+     but when Agreement Value/PO Renew Date/Other File were added to that
+     form, only buildDocPayload (and PO Value before it) got updated; this
+     separate, duplicated copy never did, so anything typed into those 3
+     fields via the Lease Expiry page's own "Renew" button was silently
+     dropped before it ever reached the backend — not a save failure, a
+     field that was never sent in the first place. */
   const buildRenewPayload = async (containerNo, rowNum, payload) => {
     const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', rowNum);
     if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
       throw new Error('Could not mark this container for renewal — try again.');
     }
-    const [signedCopyUrl, poFileUrl] = await Promise.all([
+    const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
       payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-      payload.poFile ? uploadStageFile(payload.poFile) : ''
+      payload.poFile ? uploadStageFile(payload.poFile) : '',
+      payload.otherFile ? uploadStageFile(payload.otherFile) : ''
     ]);
     return {
       containerNo,
@@ -454,6 +447,10 @@ export function LeaseExpiryPage() {
       poFileUrl,
       billingCycle: payload.billingCycle,
       poValidity: payload.poValidity,
+      poValue: payload.poValue,
+      agreementValue: payload.agreementValue,
+      poRenewDate: payload.poRenewDate,
+      otherFileUrl,
       rowNum
     };
   };
@@ -469,7 +466,7 @@ export function LeaseExpiryPage() {
       else {
         await reload();
         invalidate('deployed-sheet');
-        advanceOrCloseRenew();
+        setRenewItem(null);
       }
     } catch (e) {
       setRenewError(apiErrorMessage(e));
@@ -494,12 +491,129 @@ export function LeaseExpiryPage() {
       else {
         await reload();
         invalidate('deployed-sheet');
-        advanceOrCloseRenew();
+        setRenewItem(null);
       }
     } catch (e) {
       setRenewError(apiErrorMessage(e));
     } finally {
       setRenewBusy(false);
+    }
+  };
+
+  /* Bulk Renew — explicit report 2026-11-04 (see renewBulkItems' own doc
+     comment above): one form, filled once, applied to EVERY selected
+     container — mirrors RenewDocumentPage.jsx's own handleBulkDocSubmit/
+     handleBulkDocSave exactly (uploads once, settleSequentially so this
+     doesn't burst the shared Sheets quota — see that helper's own doc
+     comment), with ONE addition: each of these containers, unlike
+     RenewDocumentPage.jsx's own bulk flow, is NOT already 'Documents
+     Pending' — this is the first-ever click for it (see buildRenewPayload's
+     own doc comment above) — so every container gets marked first. */
+  const handleRenewBulkSubmit = async (payload) => {
+    if (!selectedItems.length) return;
+    setRenewBulkBusy(true);
+    setRenewBulkError('');
+    try {
+      const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
+        payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+        payload.poFile ? uploadStageFile(payload.poFile) : '',
+        payload.otherFile ? uploadStageFile(payload.otherFile) : ''
+      ]);
+      const results = await settleSequentially(selectedItems, async (it) => {
+        const containerNo = it.row?.[0];
+        const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', it._rowNum);
+        if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
+          throw new Error('Could not mark this container for renewal — try again.');
+        }
+        const result = await submitDocumentCompletion({
+          containerNo,
+          renewedDate: payload.renewedDate,
+          validTill: payload.validTill,
+          signedCopyUrl,
+          remarks: payload.remarks,
+          userEmail: user?.email || '',
+          poNo: payload.poNo,
+          poFileUrl,
+          billingCycle: payload.billingCycle,
+          poValidity: payload.poValidity,
+          poValue: payload.poValue,
+          agreementValue: payload.agreementValue,
+          poRenewDate: payload.poRenewDate,
+          otherFileUrl,
+          rowNum: it._rowNum
+        });
+        if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
+          throw new Error(result);
+        }
+      });
+      const failureText = describeBulkFailures(results, selectedItems, 'submitted', apiErrorMessage);
+      if (failureText) {
+        setRenewBulkError(failureText);
+      } else {
+        setRenewBulkItems(null);
+        setSelectedIdx(null);
+        setSelectedKeys(new Set());
+      }
+      await reload();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setRenewBulkError(apiErrorMessage(e));
+    } finally {
+      setRenewBulkBusy(false);
+    }
+  };
+
+  /* Bulk "Save" — same shape as handleRenewBulkSubmit, but nothing required
+     (a draft can be partial) so there's no MISSING_PO/MISSING_AGR case to
+     check, and every selected container stays in Documents Pending. */
+  const handleRenewBulkSave = async (payload) => {
+    if (!selectedItems.length) return;
+    setRenewBulkBusy(true);
+    setRenewBulkError('');
+    try {
+      const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
+        payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
+        payload.poFile ? uploadStageFile(payload.poFile) : '',
+        payload.otherFile ? uploadStageFile(payload.otherFile) : ''
+      ]);
+      const results = await settleSequentially(selectedItems, async (it) => {
+        const containerNo = it.row?.[0];
+        const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', it._rowNum);
+        if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
+          throw new Error('Could not mark this container for renewal — try again.');
+        }
+        const result = await saveDocumentDraft({
+          containerNo,
+          renewedDate: payload.renewedDate,
+          validTill: payload.validTill,
+          signedCopyUrl,
+          remarks: payload.remarks,
+          poNo: payload.poNo,
+          poFileUrl,
+          billingCycle: payload.billingCycle,
+          poValidity: payload.poValidity,
+          poValue: payload.poValue,
+          agreementValue: payload.agreementValue,
+          poRenewDate: payload.poRenewDate,
+          otherFileUrl,
+          rowNum: it._rowNum
+        });
+        if (result === 'INVALID_STATE') throw new Error(result);
+      });
+      const failureText = describeBulkFailures(results, selectedItems, 'saved', apiErrorMessage);
+      if (failureText) {
+        setRenewBulkError(failureText);
+      } else {
+        setRenewBulkItems(null);
+        setSelectedIdx(null);
+        setSelectedKeys(new Set());
+      }
+      await reload();
+      invalidate('deployed-sheet');
+    } catch (e) {
+      setRenewBulkError(apiErrorMessage(e));
+    } finally {
+      setRenewBulkBusy(false);
     }
   };
 
@@ -555,15 +669,22 @@ export function LeaseExpiryPage() {
   };
 
   /* Bulk Off-Lease still works the old way (see handleBulkOffLease below —
-     it opens its own modal). Bulk RENEW used to call a Promise.allSettled
-     write-every-row-then-navigate-away version here — explicit follow-up
-     2026-10-27 ("phel renew kar raha tho direct yah open ho raha tha...
-     aesa nahi hona chahiye"): that navigation to Renew & Document was
-     rejected after the fact — "Renew" must open the SAME in-place "Update
-     Agreement" form the single-row flow already uses (openRenew below),
-     right here on this page, not go anywhere else. Confirmed via direct
-     question: for 2+ selected, open them ONE AT A TIME — see
-     startBulkRenew/advanceOrCloseRenew below, not this function anymore. */
+     it opens its own modal). Bulk RENEW has been through three shapes:
+     (1) originally, a Promise.allSettled write-every-row-then-navigate-away
+     to Renew & Document's own bulk form — explicit follow-up 2026-10-27
+     ("phel renew kar raha tho direct yah open ho raha tha... aesa nahi hona
+     chahiye", "it shouldn't navigate away like that") rejected the
+     navigation specifically, not the shared-form idea itself; (2) so it
+     became the SAME in-place "Update Agreement" form the single-row flow
+     uses (openRenew below), opened ONE CONTAINER AT A TIME in a queue; (3)
+     the follow-up report THAT SAME WEEK ("ek hi form fill karu... sab ek
+     saath hona chhaiue... 7 container selct kar raha hu tho 7 hona chhaiye
+     hai sab mai update hona chhaiye hai", 2026-11-04) made clear the queue
+     wasn't what was wanted either — ONE form, filled once, applied to every
+     selected container. This final shape keeps what (1)'s rejection asked
+     for (no navigation, stays on this page) while finally giving (3)'s
+     actual ask (one shared submission, not one-at-a-time) — see
+     startBulkRenew/handleRenewBulkSubmit/handleRenewBulkSave below. */
 
   const handleBulkOffLease = () => {
     if (!selectedItems.length) return;
@@ -752,12 +873,25 @@ export function LeaseExpiryPage() {
       <CompleteDocumentModal
         open={!!renewItem}
         item={renewItem}
-        queueProgress={bulkRenewProgress}
         submitting={renewBusy}
         error={renewError}
-        onClose={() => { renewQueueRef.current = []; setBulkRenewProgress(null); setRenewItem(null); }}
+        onClose={() => setRenewItem(null)}
         onSubmit={handleRenewSubmit}
         onSave={handleRenewSave}
+      />
+
+      {/* Bulk Renew — true-bulk (`items`) mode, same shared-form-for-all
+          behaviour as Renew & Document's own Bulk Save/Submit; see
+          renewBulkItems' own doc comment above for why this replaced the
+          one-at-a-time queue. */}
+      <CompleteDocumentModal
+        open={!!renewBulkItems}
+        items={renewBulkItems ? renewBulkItems.map((it) => ({ containerNo: it.row?.[0] })) : null}
+        submitting={renewBulkBusy}
+        error={renewBulkError}
+        onClose={() => setRenewBulkItems(null)}
+        onSubmit={handleRenewBulkSubmit}
+        onSave={handleRenewBulkSave}
       />
     </>
   );

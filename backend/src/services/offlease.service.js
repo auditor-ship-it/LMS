@@ -3286,7 +3286,7 @@ function _sanitizeRichTextPayload(payload) {
  * number (TRIU6681671-style reuse), and this has no row reference from the
  * submit form to disambiguate with, only the container number text.
  */
-export async function markOffLeaseSdRefundSubmitted(containerNo) {
+export async function markOffLeaseSdRefundSubmitted(containerNo, offLeaseId) {
   const info = OL_STAGE_INFO[11];
   try {
     await withSheetLock(OL_SHEET, async () => {
@@ -3295,8 +3295,21 @@ export async function markOffLeaseSdRefundSubmitted(containerNo) {
       const stamp = dmyTime(new Date());
       const updates = [];
       const mirrorOps = [];
+      // BUG FOUND AND FIXED 2026-11-04 (explicit report, live on
+      // TRIU6617353 — confirmed real data corruption: OF0048/Kirloskar's
+      // own Stage 6 status column was wrongly written "Submitted" by
+      // OF0090/Zenfold's refund submission). The original doc comment's
+      // premise ("this has no row reference from the submit form to
+      // disambiguate with") is now outdated — addRefundEntry's payload
+      // already carries offLeaseId (RefundSubmitForm's lockedOffLeaseId).
+      // When more than one row shares this container number, an exact
+      // Lease ID match is now required; a single-row container still
+      // matches on container number alone (nothing to disambiguate).
+      const matchingRowCount = rows.filter((r) => normKey(r[0]) === want).length;
+      const wantLease = offLeaseId ? normKey(offLeaseId) : '';
       rows.forEach((row, i) => {
         if (normKey(row[0]) !== want) return;
+        if (wantLease && matchingRowCount > 1 && normKey(row[1]) !== wantLease) return;
         if (safeStr(row[info.statusCol]).trim() !== '') return; // already submitted or completed
         const rn = i + 2;
         updates.push(
@@ -3346,7 +3359,7 @@ export async function markOffLeaseSdRefundSubmitted(containerNo) {
  * above already moved a normal row from blank to 'Submitted' long before
  * this ever runs, so a blank-only check would make this a permanent no-op.
  */
-export async function markOffLeaseSdRefundApproved(containerNo, note) {
+export async function markOffLeaseSdRefundApproved(containerNo, note, offLeaseId) {
   const info = OL_STAGE_INFO[11];
   try {
     await withSheetLock(OL_SHEET, async () => {
@@ -3355,8 +3368,13 @@ export async function markOffLeaseSdRefundApproved(containerNo, note) {
       const stamp = dmyTime(new Date());
       const updates = [];
       const mirrorOps = [];
+      // Same Lease ID scoping fix as markOffLeaseSdRefundSubmitted above —
+      // see that function's own doc comment for the full story.
+      const matchingRowCount = rows.filter((r) => normKey(r[0]) === want).length;
+      const wantLease = offLeaseId ? normKey(offLeaseId) : '';
       rows.forEach((row, i) => {
         if (normKey(row[0]) !== want) return;
+        if (wantLease && matchingRowCount > 1 && normKey(row[1]) !== wantLease) return;
         if (safeStr(row[info.statusCol]).trim() === 'Completed') return; // already done
         const rn = i + 2;
         updates.push(

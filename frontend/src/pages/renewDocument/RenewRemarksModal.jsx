@@ -12,6 +12,15 @@ import styles from './RenewRemarksModal.module.css';
 const EXTRA_FIELDS = [
   ['Submitted Date', (it) => formatActionTimestamp(it.renewalSubmittedDate)],
   ['Submitted By', (it) => it.submittedBy],
+  /* BUG FOUND AND FIXED 2026-11-04 ("baki data dikh nahi raha hai" —
+     "the rest of the data isn't showing"): on a real record (CAIU5422720)
+     most of the Draft fields below genuinely were left blank — the
+     submitter explained why in their own Remarks ("Customer has provided
+     only PO for Sep 2026, following up on Oct/Nov...") — but that remark
+     (already read into item.draftRemarks, expiry.service.js's own
+     'approval' block) was never listed here, so the blanks looked like
+     missing/broken data instead of an explained partial submission. */
+  ['Draft Remarks', (it) => it.draftRemarks],
   ['Draft Renewed Date', (it) => it.draftRenewedDate && formatActionTimestamp(it.draftRenewedDate)],
   /* REVERTED 2026-10-09, same day: falling back to the record's existing
      "Agreement Valid Upto" when the draft had no valid-till of its own

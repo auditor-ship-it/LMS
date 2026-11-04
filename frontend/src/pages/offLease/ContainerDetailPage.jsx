@@ -80,12 +80,29 @@ export function ContainerDetailPage({ isActive }) {
   );
 
   /* This record's SD Refund entry (newest for the lease) — its HOD / CEO
-     decisions are what Stage 6A and 6B show. */
+     decisions are what Stage 6A and 6B show. getSdRefundsForContainer is
+     scoped by container number ONLY (by design — see its own doc comment),
+     so a re-leased container with more than one Off-Lease Tracking row
+     (same root cause as OrderBookView.jsx/PipelineDashboard.jsx/
+     StageDetailModal.jsx's own fixes, 2026-11-04) needs its OWN lease
+     scoping here too. BUG FOUND AND FIXED 2026-11-04 (explicit report, live
+     on TRIU6617353): the old `!e.offLeaseId || e.offLeaseId === leaseId`
+     fallback matched the first entry with a BLANK offLeaseId regardless of
+     which lease it actually belonged to, so OF0048/Kirloskar showed
+     OF0090/Zenfold's real pending refund as its own. Falls back to the
+     unscoped list only when there's exactly ONE entry for the whole
+     container (legacy data submitted before offLeaseId was captured) —
+     same fallback rule used in today's other fixes. */
   const { data: refundEntries, reload: reloadRefund } = useAsync(
     () => (container ? getSdRefundsForContainer(container) : Promise.resolve([])),
     [container]
   );
-  const refund = (refundEntries || []).find((e) => !leaseId || !e.offLeaseId || e.offLeaseId === leaseId) || null;
+  const refund = (() => {
+    if (!refundEntries) return null;
+    const exact = leaseId ? refundEntries.filter((e) => e.offLeaseId && e.offLeaseId === leaseId) : [];
+    if (exact.length) return exact[0];
+    return refundEntries.length === 1 ? refundEntries[0] : null;
+  })();
 
   const ready = data?.found && !data?.multiple;
   const { filled, selected, toggle } = useStageSelection(data);

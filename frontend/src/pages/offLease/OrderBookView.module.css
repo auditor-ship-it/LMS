@@ -56,7 +56,17 @@
 
 /* ---- middle: client, spec, and the stage strip ---- */
 .mainCol { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.client { font-size: 14px; font-weight: 800; color: var(--accent); overflow-wrap: anywhere; }
+/* Client name + current-stage TAT text on one row — explicit request
+   2026-11-04 ("top client name right side the tat"), moved up from its own
+   line below the stage chips. BUG FOUND AND FIXED same day ("size for
+   decrese"): flex-wrap let a long client name + long TAT text wrap onto two
+   lines, which — because .row uses align-items: stretch — inflated the
+   WHOLE row's height (visible as a lot of dead space under a blank Remark
+   cell). No wrap now; the client name truncates with an ellipsis instead of
+   ever pushing the row taller, and the TAT text (flex: none, see .currentTat)
+   never shrinks or wraps. */
+.clientRow { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: nowrap; min-width: 0; }
+.client { font-size: 14px; font-weight: 800; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
 /* Spec and location on one line — they were two near-empty rows each holding
    a few characters. */
 .meta { font-size: 12px; color: var(--text-2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -117,6 +127,18 @@
 .warn { background: var(--warn-bg, #fdf0d0); color: var(--warn, #8a6100); }
 .danger { background: var(--error-bg); color: var(--error); }
 .success { background: var(--success-bg); color: var(--success); }
+
+/* Visible Entry/TAT/Delay for the current stage — sits beside the client
+   name (.clientRow) now; see currentTatStage's own doc comment in
+   OrderBookView.jsx. */
+.currentTat {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  flex: none;
+}
+.currentTatLate { color: var(--error); font-weight: 800; }
+.currentTatOk { color: var(--success); font-weight: 800; }
 
 /* ---- remark: the live comment, written here ---- */
 .remarkCol { display: flex; flex-direction: column; gap: 3px; }

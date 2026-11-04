@@ -9,6 +9,7 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { fetchMyTasks } from '../../services/myTask.service.js';
 import { fetchRefunds } from '../../services/refunds.service.js';
+import { getOffLeaseTatReport } from '../../api/offlease.api.js';
 import { usePermission } from '../../hooks/usePermission.js';
 import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
@@ -75,6 +76,15 @@ export function PipelineDashboard({ onOpenTab }) {
   const hodPendingCount = refundRows.filter((r) => r.currentStage === 'hod').length;
   const accountsPendingCount = refundRows.filter((r) => r.currentStage === 'accounts').length;
   const ceoPendingCount = refundRows.filter((r) => r.currentStage === 'ceo').length;
+  /* Entry/Delay per stage, shown in each chip's hover tooltip — explicit
+     request 2026-11-04 ("now this is stage show stage wise entry stage and
+     show dely only"): same engine the TAT Tracking page and Container
+     History use (offLeaseTatTracking.service.js), fetched once here (no
+     container filter = every record) rather than re-deriving the
+     computation in the frontend. Not gated behind a permission, same as the
+     chips themselves. */
+  const { data: tatData } = useAsync(() => getOffLeaseTatReport(), []);
+  const tatRecords = tatData?.records || [];
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
   // Opens the record's full stage history on its own page (not a modal).
@@ -412,6 +422,7 @@ export function PipelineDashboard({ onOpenTab }) {
             onRetry={reload}
             onOpenTab={onOpenTab}
             refundRows={refundRows}
+            tatRecords={tatRecords}
             /* Refetches the dashboard after a stage form saves, so the
                chip that just went from current to done -- and the next one
                that becomes current -- update without a manual Refresh. */

@@ -156,6 +156,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     () => ((stageNumber === SD_REFUNDS_STAGE || stageNumber === PAYMENT_STATUS_STAGE) && containerNo ? fetchSdRefundsForContainer(containerNo) : Promise.resolve(null)),
     [stageNumber, containerNo]
   );
+  /* fetchSdRefundsForContainer is keyed by CONTAINER NUMBER alone — it can
+     hold entries for a DIFFERENT lease of the same container (a re-lease to
+     a different client after an earlier lease ended). BUG FOUND AND FIXED
+     2026-11-04 (explicit report, live on TRIU6617353 — same root cause as
+     OrderBookView.jsx/PipelineDashboard.jsx's own fixes earlier today):
+     every use below used to take sdRefunds[0] (the single most-recent entry
+     for the container) completely unscoped, so OF0048/Kirloskar — which
+     has never even reached Stage 6 — showed OF0090/Zenfold's real pending
+     refund as its own. Scoped here once, reused everywhere below instead of
+     the raw `sdRefunds`. Falls back to the unscoped list only when there's
+     exactly ONE entry for the whole container (legacy data submitted
+     before offLeaseId was captured) — same fallback rule used in today's
+     other two fixes. */
+  const scopedSdRefunds = sdRefunds == null ? sdRefunds : (() => {
+    const exact = sdRefunds.filter((r) => r.offLeaseId && data?.col_1 && r.offLeaseId === data.col_1);
+    if (exact.length) return exact;
+    return sdRefunds.length === 1 ? sdRefunds : [];
+  })();
 
   /* Stage 7 (Payment Status)'s "Voucher Raised" — explicit request
      2026-10-03. No field of its own (see PAYMENT_STATUS_STAGE's doc
@@ -644,7 +662,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               {stageNumber === PAYMENT_STATUS_STAGE && (
                 <div className={styles.fmsWrap}>
                   <h3 className={styles.sectionTitle}>Payment Pipeline</h3>
-                  {!sdRefunds ? (
+                  {!scopedSdRefunds ? (
                     <p className={styles.sectionHint}>Loading…</p>
                   ) : (
                     <>
@@ -662,15 +680,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                       <div className={styles.pipelineRow}>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>HOD</span>
-                          <StatusBadge status={sdRefunds[0]?.hodStatus || 'Pending'} />
+                          <StatusBadge status={scopedSdRefunds[0]?.hodStatus || 'Pending'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>Accounts</span>
-                          <StatusBadge status={sdRefunds[0]?.accountsStatus || 'Pending'} />
+                          <StatusBadge status={scopedSdRefunds[0]?.accountsStatus || 'Pending'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>CEO</span>
-                          <StatusBadge status={sdRefunds[0]?.ceoRequired ? (sdRefunds[0]?.ceoStatus || 'Pending') : 'Skipped'} />
+                          <StatusBadge status={scopedSdRefunds[0]?.ceoRequired ? (scopedSdRefunds[0]?.ceoStatus || 'Pending') : 'Skipped'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>VR</span>
@@ -681,9 +699,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                           <StatusBadge status={data?.col_351 ? 'Completed' : 'Pending'} />
                         </span>
                       </div>
-                      {!sdFinalApproved(sdRefunds[0]) ? (
+                      {!sdFinalApproved(scopedSdRefunds[0]) ? (
                         <p className={styles.sectionHint}>
-                          Waiting for Stage 6 (SD Refunds) to clear its final required approval ({sdRefunds[0]?.ceoRequired ? 'CEO' : 'Accounts'}) before payment can proceed — see SD Refunds Approval for full detail.
+                          Waiting for Stage 6 (SD Refunds) to clear its final required approval ({scopedSdRefunds[0]?.ceoRequired ? 'CEO' : 'Accounts'}) before payment can proceed — see SD Refunds Approval for full detail.
                         </p>
                       ) : data?.col_348 !== 'Completed' ? (
                         <>
@@ -744,10 +762,10 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               )}
 
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
-                <div className={sdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
-                  {!sdRefunds ? (
+                <div className={scopedSdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
+                  {!scopedSdRefunds ? (
                     <p className={styles.sectionHint}>Loading…</p>
-                  ) : sdRefunds.length === 0 ? (
+                  ) : scopedSdRefunds.length === 0 ? (
                     <>
                       <p className={styles.savedTitle}>No SD Refund raised yet for {containerNo}</p>
                       <RefundSubmitForm
@@ -760,18 +778,18 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     </>
                   ) : (
                     <>
-                      <p className={styles.savedTitle}>SD Refund — {sdRefunds[0].vendorName || containerNo}</p>
+                      <p className={styles.savedTitle}>SD Refund — {scopedSdRefunds[0].vendorName || containerNo}</p>
                       <p className={styles.savedHint}>
-                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · Accounts: {sdRefunds[0].accountsStatus || 'Pending'} · CEO: {sdRefunds[0].ceoRequired ? (sdRefunds[0].ceoStatus || 'Pending') : 'Skipped'}
+                        HOD: {scopedSdRefunds[0].hodStatus || 'Pending'} · Accounts: {scopedSdRefunds[0].accountsStatus || 'Pending'} · CEO: {scopedSdRefunds[0].ceoRequired ? (scopedSdRefunds[0].ceoStatus || 'Pending') : 'Skipped'}
                       </p>
                       <p className={styles.savedHint}>
-                        {sdFinalApproved(sdRefunds[0])
+                        {sdFinalApproved(scopedSdRefunds[0])
                           ? 'Fully approved — FMS Closed (Stage 7) can now be completed.'
-                          : sdRefunds[0].currentStage === 'rejected'
+                          : scopedSdRefunds[0].currentStage === 'rejected'
                             ? 'Rejected — raise a new SD Refund for this container to proceed.'
-                            : `Still working through HOD → Accounts${sdRefunds[0].ceoRequired ? ' → CEO' : ''} — see SD Refunds Approval for full detail.`}
+                            : `Still working through HOD → Accounts${scopedSdRefunds[0].ceoRequired ? ' → CEO' : ''} — see SD Refunds Approval for full detail.`}
                       </p>
-                      <SdRefundDetails entry={sdRefunds[0]} />
+                      <SdRefundDetails entry={scopedSdRefunds[0]} />
                     </>
                   )}
                 </div>

@@ -163,7 +163,7 @@ function formFromDraft(draft) {
  * containers). `item` and `items` are mutually exclusive; bulk has no single
  * container's draft to pre-fill from, so it always starts blank.
  */
-export function CompleteDocumentModal({ open, item, items, queueProgress, submitting, error, onClose, onSubmit, onSave }) {
+export function CompleteDocumentModal({ open, item, items, submitting, error, onClose, onSubmit, onSave }) {
   const bulk = Array.isArray(items);
   const [form, setForm] = useState(() => (bulk ? EMPTY_FORM : formFromDraft(item?.draft)));
 
@@ -187,17 +187,7 @@ export function CompleteDocumentModal({ open, item, items, queueProgress, submit
     <Modal
       open={open}
       onClose={onClose}
-      title={
-        bulk ? `Update Agreement — ${items.length} containers`
-          // LeaseExpiryPage.jsx's "Renew (N)" button opens these ONE AT A
-          // TIME (never as `items`, see that file's startBulkRenew) —
-          // explicit report 2026-11-04 ("i am select the 7 container no
-          // pls chcek show 7 container no"): the modal gave no indication
-          // it was mid-sequence at all, just silently showing one container
-          // with nothing saying 6 more were queued behind it.
-          : queueProgress ? `Update Agreement — Container ${queueProgress.current} of ${queueProgress.total}`
-            : 'Update Agreement'
-      }
+      title={bulk ? `Update Agreement — ${items.length} containers` : 'Update Agreement'}
       width="540px"
     >
       <form onSubmit={handleSubmit} className={styles.form}>
@@ -211,13 +201,6 @@ export function CompleteDocumentModal({ open, item, items, queueProgress, submit
             <span className={styles.label}>Container</span>
             <input type="text" value={item.containerNo || ''} disabled />
           </label>
-        )}
-
-        {!bulk && queueProgress && queueProgress.total - queueProgress.current > 0 && (
-          <p className={styles.hint}>
-            {queueProgress.total - queueProgress.current} more container{queueProgress.total - queueProgress.current === 1 ? '' : 's'} will open
-            automatically after this one{queueProgress.remaining?.length ? `: ${queueProgress.remaining.join(', ')}` : ''}.
-          </p>
         )}
 
         {/* Explicit request 2026-09-29 (approval workflow), relabelled
