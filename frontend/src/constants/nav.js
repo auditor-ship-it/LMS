@@ -70,6 +70,13 @@ export const NAV_TREE = {
     // existing user's row to TRUE for it, so this doesn't silently vanish
     // for anyone the moment this ships (see _ensureSidebarHeaderWidth).
     { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency', path: ROUTES.OFF_LEASE_EFFICIENCY, icon: 'grid', sidebarKey: 'offLeaseEfficiency', section: 'Returns' },
+    // No sidebarKey — explicit new page 2026-11-04 ("Offlease New TAT
+    // Tracking System"); a nav item with no sidebarKey is always visible
+    // (see Sidebar.jsx's own doc comment) — simplest option, avoids a
+    // backend SIDEBAR_KEYS/permissions.config.js change + user backfill for
+    // a brand-new report page with no more sensitivity than what's already
+    // shown elsewhere in Off-Lease.
+    { key: 'offLeaseTat', label: 'TAT Tracking', path: ROUTES.OFF_LEASE_TAT, icon: 'clock', section: 'Returns' },
     // sidebarKey added 2026-10-01 (explicit request) — the matching
     // SIDEBAR_KEYS column already existed (added 2026-09-16) but was never
     // wired here or added to RELEVANT_SIDEBAR_KEYS, so it controlled nothing.

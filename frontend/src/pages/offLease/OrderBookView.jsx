@@ -34,7 +34,40 @@ import styles from './OrderBookView.module.css';
  *  the status pill beside them -- a completed or future chip is just as
  *  clickable as the current one, so any stage's record is one click away
  *  regardless of where the container actually is right now. */
-function buildChips(item, refundEntry) {
+/* Internal stage number (STAGES' own `.number`, from constants/stages.js) ->
+   offLeaseTatTracking.service.js's own TAT stage key — same mapping
+   offlease.controller.js's getContainerDetail uses (internalToTatKey) to
+   attach tatV2 to the Container History table. '1A'/'6A'/'6B'/'6C' have no
+   internal stage number of their own (approval gates, not pipeline stages),
+   matched by their literal key instead — see tatSuffix below. */
+const TAT_KEY_BY_INTERNAL = { 1: '1', 6: '2', 7: '3', 3: '4', 5: '5', 11: '6', 8: '7' };
+
+/** " · Entered 20-Jul-2026 06:11 PM · 9d 4h Early" — appended to a chip's
+ *  hover title, explicit request 2026-11-04 ("now this is stage show stage
+ *  wise entry stage and show dely only"): just the two fields asked for,
+ *  not the full Planned/Actual breakdown the dedicated TAT Tracking page
+ *  and Container History table already show. '' when this stage hasn't
+ *  been entered yet (tatCell is null for a still-Pending stage) or no TAT
+ *  record matched this record at all (tatRecord undefined). */
+function tatSuffix(tatRecord, tatKey) {
+  const t = tatRecord?.stages?.find((s) => s.key === tatKey);
+  if (!t?.entryAt) return '';
+  const entry = formatActionTimestamp(t.entryAt);
+  return t.delayLabel ? ` · Entered ${entry} · ${t.delayLabel}` : ` · Entered ${entry}`;
+}
+
+/** This record's TAT data for whatever stage statusOf's own `tatKey` says is
+ *  current — see statusOf's doc comment for why this trusts that single
+ *  source instead of independently re-deriving "current" from the TAT
+ *  data's own entry/actual pattern (which can disagree when a stage's TAT
+ *  sourcing — e.g. Stage 2's FMS match — never resolved even though the
+ *  real pipeline moved past it). */
+function currentTatStage(tatRecord, tatKey) {
+  if (!tatKey) return null;
+  return tatRecord?.stages?.find((s) => s.key === tatKey) || null;
+}
+
+function buildChips(item, refundEntry, tatRecord) {
   const [first, ...rest] = STAGES;
   const approval = String(item.approvalStatus || '').trim().toLowerCase();
   const stageOf = (n) => item.stages?.find((s) => s.stage === n);
@@ -44,7 +77,7 @@ function buildChips(item, refundEntry) {
     return {
       key: `s${stage.number}`,
       label: String(stage.display),
-      title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${formatActionTimestamp(s.timestamp)}`.trimEnd() : ' — pending'}`,
+      title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${formatActionTimestamp(s.timestamp)}`.trimEnd() : ' — pending'}${tatSuffix(tatRecord, TAT_KEY_BY_INTERNAL[stage.number])}`,
       tab: `stage${stage.number}`,
       stageNumber: stage.number,
       tone: s?.done ? 'done' : item.currentStageNum === stage.number ? 'current' : 'future'
@@ -54,7 +87,7 @@ function buildChips(item, refundEntry) {
   const gate = {
     key: 'gate',
     label: '1A',
-    title: `Stage 1A · Intimation Approval — ${approval || 'pending'}`,
+    title: `Stage 1A · Intimation Approval — ${approval || 'pending'}${tatSuffix(tatRecord, '1A')}`,
     tab: 'approval',
     tone: approval === 'approved' ? 'done'
       : approval === 'rejected' ? 'rejected'
@@ -78,7 +111,7 @@ function buildChips(item, refundEntry) {
   const sdHod = {
     key: 'sdHod',
     label: '6A',
-    title: `Stage 6A · HOD Approval — ${hodStatus || 'pending'}`,
+    title: `Stage 6A · HOD Approval — ${hodStatus || 'pending'}${tatSuffix(tatRecord, '6A')}`,
     tab: 'sdRefundsHod',
     tone: hodStatus === 'approved' ? 'done'
       : hodStatus === 'rejected' ? 'rejected'
@@ -87,7 +120,7 @@ function buildChips(item, refundEntry) {
   const sdAccounts = {
     key: 'sdAccounts',
     label: '6B',
-    title: `Stage 6B · Accounts Approval — ${accountsStatus || 'pending'}`,
+    title: `Stage 6B · Accounts Approval — ${accountsStatus || 'pending'}${tatSuffix(tatRecord, '6B')}`,
     tab: 'sdRefundsAccounts',
     tone: accountsStatus === 'approved' ? 'done'
       : accountsStatus === 'rejected' ? 'rejected'
@@ -104,7 +137,7 @@ function buildChips(item, refundEntry) {
   const sdCeo = {
     key: 'sdCeo',
     label: '6C',
-    title: `Stage 6C · CEO Approval — ${ceoResolved ? 'skipped' : (ceoStatus || 'pending')}`,
+    title: `Stage 6C · CEO Approval — ${ceoResolved ? 'skipped' : (ceoStatus || 'pending')}${tatSuffix(tatRecord, '6C')}`,
     tab: 'sdRefundsCeo',
     tone: ceoResolved ? 'done'
       : ceoStatus === 'approved' ? 'done'
@@ -120,7 +153,18 @@ function buildChips(item, refundEntry) {
   return chips;
 }
 
-/** Status pill wording and tone, and which tab owns acting on it. */
+/** Status pill wording and tone, and which tab owns acting on it. Also
+ *  returns `tatKey` — the SAME stage this label is reporting on, expressed
+ *  as offLeaseTatTracking.service.js's own key, so currentTatStage (below)
+ *  can show that exact stage's Entry/TAT/Delay instead of independently
+ *  re-deriving "which stage is current" from the TAT data's own entry/
+ *  actual pattern — BUG FOUND AND FIXED 2026-11-04 (live on GSOU6384240/
+ *  OF0004): that independent approach picked Stage 2/Transportation (its
+ *  own FMS match never fully resolved, so TAT still read it as "open") even
+ *  though the record had genuinely moved on to Stage 6 already — the chip
+ *  row and this status pill already agree on "where it actually is" via
+ *  item.currentStageNum/refundEntry; trust that single source instead of a
+ *  second, divergent one. */
 function statusOf(item, refundEntry) {
   /* The off-lease row alone cannot say whether the SD Refund has been signed
      off — that lives in the refunds sheet. So a record the pipeline calls done
@@ -132,20 +176,21 @@ function statusOf(item, refundEntry) {
     const ceo = String(refundEntry.ceoStatus || '').trim().toLowerCase();
     if (hod === 'rejected' || accounts === 'rejected' || (refundEntry.ceoRequired && ceo === 'rejected')) {
       const which = hod === 'rejected' ? 'HOD' : accounts === 'rejected' ? 'Accounts' : 'CEO';
-      return { label: `SD refund rejected (${which})`, tone: 'danger', tab: null };
+      return { label: `SD refund rejected (${which})`, tone: 'danger', tab: null, tatKey: null };
     }
-    if (hod !== 'approved') return { label: 'Stage 6A · HOD approval pending', tone: 'warn', tab: 'sdRefundsHod' };
-    if (accounts !== 'approved') return { label: 'Stage 6B · Accounts approval pending', tone: 'warn', tab: 'sdRefundsAccounts' };
-    if (refundEntry.ceoRequired && ceo !== 'approved') return { label: 'Stage 6C · CEO approval pending', tone: 'warn', tab: 'sdRefundsCeo' };
+    if (hod !== 'approved') return { label: 'Stage 6A · HOD approval pending', tone: 'warn', tab: 'sdRefundsHod', tatKey: '6A' };
+    if (accounts !== 'approved') return { label: 'Stage 6B · Accounts approval pending', tone: 'warn', tab: 'sdRefundsAccounts', tatKey: '6B' };
+    if (refundEntry.ceoRequired && ceo !== 'approved') return { label: 'Stage 6C · CEO approval pending', tone: 'warn', tab: 'sdRefundsCeo', tatKey: '6C' };
   }
   switch (item.stageClass) {
-    case 'approval': return { label: 'Pending approval', tone: 'warn', tab: 'approval' };
-    case 'rejected': return { label: 'Rejected', tone: 'danger', tab: null };
-    case 'done': return { label: 'Released', tone: 'success', tab: null };
+    case 'approval': return { label: 'Pending approval', tone: 'warn', tab: 'approval', tatKey: '1A' };
+    case 'rejected': return { label: 'Rejected', tone: 'danger', tab: null, tatKey: null };
+    case 'done': return { label: 'Released', tone: 'success', tab: null, tatKey: null };
     default: return {
       label: item.currentStage || 'In progress',
       tone: 'info',
-      tab: item.currentStageNum ? `stage${item.currentStageNum}` : null
+      tab: item.currentStageNum ? `stage${item.currentStageNum}` : null,
+      tatKey: item.currentStageNum ? TAT_KEY_BY_INTERNAL[item.currentStageNum] : null
     };
   }
 }
@@ -367,7 +412,7 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows }) {
+export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows, tatRecords }) {
   const { canAct } = usePermission();
   /* Which record+stage's own form is open, or null. Distinct from
      onOpenRecord (the read-only all-stage history modal) -- this is the
@@ -436,6 +481,25 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     return counts;
   }, [items]);
 
+  /* Same composite container+Lease-ID matching as refundByContainer above
+     (see that block's own doc comment for the cross-lease bug this guards
+     against) — tatRecords (offLeaseTatTracking.service.js's own records,
+     one per Off-Lease Tracking row) each already carry their own
+     containerNo/leaseId, so no "isBetter" merge is needed, just a direct
+     composite key. */
+  const tatByContainer = useMemo(() => {
+    const byComposite = new Map();
+    const byContainerSingle = new Map();
+    for (const r of tatRecords || []) {
+      const container = String(r.containerNo || '').trim().toUpperCase();
+      if (!container) continue;
+      const leaseId = String(r.leaseId || '').trim().toUpperCase();
+      if (leaseId) byComposite.set(`${container}|${leaseId}`, r);
+      if (!byContainerSingle.has(container)) byContainerSingle.set(container, r);
+    }
+    return { byComposite, byContainerSingle };
+  }, [tatRecords]);
+
   const rows = useMemo(() => items.map((it) => {
     const container = String(it.container || '').trim().toUpperCase();
     const leaseId = String(it.leaseId || '').trim().toUpperCase();
@@ -443,8 +507,13 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     if (!refundEntry && itemsByContainerCount.get(container) === 1) {
       refundEntry = refundByContainer.byContainerSingle.get(container);
     }
-    return { it, chips: buildChips(it, refundEntry), status: statusOf(it, refundEntry) };
-  }), [items, refundByContainer, itemsByContainerCount]);
+    let tatRecord = leaseId ? tatByContainer.byComposite.get(`${container}|${leaseId}`) : undefined;
+    if (!tatRecord && itemsByContainerCount.get(container) === 1) {
+      tatRecord = tatByContainer.byContainerSingle.get(container);
+    }
+    const status = statusOf(it, refundEntry);
+    return { it, chips: buildChips(it, refundEntry, tatRecord), status, currentTat: currentTatStage(tatRecord, status.tatKey) };
+  }), [items, refundByContainer, itemsByContainerCount, tatByContainer]);
 
   if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
@@ -455,7 +524,7 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
   return (
     <>
       <div className={styles.book}>
-      {rows.map(({ it, chips, status }) => (
+      {rows.map(({ it, chips, status, currentTat }) => (
         <div
           className={styles.row}
           key={`${it.leaseId || ''}-${it.container}`}
@@ -480,7 +549,22 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
           </div>
 
           <div className={styles.mainCol}>
-            <div className={styles.client}><Highlight text={it.clientName || 'Unknown client'} query={highlight} /></div>
+            <div className={styles.clientRow}>
+              <div className={styles.client}><Highlight text={it.clientName || 'Unknown client'} query={highlight} /></div>
+              {/* Moved here from below the chips — explicit follow-up
+                  2026-11-04 ("top client name right side the tat"): same
+                  Entry/TAT/Delay text, now beside the client name instead
+                  of its own line under the stage chips. */}
+              {currentTat?.entryAt && (
+                <span className={styles.currentTat}>
+                  {currentTat.budgetLabel && <>TAT {currentTat.budgetLabel} · </>}
+                  Entered {formatActionTimestamp(currentTat.entryAt)}
+                  {currentTat.delayLabel && (
+                    <> · <span className={currentTat.status === 'Delayed' ? styles.currentTatLate : styles.currentTatOk}>{currentTat.delayLabel}</span></>
+                  )}
+                </span>
+              )}
+            </div>
             {/* Spec, code and location on one line — three short values on
                 three lines left a column of white space beside them. */}
             <div className={styles.meta}>

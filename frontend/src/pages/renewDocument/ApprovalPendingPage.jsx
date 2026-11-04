@@ -101,7 +101,7 @@ export function ApprovalPendingPage() {
       <Card>
         <DataGrid
           className={styles.vTable}
-          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft Other File', 'Draft Agreement Value', 'Draft PO No', 'Draft PO Renew Date', 'Draft PO Validity', 'Draft PO Value', 'Draft PO PDF', 'Draft Billing Cycle']}
+          headers={[...tableHeaders, 'Submitted Date', 'Submitted By', 'Draft Renewed Date', 'Draft Valid Till', 'Draft Signed Copy', 'Draft Other File', 'Draft Agreement Value', 'Draft PO No', 'Draft PO Renew Date', 'Draft PO Validity', 'Draft PO Value', 'Draft PO PDF', 'Draft Billing Cycle', 'Draft Remarks']}
           rows={rows}
           loading={loading}
           error={error}
@@ -128,7 +128,17 @@ export function ApprovalPendingPage() {
             <td key="dpoval">{item.draftPoValidity || '—'}</td>,
             <td key="dpoamt">{item.draftPoValue || '—'}</td>,
             <td key="dpopdf">{renderCellValue(item.draftPoFileUrl)}</td>,
-            <td key="dbc">{item.draftBillingCycle || '—'}</td>
+            <td key="dbc">{item.draftBillingCycle || '—'}</td>,
+            // BUG FOUND AND FIXED 2026-11-04 ("baki data dikh nahi raha hai"
+            // — "the rest of the data isn't showing"): most of CAIU5422720's
+            // Draft fields really were left blank by the submitter, but
+            // their Draft Remarks explaining WHY ("Customer has provided
+            // only PO for Sep 2026, following up on Oct/Nov...") was already
+            // sitting in item.draftRemarks (expiry.service.js's own
+            // 'approval' read block) and simply never rendered anywhere
+            // Pushpa could see it — so the blanks looked unexplained/broken
+            // instead of a legitimate partial submission.
+            <td key="drem">{item.draftRemarks || '—'}</td>
           ]}
           renderActions={(item) => (
             canApprove ? (

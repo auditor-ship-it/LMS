@@ -87,6 +87,13 @@ export const getOffLeaseDashboardData = () => apiClient.get('/offlease/dashboard
 /** GET /api/offlease/efficiency — per-stage SLA/TAT performance, bottleneck ranking, throughput, owner performance. */
 export const getOffLeaseEfficiencyData = () => apiClient.get('/offlease/efficiency').then((r) => r.data);
 
+/** GET /api/offlease/tat-report — every Off-Lease Tracking record's full
+ *  11-stage Entry/Planned/Actual/Delay breakdown (TAT Tracking page), or one
+ *  record when `containerNo` (optionally with `leaseId`) is given. */
+export const getOffLeaseTatReport = (containerNo, leaseId) => apiClient
+  .get('/offlease/tat-report', { params: { container: containerNo || undefined, leaseId: leaseId || undefined } })
+  .then((r) => r.data);
+
 /* ---- Dashboard live remarks ---- */
 
 /** GET /api/offlease/:containerNo/remarks — full thread, newest first.

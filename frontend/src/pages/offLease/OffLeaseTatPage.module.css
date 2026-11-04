@@ -1,0 +1,84 @@
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.toolbar > :first-child { flex: 1; min-width: 220px; }
+.summary { font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.summaryDelayed { color: var(--error); }
+
+.recordCard { padding: 0; margin-bottom: 10px; overflow: hidden; }
+
+.recordHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.recordHeader:hover { background: var(--surface-2); }
+
+.chevron { color: var(--text-3); width: 14px; flex: none; }
+.container { font-weight: 800; font-size: 13.5px; color: var(--text); }
+.leaseTag {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.client { font-size: 12.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.spacer { flex: 1; }
+.metaItem { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.overdueBadge {
+  padding: 3px 10px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--error) 14%, var(--surface));
+  color: var(--error);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.tableWrap { overflow-x: auto; border-top: 1px solid var(--line); }
+.stageTable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.stageTable th {
+  text-align: left;
+  padding: 8px 14px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+.stageTable td { padding: 9px 14px; border-top: 1px solid var(--line); white-space: nowrap; }
+.stageCell strong { color: var(--text); margin-right: 5px; }
+.rowDelayed { background: color-mix(in srgb, var(--error) 6%, transparent); }
+.delayText { color: var(--error); font-weight: 700; }
+.muted { color: var(--text-3); font-style: italic; }
+
+.statusPill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--r-full);
+  font-size: 11px;
+  font-weight: 700;
+}
+.statusCompleted { background: color-mix(in srgb, var(--success) 16%, var(--surface)); color: var(--success); }
+.statusDelayed { background: color-mix(in srgb, var(--error) 16%, var(--surface)); color: var(--error); }
+.statusInProgress { background: color-mix(in srgb, var(--warn) 16%, var(--surface)); color: var(--warn); }
+.statusPending { background: var(--surface-2); color: var(--text-3); }
+.statusSkipped { background: var(--surface-2); color: var(--text-3); }
+
+.emptyCard { padding: 28px; text-align: center; color: var(--text-2); }

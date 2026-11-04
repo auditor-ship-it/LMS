@@ -9,6 +9,7 @@ export const ROUTES = {
   OFF_LEASE: '/off-lease',
   OFF_LEASE_RECORD: '/off-lease/record',
   OFF_LEASE_EFFICIENCY: '/off-lease-efficiency',
+  OFF_LEASE_TAT: '/off-lease-tat',
   DEPLOYED_SUMMARY: '/deployed-summary',
   PO_AGREEMENT_TRACKER: '/po-agreement-tracker',
   OFF_LEASE_SOP: '/off-lease-sop',

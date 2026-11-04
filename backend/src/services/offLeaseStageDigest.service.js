@@ -44,7 +44,7 @@ import { logger } from '../utils/logger.js';
  * matched via stageClass === 'approval' instead, see buildOffLeaseStageGroups. */
 const DISPLAY_TO_INTERNAL = { 1: 1, 2: 6, 3: 7, 4: 3, 5: 5, 6: 11 };
 
-const STAGE_OWNERS = {
+export const STAGE_OWNERS = {
   1: { email: 'crm@crystalgroup.in', label: 'Stage 1 (Off-Lease Intimation)' },
   '1A': { email: 'pushpa.shetty@crystalgroup.in', label: 'Stage 1A (Intimation Approval)' },
   2: { email: 'kshirod.khatua@crystalgroup.in', label: 'Stage 2 (Transportation)' },

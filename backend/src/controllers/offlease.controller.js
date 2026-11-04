@@ -7,6 +7,7 @@ import * as stage8Service from '../services/stage8.service.js';
 import * as stage3FormService from '../services/stage3Form.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
 import { getOffLeaseEfficiencyReport } from '../services/offleaseEfficiency.service.js';
+import { getOffLeaseTatReport } from '../services/offLeaseTatTracking.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
@@ -448,6 +449,43 @@ export async function getContainerDetail(req, res) {
       } catch (e) { /* timers are additive — never fail the lookup over them */ }
     }
 
+    /* New TAT Tracking engine (offLeaseTatTracking.service.js) — explicit
+       request 2026-11-04 ("pls add the kab stage mai aaya kab form filled
+       kiya kitna dely hua aur kitna jaldi yah table pe show hoga", then
+       "showw tata and actual and dely this history"): the Container History
+       tab's own SLA column above uses offleaseSla.service.js's older,
+       narrower budgets (e.g. a flat 1h for every stage) and produces
+       confusing numbers like "106d 19h of 2d · 104d 19h late" — this
+       attaches the SAME Entry/Planned/Actual/Delay data the new TAT
+       Tracking page shows, scoped to this one container+lease, additive
+       (never replaces detail.stages' own .sla — see the block above) so
+       LookupResult.jsx's HistoryTable can read it alongside what's already
+       there. Named tatV2 to keep it unambiguous from the older .tat shape
+       attachStageTat attaches elsewhere (stage-queue pages, a different
+       shape entirely). internalToTatKey mirrors OL_ACTIVE_STAGE_NUMS'
+       exact internal-stage-number -> display-stage mapping. */
+    if (detail.container) {
+      try {
+        const tatReport = await getOffLeaseTatReport({ containerNo: detail.container, leaseId: detail.leaseId, user: req.user });
+        const record = tatReport.records[0];
+        if (record) {
+          const tatByKey = new Map(record.stages.map((s) => [s.key, s]));
+          const internalToTatKey = { 1: '1', 6: '2', 7: '3', 3: '4', 5: '5', 11: '6', 8: '7' };
+          for (const s of detail.stages || []) {
+            const tatKey = internalToTatKey[s.stage];
+            if (tatKey && tatByKey.has(tatKey)) s.tatV2 = tatByKey.get(tatKey);
+          }
+          detail.gateTatV2 = tatByKey.get('1A') || null;
+          detail.refundTatV2 = { '6A': tatByKey.get('6A') || null, '6B': tatByKey.get('6B') || null, '6C': tatByKey.get('6C') || null };
+          detail.tatTotals = {
+            plannedTotalLabel: record.plannedTotalLabel,
+            actualTotalLabel: record.actualTotalLabel,
+            overdueStageCount: record.overdueStageCount
+          };
+        }
+      } catch (e) { /* additive, same reasoning as the SLA block above */ }
+    }
+
     const f = detail.fms;
     const s2 = (detail.stages || []).find((s) => s.stage === STAGE2_INTERNAL);
     if (f?.movement && f?.transport && f?.delivery && s2) {
@@ -500,6 +538,18 @@ export async function getContainerDetail(req, res) {
  *  breakdown for clients outside their own scope. */
 export async function getEfficiencyData(req, res) {
   res.json(await getOffLeaseEfficiencyReport(req.user));
+}
+
+/** TAT (Turnaround Time) Tracking report — explicit spec 2026-11-04. Every
+ *  Off-Lease Tracking record's full Entry/Planned/Actual/Delay breakdown
+ *  across all 11 stages, or one record when ?container= (and optionally
+ *  ?leaseId=) is given — same query shape the container detail lookup uses. */
+export async function getTatReport(req, res) {
+  res.json(await getOffLeaseTatReport({
+    containerNo: req.query.container || undefined,
+    leaseId: req.query.leaseId || undefined,
+    user: req.user
+  }));
 }
 
 export async function getDashboardData(req, res) {

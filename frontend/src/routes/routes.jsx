@@ -10,6 +10,7 @@ const ApprovalPendingPage = lazy(() => import('../pages/renewDocument/ApprovalPe
 const OffLeasePage = lazy(() => import('../pages/offLease/OffLeasePage.jsx').then((m) => ({ default: m.OffLeasePage })));
 const ContainerDetailPage = lazy(() => import('../pages/offLease/ContainerDetailPage.jsx').then((m) => ({ default: m.ContainerDetailPage })));
 const OffLeaseEfficiencyPage = lazy(() => import('../pages/offLease/OffLeaseEfficiencyPage.jsx').then((m) => ({ default: m.OffLeaseEfficiencyPage })));
+const OffLeaseTatPage = lazy(() => import('../pages/offLease/OffLeaseTatPage.jsx').then((m) => ({ default: m.OffLeaseTatPage })));
 const DeployedSummaryPage = lazy(() => import('../pages/deployedSummary/DeployedSummaryPage.jsx').then((m) => ({ default: m.DeployedSummaryPage })));
 const PoAgreementTrackerPage = lazy(() => import('../pages/poAgreementTracker/PoAgreementTrackerPage.jsx').then((m) => ({ default: m.PoAgreementTrackerPage })));
 const OffLeaseSopPage = lazy(() => import('../pages/sop/DriveEmbedPage.jsx').then((m) => ({ default: m.OffLeaseSopPage })));
@@ -43,6 +44,7 @@ export const APP_ROUTES = [
   { path: ROUTES.OFF_LEASE, element: OffLeasePage },
   { path: ROUTES.OFF_LEASE_RECORD, element: ContainerDetailPage },
   { path: ROUTES.OFF_LEASE_EFFICIENCY, element: OffLeaseEfficiencyPage },
+  { path: ROUTES.OFF_LEASE_TAT, element: OffLeaseTatPage },
   { path: ROUTES.DEPLOYED_SUMMARY, element: DeployedSummaryPage },
   { path: ROUTES.PO_AGREEMENT_TRACKER, element: PoAgreementTrackerPage },
   { path: ROUTES.OFF_LEASE_SOP, element: OffLeaseSopPage },
