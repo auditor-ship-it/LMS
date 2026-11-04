@@ -7,6 +7,16 @@ import styles from './RefundsPage.module.css';
 
 const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx';
 
+/* "SD Amounts to be Refunded" file upload REMOVED 2026-11-03 (explicit
+   request) — attachmentsFile/attachmentsUrl dropped from this form's own
+   state/submit payload entirely. The sheet column and old entries' data
+   are untouched (addRefundEntry still writes safeStr(payload.attachmentsUrl)
+   — now always blank for new rows, same "stop collecting, don't touch the
+   column" pattern this file already used for Invoice Number/Date etc.),
+   and it still displays read-only for old rows wherever it already did
+   (RefundsApprovalPage.jsx, SdRefundApprovalTab.jsx, RefundReviewPage.jsx)
+   — only the submission field is gone. */
+
 /* Ledger Head/Department are fixed, not user-chosen — explicit request
    2026-10-01: this form is Security Deposit refunds only, and "Operation"
    was Department's only real dropdown choice already. */
@@ -52,7 +62,7 @@ export function makeEmptyForm(containerNo = '', vendorName = '', invoiceAmount =
     vendorName,
     invoiceAmount, amountToPay: '', paymentDueDate: addDays(todayStr(), 7),
     cancelledChequeFile: null, clientEmailConfirmationFile: null, clientLedgerFile: null,
-    invoiceFile: null, piFile: null, attachmentsFile: null
+    invoiceFile: null, piFile: null
   };
 }
 
@@ -111,10 +121,9 @@ export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientN
     setSubmitting(true);
     setSubmitError('');
     try {
-      const [invoiceFileUrl, piFileUrl, attachmentsUrl, cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl] = await Promise.all([
+      const [invoiceFileUrl, piFileUrl, cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl] = await Promise.all([
         form.invoiceFile ? uploadStageFile(form.invoiceFile) : '',
         form.piFile ? uploadStageFile(form.piFile) : '',
-        form.attachmentsFile ? uploadStageFile(form.attachmentsFile) : '',
         form.cancelledChequeFile ? uploadStageFile(form.cancelledChequeFile) : '',
         form.clientEmailConfirmationFile ? uploadStageFile(form.clientEmailConfirmationFile) : '',
         form.clientLedgerFile ? uploadStageFile(form.clientLedgerFile) : ''
@@ -129,7 +138,7 @@ export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientN
         paymentDueDate: form.paymentDueDate,
         ledgerHead: FIXED_LEDGER_HEAD,
         department: FIXED_DEPARTMENT,
-        invoiceFileUrl, piFileUrl, attachmentsUrl,
+        invoiceFileUrl, piFileUrl,
         cancelledChequeUrl, clientEmailConfirmationUrl, clientLedgerUrl
       });
       setForm(makeEmptyForm(lockedContainerNo || ''));
@@ -224,14 +233,6 @@ export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientN
             label={form.piFile ? `Selected: ${form.piFile.fileName}` : 'Choose quarterly ledger file'}
             accept={ACCEPT}
             onSelected={(file) => setForm((f) => ({ ...f, piFile: file }))}
-          />
-        </label>
-        <label className={styles.field}>
-          <span className={styles.label}>SD Amounts to be Refunded</span>
-          <FileUpload
-            label={form.attachmentsFile ? `Selected: ${form.attachmentsFile.fileName}` : 'Choose SD amounts to be refunded file'}
-            accept={ACCEPT}
-            onSelected={(file) => setForm((f) => ({ ...f, attachmentsFile: file }))}
           />
         </label>
       </div>

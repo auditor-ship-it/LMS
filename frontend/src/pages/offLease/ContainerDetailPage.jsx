@@ -168,10 +168,21 @@ export function ContainerDetailPage({ isActive }) {
       : refund.hodStatus !== 'Approved' ? '6a'
         : refund.accountsStatus !== 'Approved' ? '6b'
           : (refund.ceoRequired && refund.ceoStatus !== 'Approved') ? '6c' : null;
+  /* BUG FOUND AND FIXED 2026-11-04 (explicit spec: "Never skip CEO approval
+     before Accounts approval is completed"): `ceoRequired` is known the
+     moment a refund is submitted (it's just a threshold check on Amount to
+     Pay), so "Skipped" used to render here the instant that was known —
+     live-confirmed showing 6C as Skipped while 6A was still sitting
+     Pending. The backend itself was always correct (refunds.service.js's
+     decideRefundApproval only writes the literal 'Skipped' status once
+     Accounts has actually approved) — this was a frontend-only display bug
+     across every place that read `ceoRequired` alone. `ceoResolved` is the
+     one additional condition every one of those sites now requires. */
+  const ceoResolved = (r) => r && r.ceoRequired === false && r.accountsStatus === 'Approved';
   const REFUND_STAGE_META = {
     hod: { label: 'HOD approval', display: '6A', status: (r) => r?.hodStatus },
     accounts: { label: 'Accounts approval', display: '6B', status: (r) => r?.accountsStatus },
-    ceo: { label: 'CEO approval', display: '6C', status: (r) => (r?.ceoRequired === false ? 'Skipped' : r?.ceoStatus) }
+    ceo: { label: 'CEO approval', display: '6C', status: (r) => (ceoResolved(r) ? 'Skipped' : r?.ceoStatus) }
   };
   // 6A / 6B / 6C open their decision panel in the same place the stage forms do.
   const openRefund = (which) => {
@@ -330,20 +341,27 @@ export function ContainerDetailPage({ isActive }) {
                         // 6C stays on the board even when this bill's amount
                         // doesn't call for CEO — explicit request: "stage
                         // remove mat karo, status skipped hoga" (don't remove
-                        // the stage, show it Skipped instead). Shown as
-                        // Skipped the moment ceoRequired is known false (the
-                        // amount alone decides this, before Accounts even
-                        // acts) — backend only writes the literal 'Skipped'
-                        // once Accounts approves, so this falls back to a
-                        // same-wording preview until then.
-                        const ceoNotApplicable = refund && refund.ceoRequired === false;
-                        const ceoStatus = ceoNotApplicable ? 'Skipped' : refund?.ceoStatus;
-                        const ceoRemarks = ceoNotApplicable ? (refund?.ceoRemarks || 'Amount to Pay is ₹1,00,000 or below — CEO approval not required.') : refund?.ceoRemarks;
+                        // the stage, show it Skipped instead).
+                        // BUG FOUND AND FIXED 2026-11-04 (explicit spec:
+                        // "Never skip CEO approval before Accounts approval
+                        // is completed") — this used to show Skipped the
+                        // moment ceoRequired was known false (the amount
+                        // alone decides that, available immediately at
+                        // submission, before Accounts has acted at all);
+                        // live-confirmed showing 6C as Skipped while 6A was
+                        // still Pending. ceoResolved (above) additionally
+                        // requires accountsStatus === 'Approved' — until
+                        // then this card falls through to its normal
+                        // waiting/Pending state, same as 6B's own "Waiting
+                        // for HOD approval first".
+                        const ceoDone = ceoResolved(refund);
+                        const ceoStatus = ceoDone ? 'Skipped' : refund?.ceoStatus;
+                        const ceoRemarks = ceoDone ? (refund?.ceoRemarks || 'Amount to Pay is ₹1,00,000 or below — CEO approval not required.') : refund?.ceoRemarks;
                         return [
                           card,
                           <ApprovalCard key="6a" onOpen={() => openRefund('hod')} current={approvalCurrent === '6a'} id="stage-card-6a" label="Stage 6A" title="HOD approval" status={refund?.hodStatus} by={refund?.hodApprover} on={refund?.hodDate} remarks={refund?.hodRemarks} submitted={!!refund} />,
-                          <ApprovalCard key="6b" onOpen={() => openRefund('accounts')} current={approvalCurrent === '6b'} id="stage-card-6b" label="Stage 6B" title="Accounts approval" status={refund?.accountsStatus} by={refund?.accountsApprover} on={refund?.accountsDate} remarks={refund?.accountsRemarks} submitted={!!refund} waiting={refund && refund.hodStatus !== 'Approved'} />,
-                          <ApprovalCard key="6c" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6c'} id="stage-card-6c" label="Stage 6C" title="CEO approval" status={ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={ceoRemarks} submitted={!!refund} waiting={!ceoNotApplicable && refund && refund.accountsStatus !== 'Approved'} />
+                          <ApprovalCard key="6b" onOpen={() => openRefund('accounts')} current={approvalCurrent === '6b'} id="stage-card-6b" label="Stage 6B" title="Accounts approval" status={refund?.accountsStatus} by={refund?.accountsApprover} on={refund?.accountsDate} remarks={refund?.accountsRemarks} submitted={!!refund} waiting={refund && refund.hodStatus !== 'Approved' ? 'Waiting for HOD approval first.' : null} />,
+                          <ApprovalCard key="6c" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6c'} id="stage-card-6c" label="Stage 6C" title="CEO approval" status={ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={ceoRemarks} submitted={!!refund} waiting={!ceoDone && refund && refund.accountsStatus !== 'Approved' ? 'Waiting for Accounts approval first.' : null} />
                         ];
                       })}
                       {col.key === 'intimation' && (
@@ -415,11 +433,10 @@ export function ContainerDetailPage({ isActive }) {
                karo"): a bill whose amount doesn't call for CEO shows 'Skipped'
                there instead of disappearing. */
             if (s.stage === SD_REFUNDS_INTERNAL) {
-              const ceoNotApplicable = refund && refund.ceoRequired === false;
               const dotDefs = [
                 ['6A', 'hod', 'HOD', refund?.hodStatus],
                 ['6B', 'accounts', 'Accounts', refund?.accountsStatus],
-                ['6C', 'ceo', 'CEO', ceoNotApplicable ? 'Skipped' : refund?.ceoStatus]
+                ['6C', 'ceo', 'CEO', ceoResolved(refund) ? 'Skipped' : refund?.ceoStatus]
               ];
               const extra = dotDefs.map(([label, which, who, status]) => (
                   <button
@@ -547,7 +564,13 @@ function ApprovalCard({ id, label, title, status, by, on, remarks, submitted, wa
       </div>
       {!submitted && <div className={styles.meta}>No SD refund submitted yet.</div>}
       {submitted && state === 'Pending' && (
-        <div className={styles.meta}>{waiting ? 'Waiting for HOD approval first.' : 'Awaiting decision.'}</div>
+        // BUG FOUND AND FIXED 2026-11-04: this text used to be hardcoded to
+        // "Waiting for HOD approval first." regardless of which card it was
+        // on — harmless while only 6B ever passed `waiting`, but wrong the
+        // moment 6C started passing it too (it's waiting on Accounts, not
+        // HOD). `waiting` is now the actual message string (or falsy), not
+        // a plain boolean — see 6B/6C's own call sites.
+        <div className={styles.meta}>{waiting || 'Awaiting decision.'}</div>
       )}
       {(by || on) && <div className={styles.meta}>{[on, by].filter(Boolean).join(' · ')}</div>}
       {remarks && (

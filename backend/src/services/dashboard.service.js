@@ -173,7 +173,7 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   // link) but never the actual PO Number or its own valid-till date.
   // Resolved by header (same helper getExpiryDataByFilter/completeDocStage
   // use), not a hardcoded index — this sheet's columns have shifted before.
-  const { poCol, poValidityCol } = _resolveRenewalColumns(values[0] || []);
+  const { poCol, poValidityCol, cycleCol } = _resolveRenewalColumns(values[0] || []);
   // "Last Updated" / recently-changed flag — explicit request 2026-10-27
   // ("jo bhi edit hua hai usko highlight kar do... mai 10 din tak update
   // kiya uske baad download kiya tho woh highlight hona chahiye"): this
@@ -236,6 +236,7 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
       validUpto: safeStr(row[7]),    // H = Valid Upto
       rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate
       billingType: safeStr(row[16]), // Q = Billing Type
+      billingCycle: safeStr(row[cycleCol]),
       agreementUrl: safeStr(row[8]), // I = Agreement PDF
       poNo: safeStr(row[poCol]),
       poValidity: safeStr(row[poValidityCol]),
@@ -287,7 +288,7 @@ export async function getOffLeasedWithFinalBillingDue(monthLabel) {
   const deployedRows = values.slice(1);
   if (!deployedRows.length) return { containers: [] };
 
-  const { poCol, poValidityCol } = _resolveRenewalColumns(values[0] || []);
+  const { poCol, poValidityCol, cycleCol } = _resolveRenewalColumns(values[0] || []);
   const ordMap = await _expiryOrderNoMap();
 
   // Container No (col 0) -> Final Billing Date (col 13, "Final Billing
@@ -337,6 +338,7 @@ export async function getOffLeasedWithFinalBillingDue(monthLabel) {
       validUpto: safeStr(row[7]),    // H = Valid Upto
       rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate (Deployed sheet's own col 13 — unrelated to Off-Lease Tracking's own col 13 used above)
       billingType: safeStr(row[16]), // Q = Billing Type
+      billingCycle: safeStr(row[cycleCol]),
       agreementUrl: safeStr(row[8]), // I = Agreement PDF
       poNo: safeStr(row[poCol]),
       poValidity: safeStr(row[poValidityCol]),

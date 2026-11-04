@@ -25,15 +25,19 @@ export const SUMMARY_GROUPS = [
   ['closing', 'Closing Deployed'],
 ];
 
+/* Rate/Billing Cycle added 2026-11-03 (explicit request: "deployed sheet
+   add the Rate, billing cycle, location") — Location was already here;
+   Rate is a deliberate exception to isRateOrAmountHeader's system-wide
+   hiding, same precedent as expiry.service.js's own DRAFT_PO_VALUE_COL. */
 const CONTAINER_HEADERS = [
   'Container', 'Order No', 'Client Code', 'Client Name', 'Size', 'Type',
-  'Billing Type', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement', 'Last Updated', 'Final Billing Date'
+  'Billing Type', 'Billing Cycle', 'Rate', 'PO No', 'PO Validity', 'Agreement PDF', 'PO PDF', 'Location', 'Deployed Date', 'Valid Upto', 'Movement', 'Last Updated', 'Final Billing Date'
 ];
 
 function containerToRow(c) {
   return [
     c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type,
-    c.billingType, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement || '', c.lastUpdated, c.finalBillingDate || ''
+    c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement || '', c.lastUpdated, c.finalBillingDate || ''
   ];
 }
 
@@ -49,27 +53,63 @@ function safeSheetName(name) {
   return String(name || 'Unspecified').replace(/[\\/?*[\]:]/g, '-').slice(0, 31) || 'Unspecified';
 }
 
-/** Default per-row fill: yellow for a recent app-side update, red for an
- *  off-leased container still due Final Billing — see getDeployedDetailData/
- *  getOffLeasedWithFinalBillingDue's own doc comments. Used by the main
- *  "Deployed Containers" sheet and the All-Categories Opening/Closing
- *  sheets; Addition/Deletion/Net below use a DIFFERENT scheme instead (see
+/** Default per-row fill: red for an off-leased container still due Final
+ *  Billing — see getOffLeasedWithFinalBillingDue's own doc comment. Used by
+ *  the main "Deployed Containers" sheet and the per-Billing-Type sheets;
+ *  Addition/Deletion/Net below use a DIFFERENT scheme instead (see
  *  buildMonthAllCategoriesExcel) — explicit request 2026-10-27 ("offlease
  *  red col karo and jo new lease green col row hona chahiye hai"): every
  *  row on the Addition sheet IS a new lease (flat green), every row on
  *  Deletion IS an off-lease (flat red) — their own sheet identity already
- *  says so, so per-row yellow/red there would be redundant/confusing. */
+ *  says so, so per-row yellow/red there would be redundant/confusing.
+ *
+ *  A "recent app-side update" (c.recentlyUpdated) is NOT handled here —
+ *  explicit request 2026-11-03 ("any chnage only shoe col only box not all
+ *  row color"): it used to fill the WHOLE row yellow, which doesn't say
+ *  WHICH field actually changed. addContainersSheet below now highlights
+ *  only the specific changed cell(s) instead, using the real month-over-
+ *  month diff (changedFieldsByContainer) rather than this coarse flag. */
 function defaultFillFor(c) {
-  return c.finalBillingDue ? FINAL_BILLING_FILL : (c.recentlyUpdated ? RECENT_FILL : null);
+  return c.finalBillingDue ? FINAL_BILLING_FILL : null;
 }
 
-function addContainersSheet(wb, title, containers, fillFor = defaultFillFor) {
+/** Container No -> Set of lowercased column headers that changed since last
+ *  month's snapshot, from diffDeployedSnapshots' own `changed[].fieldChanges`
+ *  (deployedSheetSnapshot.service.js) — lets addContainersSheet highlight
+ *  only the SPECIFIC cell(s) that changed for a recentlyUpdated row, not
+ *  the whole row. Empty map (never null) when there's no previous month's
+ *  snapshot to diff against yet — same "no highlighting rather than a wrong
+ *  guess" posture as every other diff-unavailable case in this file. */
+function changedFieldsByContainer(diff) {
+  const map = new Map();
+  if (!diff?.ok) return map;
+  for (const { container, fieldChanges } of diff.changed) {
+    map.set(container, new Set(fieldChanges.map((fc) => String(fc.header || '').trim().toLowerCase())));
+  }
+  return map;
+}
+
+function addContainersSheet(wb, title, containers, fillFor = defaultFillFor, changedFields = null) {
   const ws = wb.addWorksheet(title);
   ws.addRow(CONTAINER_HEADERS).eachCell((cell) => { cell.font = { bold: true }; cell.fill = HEADER_FILL; });
   for (const c of containers) {
     const row = ws.addRow(containerToRow(c));
     const fill = fillFor(c);
-    if (fill) row.eachCell((cell) => { cell.fill = fill; });
+    if (fill) {
+      row.eachCell((cell) => { cell.fill = fill; });
+    } else if (changedFields && c.recentlyUpdated) {
+      // Box just the cell(s) whose header matches a field the diff says
+      // actually changed for this container — no match (e.g. the recency
+      // proxy fired from a timestamp column not in CONTAINER_HEADERS, or no
+      // diff data yet) means no highlight at all, never a whole-row guess.
+      const changed = changedFields.get(c.container);
+      if (changed?.size) {
+        row.eachCell((cell, colNumber) => {
+          const header = String(CONTAINER_HEADERS[colNumber - 1] || '').trim().toLowerCase();
+          if (changed.has(header)) cell.fill = RECENT_FILL;
+        });
+      }
+    }
   }
   ws.columns.forEach((col) => { col.width = 16; });
   return ws;
@@ -127,7 +167,8 @@ export async function buildWorkbookBuffer(data, containers, diff) {
   }
   summaryWs.columns.forEach((col) => { col.width = 14; });
 
-  addContainersSheet(wb, 'Deployed Containers', containers);
+  const changedFields = changedFieldsByContainer(diff);
+  addContainersSheet(wb, 'Deployed Containers', containers, undefined, changedFields);
 
   // One sheet per distinct Billing Type value actually present this month,
   // grouped case-INSENSITIVELY (live data has both "end" and "End") because
@@ -143,7 +184,7 @@ export async function buildWorkbookBuffer(data, containers, diff) {
     byBillingType.get(normKey).containers.push(c);
   }
   for (const { label, containers: list } of [...byBillingType.values()].sort((a, b) => a.label.localeCompare(b.label))) {
-    addContainersSheet(wb, safeSheetName(`Billing - ${label}`), list);
+    addContainersSheet(wb, safeSheetName(`Billing - ${label}`), list, undefined, changedFields);
   }
 
   addChangesSheet(wb, diff);

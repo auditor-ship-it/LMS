@@ -261,6 +261,8 @@ export function RenewDocumentPage() {
         poNo: item.draftPoNo || '',
         poValidity: item.draftPoValidity || '',
         poValue: item.draftPoValue || '',
+        agreementValue: item.draftAgreementValue || '',
+        poRenewDate: item.draftPoRenewDate || '',
         billingCycle: item.draftBillingCycle || '',
         submittedDate: item.renewalSubmittedDate || '',
         approvalStatus: item.approvalStatus || '',
@@ -283,9 +285,10 @@ export function RenewDocumentPage() {
     // Uploaded concurrently, not one after the other — the PO file has no
     // reason to wait on the signed copy finishing first, and this was
     // roughly doubling the wait whenever a form carried both.
-    const [signedCopyUrl, poFileUrl] = await Promise.all([
+    const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
       payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-      payload.poFile ? uploadStageFile(payload.poFile) : ''
+      payload.poFile ? uploadStageFile(payload.poFile) : '',
+      payload.otherFile ? uploadStageFile(payload.otherFile) : ''
     ]);
     return {
       containerNo,
@@ -299,6 +302,9 @@ export function RenewDocumentPage() {
       billingCycle: payload.billingCycle,
       poValidity: payload.poValidity,
       poValue: payload.poValue,
+      agreementValue: payload.agreementValue,
+      poRenewDate: payload.poRenewDate,
+      otherFileUrl,
       rowNum
     };
   };
@@ -390,9 +396,10 @@ export function RenewDocumentPage() {
     try {
       // Uploaded ONCE — every selected container gets the same file/URL,
       // per the "one form entry for the whole batch" request.
-      const [signedCopyUrl, poFileUrl] = await Promise.all([
+      const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
         payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-        payload.poFile ? uploadStageFile(payload.poFile) : ''
+        payload.poFile ? uploadStageFile(payload.poFile) : '',
+        payload.otherFile ? uploadStageFile(payload.otherFile) : ''
       ]);
 
       const results = await settleSequentially(selectedItems, async (it) => {
@@ -408,6 +415,9 @@ export function RenewDocumentPage() {
           billingCycle: payload.billingCycle,
           poValidity: payload.poValidity,
           poValue: payload.poValue,
+          agreementValue: payload.agreementValue,
+          poRenewDate: payload.poRenewDate,
+          otherFileUrl,
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
@@ -439,9 +449,10 @@ export function RenewDocumentPage() {
     setBulkBusy(true);
     setBulkError('');
     try {
-      const [signedCopyUrl, poFileUrl] = await Promise.all([
+      const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
         payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-        payload.poFile ? uploadStageFile(payload.poFile) : ''
+        payload.poFile ? uploadStageFile(payload.poFile) : '',
+        payload.otherFile ? uploadStageFile(payload.otherFile) : ''
       ]);
 
       const results = await settleSequentially(selectedItems, async (it) => {
@@ -456,6 +467,9 @@ export function RenewDocumentPage() {
           billingCycle: payload.billingCycle,
           poValidity: payload.poValidity,
           poValue: payload.poValue,
+          agreementValue: payload.agreementValue,
+          poRenewDate: payload.poRenewDate,
+          otherFileUrl,
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE') throw new Error(result);

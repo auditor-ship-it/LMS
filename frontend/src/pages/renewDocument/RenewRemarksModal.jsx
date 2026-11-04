@@ -23,7 +23,10 @@ const EXTRA_FIELDS = [
      yet. */
   ['Draft Valid Till', (it) => it.draftValidTill && formatActionTimestamp(it.draftValidTill)],
   ['Draft Signed Copy', (it) => it.draftSignedCopyUrl],
+  ['Draft Other File', (it) => it.draftOtherFileUrl],
+  ['Draft Agreement Value', (it) => it.draftAgreementValue],
   ['Draft PO No', (it) => it.draftPoNo],
+  ['Draft PO Renew Date', (it) => it.draftPoRenewDate && formatActionTimestamp(it.draftPoRenewDate)],
   ['Draft PO Validity', (it) => it.draftPoValidity],
   ['Draft PO Value', (it) => it.draftPoValue],
   ['Draft PO PDF', (it) => it.draftPoFileUrl],

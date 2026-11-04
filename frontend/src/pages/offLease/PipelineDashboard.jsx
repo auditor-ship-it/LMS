@@ -141,10 +141,45 @@ export function PipelineDashboard({ onOpenTab }) {
        stage. */
     /* 6A / 6B / 6C: the records whose SD Refund is waiting on HOD / Accounts /
        CEO. That status lives in the refunds sheet, not on the off-lease row,
-       so match by container number — the same match the 6A/6B/6C chips use. */
+       so match by container number + Lease ID (offLeaseId) composite — NOT
+       container alone. BUG FOUND AND FIXED 2026-11-04 (explicit report,
+       live on TRIU6617353, same root cause as OrderBookView.jsx's own
+       refundByContainer fix — see that one's doc comment for the full
+       story): a container with two genuinely separate Off-Lease Tracking
+       rows (a re-lease to a different client) had ONE lease's SD Refund
+       waiting-on-HOD status match BOTH rows, so a long-finished lease at
+       Stage 5 showed up in this card's own filtered list. Falls back to a
+       plain container match ONLY when this container has exactly ONE
+       Off-Lease Tracking row to begin with (legacy refund entries from
+       before offLeaseId was captured have nowhere to leak onto — there's
+       only one row they could possibly belong to). Gating the fallback on
+       the REFUND row count instead was tried first and is WRONG:
+       live-verified on TRIU6617353, which has exactly one refund row (so
+       that condition says "safe to fall back") but TWO Off-Lease Tracking
+       rows — the fallback would still have leaked OF0090's refund onto
+       OF0048. It's the number of off-lease ROWS sharing a container that
+       determines whether a container-only match can ever be ambiguous, not
+       the number of refund rows — same correction made in
+       OrderBookView.jsx's own refundByContainer fix. */
     else if (stageFilter === 'hod' || stageFilter === 'accounts' || stageFilter === 'ceo') {
-      const waiting = new Set(refundRows.filter((r) => r.currentStage === stageFilter).map((r) => String(r.containerNo || '').trim().toUpperCase()));
-      out = out.filter((it) => waiting.has(String(it.container || '').trim().toUpperCase()));
+      const matching = refundRows.filter((r) => r.currentStage === stageFilter);
+      const waitingComposite = new Set(
+        matching
+          .filter((r) => String(r.offLeaseId || '').trim())
+          .map((r) => `${String(r.containerNo || '').trim().toUpperCase()}|${String(r.offLeaseId || '').trim().toUpperCase()}`)
+      );
+      const waitingContainerOnly = new Set(matching.map((r) => String(r.containerNo || '').trim().toUpperCase()));
+      const itemsByContainerCount = new Map();
+      for (const it of items) {
+        const c = String(it.container || '').trim().toUpperCase();
+        if (c) itemsByContainerCount.set(c, (itemsByContainerCount.get(c) || 0) + 1);
+      }
+      out = out.filter((it) => {
+        const container = String(it.container || '').trim().toUpperCase();
+        const leaseId = String(it.leaseId || '').trim().toUpperCase();
+        if (leaseId && waitingComposite.has(`${container}|${leaseId}`)) return true;
+        return itemsByContainerCount.get(container) === 1 && waitingContainerOnly.has(container);
+      });
     } else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
 
     if (monthFilter) {
