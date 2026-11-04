@@ -1479,11 +1479,12 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-    if (!renewedDate) throw new AppError('Renewed Date is required');
-    // Agreement Valid Till is NOT required — explicit request 2026-10-03
-    // ("this is not complusoly"): same reasoning as the Signed Copy/PO
-    // fields just below — a renewal can go through on a PO basis alone with
-    // no agreement, so there's no agreement expiry date to give.
+    // Renewed Date (renamed "Agreement Renew Date" on the form) is NOT
+    // required — explicit request 2026-11-04 ("this not complusory"), same
+    // reasoning Agreement Valid Till already got 2026-10-03 ("this is not
+    // complusoly") and the Signed Copy/PO fields below: a renewal can go
+    // through on a PO basis alone with no agreement, so there's no
+    // agreement renewal date to give either.
 
     const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
     if (!rows.length) throw new AppError('No data rows');
@@ -1624,7 +1625,7 @@ export async function saveRenewalDraftFast(containerNo, renewedDate, validTill, 
 export async function completeDocStageFast(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue, agreementValue, poRenewDate, otherFileUrl) {
   await checkActionPermission('renew', callerEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-  if (!renewedDate) throw new AppError('Renewed Date is required');
+  // Renewed Date not required — see completeDocStage's identical note above.
 
   const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
   const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);

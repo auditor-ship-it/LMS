@@ -249,8 +249,12 @@ export function CompleteDocumentModal({ open, item, items, queueProgress, submit
 
         <div className={styles.grid2}>
           <label className={styles.field}>
-            <span className={styles.label}>Renewed Date *</span>
-            <input type="date" value={form.renewedDate} onChange={set('renewedDate')} required />
+            {/* Renamed "Agreement Renew Date" and made NOT required —
+                explicit request 2026-11-04 ("pls rename agremnet renew
+                date and this not complusory"), same "not compulsory"
+                reasoning Agreement Valid Till already got 2026-10-03. */}
+            <span className={styles.label}>Agreement Renew Date</span>
+            <input type="date" value={form.renewedDate} onChange={set('renewedDate')} />
           </label>
           <label className={styles.field}>
             {/* NOT required — explicit request 2026-10-03 ("this is not
