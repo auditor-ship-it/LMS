@@ -202,6 +202,19 @@ export function matchRefundAndTat(items, refundRows, tatRecords) {
   return result;
 }
 
+/** buildChips' own keys, split into the SAME 3 phases PipelineDashboard.jsx's
+ *  scorecards use (STAGE_GROUPS there) — explicit request 2026-11-05
+ *  ("change only view 2", "group the stage chips into 3 phases"): View 2's
+ *  own Stage column groups its chips to match, View 1 untouched (it builds
+ *  its chips straight from buildChips, never through ChipStrip). Any chip
+ *  key not listed here (currently just Payment Status' own 's8') falls
+ *  through ungrouped, after the three phase pills. */
+const CHIP_PHASES = [
+  ['s1', 'gate', 's6'],
+  ['s7', 's3', 's5'],
+  ['s11', 'sdHod', 'sdAccounts', 'sdCeo']
+];
+
 /** Non-interactive version of the SAME chip strip every order-book card
  *  shows (buildChips) — explicit request 2026-11-05 ("this table replace
  *  same this table show for view 2"): the compact View 2 table wants the
@@ -212,19 +225,27 @@ export function matchRefundAndTat(items, refundRows, tatRecords) {
  *  only links out when it's genuinely the current actionable thing. */
 export function ChipStrip({ item, refundEntry, tatRecord }) {
   const chips = buildChips(item, refundEntry, tatRecord);
+  const byKey = new Map(chips.map((c) => [c.key, c]));
+  const grouped = CHIP_PHASES.map((keys) => keys.map((k) => byKey.get(k)).filter(Boolean));
+  const groupedKeys = new Set(CHIP_PHASES.flat());
+  const leftover = chips.filter((c) => !groupedKeys.has(c.key));
   // Explicit follow-up 2026-11-05 ("this is not same view 1 jaisa chhaiye
   // hai"): View 1's own row ends with a readable status pill ("Stage 2 ·
   // Transportation") after the chips, not just the chips alone — statusOf is
   // the SAME single source of truth the chips themselves already trust (see
   // its own doc comment), so this can never disagree with what the chips show.
   const status = statusOf(item, refundEntry);
+  const renderChip = (c) => (
+    <span key={c.key} className={`${styles.chip} ${styles[c.tone]}`} title={c.title}>
+      {c.label}
+    </span>
+  );
   return (
     <span className={styles.strip}>
-      {chips.map((c) => (
-        <span key={c.key} className={`${styles.chip} ${styles[c.tone]}`} title={c.title}>
-          {c.label}
-        </span>
+      {grouped.map((group, i) => group.length > 0 && (
+        <span key={i} className={styles.chipGroup}>{group.map(renderChip)}</span>
       ))}
+      {leftover.map(renderChip)}
       <span className={`${styles.status} ${styles[status.tone]}`}>{status.label}</span>
     </span>
   );

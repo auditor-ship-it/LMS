@@ -152,6 +152,7 @@
 
 .table tbody tr:last-child td { border-bottom: none; }
 .table tbody tr:hover td { background: var(--surface-2); }
+.clickableRow { cursor: pointer; }
 
 .leaseId { font-family: var(--f-mono); color: var(--text-2); }
 .container { font-family: var(--f-mono); font-weight: 600; }

@@ -200,6 +200,9 @@ button.hitArea { cursor: pointer; }
 .sizeXs.hoverable:hover { transform: translateY(-2px); }
 .sizeXs.active { box-shadow: none; }
 .sizeXs.active.tint-info { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+.sizeXs.active.tint-navy { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); }
+.sizeXs.active.tint-amber { background: color-mix(in srgb, #d97706 28%, var(--surface)); }
+.sizeXs.active.tint-approval { background: color-mix(in srgb, #8b5cf6 30%, var(--surface)); }
 .sizeXs.active .sPoc,
 .sizeXs.active .sStage,
 .sizeXs.active .sName { border-top-color: color-mix(in srgb, var(--text) 30%, transparent); }

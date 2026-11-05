@@ -14,6 +14,7 @@ import {
   buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices, buildEstimateTotals, APPROVAL_LABEL
 } from './lookupModel.js';
 import { getSdRefundsForContainer } from '../../api/stage.api.js';
+import { fetchAgreementPoPdf } from '../../services/stage.service.js';
 import { ContainerMatchPicker } from './OffLeasePage.jsx';
 import { ApprovalPanel } from './ApprovalPanel.jsx';
 import { RefundDecisionPanel } from './RefundDecisionPanel.jsx';
@@ -55,16 +56,53 @@ const COLUMNS = [
 ];
 const STAGE_COLUMN = { 1: 'intimation', 6: 'ops', 7: 'ops', 3: 'ops', 5: 'billing', 11: 'billing', 8: 'billing' };
 
+/* Alternate Overview layout — explicit request 2026-11-05 ("change refer
+   this image and only chage view2"): an OMS-style grouped/stepper Overview,
+   reachable ONLY by clicking a row in the off-lease dashboard's View 2
+   table (PipelineDashboard.jsx sets ?view=phases on that one navigation —
+   see its own openRecord doc comment). Every other entry point to this page
+   (View 1's cards, Lease Expiry, Sale Person tab, …) omits the param and
+   gets the original COLUMNS layout below, unchanged. Kept as a second,
+   parallel set of constants/helpers rather than replacing COLUMNS — the
+   two layouts read the same `stages`/`refund`/`approvalLower` state, they
+   just group and render it differently. */
+const PHASES = [
+  { n: 1, title: 'Intimation to Transportation', keys: [1, 'approval', 6], tatKeys: ['1', '1A', '2'] },
+  { n: 2, title: 'Inspection to Billing', keys: [7, 3, 5], tatKeys: ['3', '4', '5'] },
+  { n: 3, title: 'SD Refunds', keys: [11, 'hod', 'accounts', 'ceo'], tatKeys: ['6', '6A', '6B', '6C'] }
+];
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const PHASE_STEP_BUDGETS_MS = {
+  '1': 1 * DAY_MS, '1A': 3 * HOUR_MS, '2': 7 * DAY_MS,
+  '3': 2 * HOUR_MS, '4': 3 * HOUR_MS, '5': 3 * HOUR_MS,
+  '6': 3 * DAY_MS, '6A': 2 * HOUR_MS, '6B': 2 * HOUR_MS, '6C': 2 * HOUR_MS
+};
+function formatPhaseBudget(ms) {
+  const totalHours = Math.round(ms / HOUR_MS);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  if (days && hours) return `${days}d ${hours}h`;
+  if (days) return `${days}d`;
+  return `${hours}h`;
+}
+const STEP_SHORT = { approval: '1A', hod: '6A', accounts: '6B', ceo: '6C' };
+const STEP_NAME = { approval: 'Intimation Approval', hod: 'HOD Approval', accounts: 'Accounts Approval', ceo: 'CEO Approval' };
+
 const SD_REFUNDS_INTERNAL = 11;
+
+/* Same shape CellValue.jsx's own (private) URL_RE tests for — a stage field
+   whose value is itself a file/link, not a date or plain text. */
+const ATTACHMENT_URL_RE = /^(https?:\/\/|\/api\/)/i;
 
 export function ContainerDetailPage({ isActive }) {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const last = useRef({ container: '', leaseId: '', row: undefined });
+  const last = useRef({ container: '', leaseId: '', row: undefined, view: '' });
   if (isActive && params.get('container')) {
-    last.current = { container: params.get('container'), leaseId: params.get('leaseId') || '', row: Number(params.get('row')) || undefined };
+    last.current = { container: params.get('container'), leaseId: params.get('leaseId') || '', row: Number(params.get('row')) || undefined, view: params.get('view') || '' };
   }
-  const { container, leaseId, row } = last.current;
+  const { container, leaseId, row, view: layoutVariant } = last.current;
   const { canAct } = usePermission();
   // The stage whose form is open inline in place of the tabs, or null.
   const [stageForm, setStageForm] = useState(null);
@@ -103,6 +141,16 @@ export function ContainerDetailPage({ isActive }) {
     if (exact.length) return exact[0];
     return refundEntries.length === 1 ? refundEntries[0] : null;
   })();
+
+  /* Agreement/PO PDF links — explicit request 2026-11-05 ("show all
+     agreement", asked from this page's Invoices tab): the same
+     getOffLeaseAgreementPoPdf data ApprovalPanel/OffLeasePage/
+     StageDetailModal already show elsewhere, just not previously surfaced
+     on this page at all. */
+  const { data: agreementDocs } = useAsync(
+    () => (container ? fetchAgreementPoPdf(container) : Promise.resolve(null)),
+    [container]
+  );
 
   const ready = data?.found && !data?.multiple;
   const { filled, selected, toggle } = useStageSelection(data);
@@ -151,6 +199,15 @@ export function ContainerDetailPage({ isActive }) {
   const history = buildHistoryRows(data);
   const invoices = buildInvoices(data);
   const movements = buildMovements(data);
+  /* Every off-lease stage field that is itself a file/link (Email
+     Notification URL, a Move-to-Stage proof upload, …) — explicit
+     follow-up 2026-11-05 ("agreement po and offlease all attachment show
+     this invoice"): Agreement/PO alone wasn't "all" of them, this record's
+     own stage data can carry attachments too, same URL shape renderCellValue
+     already turns into a 📎 link everywhere else on this page. */
+  const stageAttachments = stages.flatMap((s) => (s.fields || [])
+    .filter((f) => ATTACHMENT_URL_RE.test(String(f.value ?? '').trim()))
+    .map((f) => ({ key: `${s.stage}-${f.label}`, stageLabel: s.label, label: f.label, value: f.value })));
   /* Same rules as the dashboard's stage chips: only the current stage is
      editable (and only with permission); a done one is view-only; a future
      one is locked. */
@@ -226,6 +283,72 @@ export function ContainerDetailPage({ isActive }) {
   })();
   const latest = history.filter((r) => r.on).slice(-4).reverse();
 
+  /** One PHASES step's tone/name/caption — only used when layoutVariant ===
+   *  'phases' (see PHASES' own doc comment). Resolves both kinds of `keys`
+   *  entry (an internal stage number, or the 'approval'/'hod'/'accounts'/
+   *  'ceo' string tokens) from this page's own already-computed state, the
+   *  same state driving the COLUMNS cards, so the two layouts can never
+   *  disagree about where the record actually is. */
+  const stepInfo = (key) => {
+    if (key === 'approval') {
+      const tone = approvalLower === 'approved' ? 'done' : approvalLower === 'rejected' ? 'rejected' : gatePending ? 'current' : 'future';
+      const caption = tone === 'done' ? 'Approved' : tone === 'rejected' ? 'Rejected' : tone === 'current' ? 'Pending approval' : 'Pending';
+      return { short: STEP_SHORT.approval, name: STEP_NAME.approval, tone, caption, date: tone === 'done' || tone === 'rejected' ? data.approvalDate : null };
+    }
+    if (key === 'hod' || key === 'accounts' || key === 'ceo') {
+      const short = STEP_SHORT[key];
+      const name = STEP_NAME[key];
+      if (key === 'ceo' && ceoResolved(refund)) return { short, name, tone: 'done', caption: 'Skipped', date: null };
+      const status = key === 'hod' ? refund?.hodStatus : key === 'accounts' ? refund?.accountsStatus : refund?.ceoStatus;
+      const date = key === 'hod' ? refund?.hodDate : key === 'accounts' ? refund?.accountsDate : refund?.ceoDate;
+      const curKey = key === 'hod' ? '6a' : key === 'accounts' ? '6b' : '6c';
+      const tone = status === 'Approved' ? 'done' : status === 'Rejected' ? 'rejected' : approvalCurrent === curKey ? 'current' : 'future';
+      const caption = tone === 'done' || tone === 'rejected' ? status : tone === 'current' ? 'Awaiting decision' : 'Pending';
+      return { short, name, tone, caption, date: tone === 'done' || tone === 'rejected' ? date : null };
+    }
+    const s = stages.find((x) => x.stage === key);
+    const isCurrent = key === currentNum;
+    const tone = s?.done ? 'done' : isCurrent ? 'current' : 'future';
+    return {
+      short: s?.displayStage || String(key), name: s?.label || '', tone,
+      caption: tone === 'done' ? 'Completed' : tone === 'current' ? 'In progress' : 'Pending',
+      date: tone === 'done' ? s.timestamp : null
+    };
+  };
+
+  /** One PHASES key -> the card node(s) it renders, or [] while it's not yet
+   *  reached (not done, not current) — same "hide until reached" rule the
+   *  COLUMNS cards already follow, just resolved per-key instead of
+   *  per-column since SD Refunds' three sub-approvals are explicit phase
+   *  members here rather than a special case folded into stage 11. */
+  const renderPhaseCard = (key) => {
+    if (key === 'approval') {
+      if (!(gatePending || approvalLower === 'approved' || approvalLower === 'rejected')) return [];
+      return [(
+        <div key="gate" id="gate-card" className={styles.cardLink} role="button" tabIndex={0} onClick={openGate} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openGate(); } }}>
+          <GateCard status={approvalLower} date={data.approvalDate} user={data.approvalUser} />
+        </div>
+      )];
+    }
+    if (key === 'hod' || key === 'accounts' || key === 'ceo') {
+      if (!sdDone) return [];
+      if (key === 'hod') return [<ApprovalCard key="6a" onOpen={() => openRefund('hod')} current={approvalCurrent === '6a'} id="stage-card-6a" label="Stage 6A" title="HOD approval" status={refund?.hodStatus} by={refund?.hodApprover} on={refund?.hodDate} remarks={refund?.hodRemarks} submitted={!!refund} />];
+      if (key === 'accounts') return [<ApprovalCard key="6b" onOpen={() => openRefund('accounts')} current={approvalCurrent === '6b'} id="stage-card-6b" label="Stage 6B" title="Accounts approval" status={refund?.accountsStatus} by={refund?.accountsApprover} on={refund?.accountsDate} remarks={refund?.accountsRemarks} submitted={!!refund} waiting={refund && refund.hodStatus !== 'Approved' ? 'Waiting for HOD approval first.' : null} />];
+      const ceoDone = ceoResolved(refund);
+      const ceoStatus = ceoDone ? 'Skipped' : refund?.ceoStatus;
+      const ceoRemarks = ceoDone ? (refund?.ceoRemarks || 'Amount to Pay is ₹1,00,000 or below — CEO approval not required.') : refund?.ceoRemarks;
+      return [<ApprovalCard key="6c" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6c'} id="stage-card-6c" label="Stage 6C" title="CEO approval" status={ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={ceoRemarks} submitted={!!refund} waiting={!ceoDone && refund && refund.accountsStatus !== 'Approved' ? 'Waiting for Accounts approval first.' : null} />];
+    }
+    const s = stages.find((x) => x.stage === key);
+    if (!s) return [];
+    const isCurrent = key === currentNum;
+    if (!s.done && !isCurrent) return [];
+    return [<OverviewCard key={key} stage={s} isCurrent={isCurrent} onOpen={openStage} />];
+  };
+
+  const phaseStageNums = new Set(PHASES.flatMap((p) => p.keys.filter((k) => typeof k === 'number')));
+  const leftoverStages = stages.filter((s) => !phaseStageNums.has(s.stage));
+
   return (
     <div className={styles.page}>
       <section className={styles.head}>
@@ -252,6 +375,7 @@ export function ContainerDetailPage({ isActive }) {
 
         <div className={styles.strip}>
           <Cell label="Client" value={data.clientName} sub={data.clientCode} />
+          <Cell label="Sale person" value={data.salePerson || 'Unassigned'} />
           <Cell label="Stage" value={currentLabel} tone="stage" />
           <Cell label="Deployed" value={data.deployedDate} sub={data.orderNos ? `Order ${data.orderNos}` : ''} />
           <Cell label="Valid upto" value={data.validUpto} />
@@ -337,7 +461,60 @@ export function ContainerDetailPage({ isActive }) {
               )}
             </>
           )}
-          {!stageForm && tab === 'overview' && (
+          {!stageForm && tab === 'overview' && layoutVariant === 'phases' && (
+            <section className={styles.panel}>
+              <h3 className={styles.panelTitle}>Stage checklist</h3>
+              <div className={styles.phases}>
+                {PHASES.map((phase) => {
+                  const steps = phase.keys.map((k) => ({ key: String(k), ...stepInfo(k) }));
+                  const reached = steps.some((s) => s.tone !== 'future');
+                  if (!reached) return null;
+                  const doneCount = steps.filter((s) => s.tone === 'done').length;
+                  const rejected = steps.some((s) => s.tone === 'rejected');
+                  const budgetMs = phase.tatKeys.reduce((sum, tk) => sum + (PHASE_STEP_BUDGETS_MS[tk] || 0), 0);
+                  return (
+                    <div key={phase.n} className={styles.phase}>
+                      <div className={styles.phaseHead}>
+                        <span className={styles.phaseNum}>{phase.n}</span>
+                        <span className={styles.phaseTitle}>{phase.title}</span>
+                        <span className={styles.phaseBudget}>Budget {formatPhaseBudget(budgetMs)}</span>
+                        <span className={`${styles.phaseBadge} ${rejected ? styles.badgeDanger : doneCount === steps.length ? styles.badgeDone : styles.badgeProgress}`}>
+                          {rejected ? 'Rejected' : doneCount === steps.length ? 'COMPLETE' : `${doneCount} of ${steps.length}`}
+                        </span>
+                      </div>
+                      <div className={styles.stepper}>
+                        {steps.map((s, i) => (
+                          <div key={s.key} className={`${styles.stepperCol} ${i > 0 && steps[i - 1].tone === 'done' ? styles.lineDone : ''}`}>
+                            <span className={`${styles.stepperDot} ${styles[`dot${s.tone[0].toUpperCase()}${s.tone.slice(1)}`]}`} title={s.name}>
+                              {s.tone === 'done' ? '✓' : s.tone === 'rejected' ? '✕' : s.short}
+                            </span>
+                            <span className={styles.stepperName}>{s.name}</span>
+                            <span className={styles.stepperCaption}>{s.date ? formatActionTimestamp(s.date) : s.caption}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className={styles.phaseCards}>
+                        {phase.keys.flatMap((k) => renderPhaseCard(k))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {leftoverStages.some((s) => s.done || s.stage === currentNum) && (
+                  <div className={styles.phase}>
+                    <div className={styles.phaseHead}>
+                      <span className={styles.phaseNum}>{PHASES.length + 1}</span>
+                      <span className={styles.phaseTitle}>{leftoverStages[0]?.label || 'Payment Status'}</span>
+                    </div>
+                    <div className={styles.phaseCards}>
+                      {leftoverStages.flatMap((s) => renderPhaseCard(s.stage))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {!stageForm && tab === 'overview' && layoutVariant !== 'phases' && (
             <section className={styles.panel}>
               <h3 className={styles.panelTitle}>Stage checklist</h3>
               <div className={styles.columns}>
@@ -443,6 +620,32 @@ export function ContainerDetailPage({ isActive }) {
 
           {!stageForm && tab === 'invoices' && (
             <section className={styles.panel}>
+              <h3 className={styles.panelTitle}>Agreement &amp; PO documents</h3>
+              <div className={styles.agreementRow}>
+                <Cell label="Agreement PDF" value={agreementDocs ? renderCellValue(agreementDocs.agreementUrl) : '…'} />
+                <Cell label="PO PDF" value={agreementDocs ? renderCellValue(agreementDocs.poPdfUrl) : '…'} />
+              </div>
+              {stageAttachments.length > 0 && (
+                <>
+                  <h3 className={styles.panelTitle}>Off-lease attachments</h3>
+                  <div className={styles.tableWrap}>
+                    <table className={styles.attachTable}>
+                      <thead>
+                        <tr><th>Stage</th><th>Document</th><th>File</th></tr>
+                      </thead>
+                      <tbody>
+                        {stageAttachments.map((a) => (
+                          <tr key={a.key}>
+                            <td>{a.stageLabel}</td>
+                            <td>{a.label}</td>
+                            <td>{renderCellValue(a.value)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
               {invoices ? <InvoicesSection invoices={invoices} /> : <p className={styles.empty}>No invoices for this record.</p>}
             </section>
           )}

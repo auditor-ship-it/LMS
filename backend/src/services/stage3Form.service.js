@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getSheetData } from './googleSheets.service.js';
-import { safeStr } from '../utils/format.js';
+import { safeStr, parseDate } from '../utils/format.js';
 import { cacheGet, cachePut } from '../utils/memoryCache.js';
 import { clientMatches } from './stage8.service.js';
 
@@ -156,15 +156,44 @@ function rowsForContainer(rows, containerNo) {
  * entirely — this is a display/skip-gate convenience, not a money decision,
  * so a fallback is the right trade-off (contrast approve.service.js's
  * normClientName, deliberately exact because that gate is money).
- */
-export function pickGateFormForClient(rows, clientName) {
-  if (!rows.length) return null;
+ *
+ * `sinceMs`, when given, drops any row dated BEFORE it from consideration
+ * entirely — BUG FOUND AND FIXED 2026-11-05 (live report, MOAU0749105):
+ * this container has exactly one Stage 3 form row, dated 28-May-2025, with
+ * a blank Customer Name — but this off-lease record's own Deployed Date is
+ * 07-Jul-2025, over a month LATER. A container cannot be gated back in for
+ * a cycle that hadn't even been deployed yet, so that row must belong to an
+ * earlier, unrelated cycle of the same reused container number — yet
+ * isGatedIn(that row) was still making Stage 3 (Gate In) read "Completed"
+ * for THIS cycle, before Stage 1 of this cycle had even been approved.
+ * Callers pass their own row's Deployed Date (ms) as `sinceMs`.
+ *
+ * A near-identical boundary (this container's own Stage 1 APPROVAL
+ * timestamp, not Deployed Date) was tried and reverted 2026-08-28 — see git
+ * history — after real backdated-paperwork cases broke (a Gate-In form
+ * filed late, whose own Date field correctly recorded the real physical
+ * gate-in moment, predating when the LMS's OWN Stage 1 approval paperwork
+ * happened to be entered). Deployed Date is a different, safer anchor: it
+ * is set once, when the container physically goes OUT on lease, which by
+ * physical necessity happens before any genuine gate-in for THAT cycle —
+ * unlike Stage 1 approval, paperwork lag on the deploy side cannot make a
+ * real gate-in event predate it. A row with no parseable date is kept
+ * (cannot judge it, same fail-open posture as everywhere else in this
+ * file), so this never discards data it can't actually evaluate. */
+export function pickGateFormForClient(rows, clientName, sinceMs) {
+  const eligible = sinceMs
+    ? rows.filter((r) => {
+      const d = parseDate(r.date);
+      return !d || d.getTime() >= sinceMs;
+    })
+    : rows;
+  if (!eligible.length) return null;
   if (clientName) {
-    for (let i = rows.length - 1; i >= 0; i--) {
-      if (clientMatches(rows[i].customer, clientName)) return rows[i];
+    for (let i = eligible.length - 1; i >= 0; i--) {
+      if (clientMatches(eligible[i].customer, clientName)) return eligible[i];
     }
   }
-  return rows[rows.length - 1];
+  return eligible[eligible.length - 1];
 }
 
 /** Re-reads the Stage 3 form log and refreshes its cache, regardless of TTL.
@@ -226,7 +255,8 @@ export function isRepairNotRequired(row) {
 
 /** The Stage 3 form row relevant to one container + client (display only —
  *  container detail / Stage 3 read-only view), or null if never gated in
- *  under that client. */
-export function getGateFormForContainer(containerNo, clientName) {
-  return pickGateFormForClient(rowsForContainer(currentRows(), containerNo), clientName);
+ *  under that client. `sinceMs` — see pickGateFormForClient's own doc
+ *  comment. */
+export function getGateFormForContainer(containerNo, clientName, sinceMs) {
+  return pickGateFormForClient(rowsForContainer(currentRows(), containerNo), clientName, sinceMs);
 }

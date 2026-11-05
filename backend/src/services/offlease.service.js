@@ -2327,7 +2327,10 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     if (gate && !gate(safeStr(row[5]))) continue;
 
     const containerKey = _containerKey(row[0]);
-    const gfRow = gateFormIndex ? pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]) : null;
+    // Deployed Date as the cycle boundary — see pickGateFormForClient's own
+    // doc comment (BUG FOUND AND FIXED 2026-11-05, MOAU0749105).
+    const rowDeployedAtMs = (() => { const d = parseDate(row[7]); return d ? d.getTime() : null; })();
+    const gfRow = gateFormIndex ? pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5], rowDeployedAtMs) : null;
     const gatedIn = isGatedIn(gfRow);
     // Active "Move To Stage" jump (any reason) — computed once, reused
     // below both to skip stages this jump bypassed and to land the row in
@@ -2716,7 +2719,10 @@ async function _attachTransportGateInTat(result, stageNum, budget) {
       // the same signal every other bypass check in this app already uses —
       // frozen at that form's own timestamp once it exists.
       if (!stage10At) { item.tat = null; continue; }
-      const gfRow = getGateFormForContainer(container, client);
+      // Deployed Date as the cycle boundary — see pickGateFormForClient's
+      // own doc comment (BUG FOUND AND FIXED 2026-11-05, MOAU0749105).
+      const rowDeployedAtMs = (() => { const d = parseDate(row[7]); return d ? d.getTime() : null; })();
+      const gfRow = getGateFormForContainer(container, client, rowDeployedAtMs);
       const gateInAt = isGatedIn(gfRow) ? parseStamp(gfRow?.timestamp) : null;
       if (gateInAt) {
         const rawElapsed = gateInAt.getTime() - stage10At.getTime();
@@ -2823,7 +2829,10 @@ export async function attachStageTat(result, stage) {
        when neither is available. */
     let startRaw = (prevInfo ? safeStr(row[prevInfo.statusCol - 2]).trim() : '') || '';
     if (!startRaw && needsGateInFallback) {
-      const gfRow = pickGateFormForClient(gateFormIndex.get(_containerKey(row[0])) || [], row[5]);
+      // Deployed Date as the cycle boundary — see pickGateFormForClient's
+      // own doc comment (BUG FOUND AND FIXED 2026-11-05, MOAU0749105).
+      const rowDeployedAtMs = (() => { const d = parseDate(row[7]); return d ? d.getTime() : null; })();
+      const gfRow = pickGateFormForClient(gateFormIndex.get(_containerKey(row[0])) || [], row[5], rowDeployedAtMs);
       if (isGatedIn(gfRow) && gfRow?.timestamp) startRaw = gfRow.timestamp;
     }
     startRaw = startRaw || entry;
@@ -5558,7 +5567,10 @@ export async function getOffLeaseDashboardData(user) {
     const container = safeStr(row[0]);
     const containerKey = _containerKey(row[0]);
     // Client-aware match (row[5]) — see pickGateFormForClient's doc comment.
-    const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5]);
+    // Deployed Date as the cycle boundary too (same doc comment, BUG FOUND
+    // AND FIXED 2026-11-05, MOAU0749105).
+    const rowDeployedAtMs = (() => { const d = parseDate(row[7]); return d ? d.getTime() : null; })();
+    const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5], rowDeployedAtMs);
     const delivered = deliveredKeys ? isDeliveredSince(deliveredKeys, containerKey, null) : false;
     const c = _classifyOffLeaseStages(headers, row, isGatedIn(gfRow), isRepairNotRequired(gfRow), delivered);
 
@@ -6002,6 +6014,14 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
      at intimation time -- fall back to the lease/order sheets lookup. */
   if (!res.clientCode && leaseInfo.clientCode) res.clientCode = leaseInfo.clientCode;
   if (!res.clientName && leaseInfo.clientName) res.clientName = leaseInfo.clientName;
+  /* Explicit request 2026-11-05 ("show sale person" on the record detail
+     page) — same read-only Sales CRM resolver getOffLeaseDashboardData
+     already attaches per dashboard item, just not previously surfaced on a
+     single-container lookup at all. */
+  try {
+    const resolveSalePerson = await getSalePersonResolver();
+    res.salePerson = resolveSalePerson(res.clientName) || '';
+  } catch (e) { res.salePerson = ''; }
   res.location = safeStr(row[6]);
   res.deployedDate = formatDateVal(row[7]);
   res.validUpto = formatDateVal(row[8]);
@@ -6048,8 +6068,11 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
   res.approvalUser = apUsCol >= 0 ? safeStr(row[apUsCol]) : '';
 
   // This resolved record's own client — see pickGateFormForClient's doc
-  // comment for why container number alone is not enough here.
-  const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], res.clientName);
+  // comment for why container number alone is not enough here. Deployed
+  // Date as the cycle boundary (same doc comment) — a Gate-In event dated
+  // before this cycle's own deployment can't be this cycle's own.
+  const deployedAtMs = (() => { const d = parseDate(res.deployedDate); return d ? d.getTime() : null; })();
+  const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], res.clientName, deployedAtMs);
   const gatedIn = isGatedIn(gfRow);
   const repairSkip = isRepairNotRequired(gfRow);
   /* Best-effort — a lookup must still render every field above even if FMS
@@ -6287,9 +6310,23 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
       if (gf) {
         gateFormTimestamp = gf.date || gf.timestamp || gateFormTimestamp;
         gateFormUser = s === OL_STAGE3_INTERNAL ? 'Auto — Gate-In Form' : 'Auto — Repair Not Required (Gate-In Form)';
+        /* BUG FOUND AND FIXED 2026-11-05 (live report, MOAU0749105 — "gate
+           in coustomer no wrong"): confirmed this container has exactly ONE
+           Stage 3 form row (not the container-reused-across-clients case
+           pickGateFormForClient's own doc comment covers), so the right row
+           IS being picked — the depot staff who filled the Google Form just
+           left/typed "NA" in its own Customer Name field. Showing that raw
+           "NA" reads as if the LMS fetched the wrong thing; this record's
+           own already-resolved client (res.clientName) is known and correct
+           regardless of what that form's own field says, so an empty or
+           literal "NA" customer falls back to it, clearly labelled as such. */
+        const gfCustomer = safeStr(gf.customer).trim();
+        const gfCustomerDisplay = (!gfCustomer || /^n\s*\/?\s*a$/i.test(gfCustomer))
+          ? (res.clientName ? `${res.clientName} (from Off-Lease record — Gate-In form had none)` : gfCustomer)
+          : gfCustomer;
         gateFormFields = (s === OL_STAGE3_INTERNAL
           ? [
-            { label: 'Customer Name (Gate-In Form)', value: gf.customer },
+            { label: 'Customer Name (Gate-In Form)', value: gfCustomerDisplay },
             { label: 'Location', value: gf.location },
             { label: 'Transporter Name', value: gf.transporterName },
             { label: 'Transporter Number', value: gf.transporterNumber },
