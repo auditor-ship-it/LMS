@@ -1,6 +1,7 @@
 # Logs
 logs
 *.log
+*.log.err
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -17,7 +18,15 @@ dist-ssr
 # frontend/.env, ...).
 .env
 .env.*
+.env-*
 !.env.example
+
+# Repo-root data exports/snapshots (customer/container data) — never
+# committed. GH-15: containers-on-lease-reconciled.csv (355 rows of real
+# customer names + container numbers) was tracked for an unknown period;
+# scoped to the repo root only (leading slash), not recursive, so this
+# doesn't hide a legitimate CSV fixture nested in a subfolder.
+/*.csv
 
 # Raw Google service account key JSON downloads (e.g. project-id-hash.json) —
 # fields get copied into .env; the file itself must never be committed.

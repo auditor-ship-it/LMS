@@ -52,7 +52,10 @@ const ENDPOINTS = [
   { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary' },
   { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary/detail' },
   { domain: 'reports', method: 'GET', path: '/reports/renewal-log' },
-  { domain: 'reports', method: 'GET', path: '/reports/new-lease' }
+  { domain: 'reports', method: 'GET', path: '/reports/new-lease' },
+  // Added 2026-10-30, explicit request — flat total Off-Lease record list
+  // (different shape from /offlease/dashboard's nested kpis+items).
+  { domain: 'reports', method: 'GET', path: '/reports/off-lease' }
 ];
 
 /** e.g. "leases:write" -> "Leases (Verify / Approve / Expiry) — Write" */

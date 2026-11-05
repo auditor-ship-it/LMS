@@ -56,6 +56,14 @@ export function buildIdentityRows(result) {
  * show (which stage is "current" is carried by result.currentStage, the same
  * way the header pill carries it on screen).
  */
+/** Builds one TAT row shape from a offLeaseTatTracking.service.js stage
+ *  object (tatV2) — null-safe, used below for both the gate/7-stage rows and
+ *  the 6A/6B/6C rows appended after SD Refunds. */
+function tatCell(t) {
+  if (!t) return null;
+  return { entryAt: t.entryAt, plannedAt: t.plannedAt, delayLabel: t.delayLabel, status: t.status, backdated: t.backdated, budgetLabel: t.budgetLabel };
+}
+
 export function buildProgressRows(result) {
   const { stages = [], approvalStatus, approvalDate, approvalUser } = result;
   const approvalLower = String(approvalStatus || '').trim().toLowerCase();
@@ -67,8 +75,37 @@ export function buildProgressRows(result) {
     status: APPROVAL_LABEL[approvalLower] || 'Pending',
     on: decided ? formatActionTimestamp(approvalDate) : '',
     by: decided ? cellText(approvalUser) : '',
-    sla: result.approvalSla || null
+    sla: result.approvalSla || null,
+    tat: tatCell(result.gateTatV2)
   };
+
+  /* Stage 6 (SD Refunds, internal 11) is where its own 6A/6B/6C
+     HOD/Accounts/CEO approval rows get appended — explicit request
+     2026-11-04 ("pls add the kab stage mai aaya kab form filled kiya kitna
+     dely hua aur kitna jaldi yah table pe show hoga"): the stage rail
+     already shows 6A/6B/6C dots, but this table never had rows for them at
+     all. refundTatV2 comes from the SAME container+lease-scoped refund
+     match the TAT Tracking page uses (see offlease.controller.js's
+     getContainerDetail) — never undefined when result.stages itself loaded
+     successfully, so a bare `|| {}` is enough rather than needing its own
+     loading state. */
+  const refundTat = result.refundTatV2 || {};
+  const sixAbcRows = [
+    { key: '6A', label: 'HOD Approval' },
+    { key: '6B', label: 'Accounts Approval' },
+    { key: '6C', label: 'CEO Approval' }
+  ].map(({ key, label }) => {
+    const t = refundTat[key];
+    return {
+      stage: key,
+      name: label,
+      status: t?.status || 'Pending',
+      on: t?.actualAt ? formatActionTimestamp(t.actualAt) : '',
+      by: t?.by || '',
+      sla: null,
+      tat: tatCell(t)
+    };
+  });
 
   return stages.flatMap((s, i) => {
     const row = {
@@ -77,9 +114,13 @@ export function buildProgressRows(result) {
       status: s.skipped ? 'Skipped' : s.done ? 'Completed' : 'Pending',
       on: s.done ? formatActionTimestamp(s.timestamp) : '',
       by: s.done ? cellText(s.user) : '',
-      sla: s.sla || null
+      sla: s.sla || null,
+      tat: tatCell(s.tatV2)
     };
-    return i === 0 ? [row, gateRow] : [row];
+    const rows = i === 0 ? [row, gateRow] : [row];
+    // SD Refunds is internal stage 11 — the one place 6A/6B/6C belong, right after it.
+    if (s.stage === 11) rows.push(...sixAbcRows);
+    return rows;
   });
 }
 
@@ -118,7 +159,22 @@ export function buildMovements(result) {
  * pipeline and can happen at any point in it — their own date column carries
  * when each actually occurred.
  */
-export const HISTORY_HEAD = ['Stage', 'Event', 'Status', 'Date', 'By', 'SLA', 'Details'];
+/* 'SLA' replaced with 'Entered Stage'/'Delay or Early' 2026-11-04 (explicit
+   request: "pls add the kab stage mai aaya kab form filled kiya kitna dely
+   hua aur kitna jaldi yah table pe show hoga" — "when it entered the stage,
+   when the form was filled [= Date, already here], how much delay, and how
+   much early, show it on this table") — the old SLA column's budgets
+   (offleaseSla.service.js's flat, mostly-1h numbers) produced nonsense like
+   "106d 19h of 2d · 104d 19h late"; these read from the same new TAT
+   engine the dedicated TAT Tracking page uses (see
+   offLeaseTatTracking.service.js, wired in via `r.tat` — see
+   buildProgressRows' own tatCell helper). 'TAT' (the allotted budget per
+   stage, e.g. "1 Day", "2 Hours") added same day, follow-up request ("tat
+   bhi dikhene chhaiye hai kon sestage mai konsa tat hai" — "the TAT should
+   show too, which stage has which TAT"). 'TAT' moved next to 'Date' same
+   day, follow-up request ("submitted date hai na TAT ke baju mai aaye" —
+   "the submitted date should sit next to TAT"). */
+export const HISTORY_HEAD = ['Stage', 'Event', 'Status', 'TAT', 'Date', 'By', 'Entered Stage', 'Delay / Early', 'Details'];
 
 /** "2h 15m of 1h · 1h 15m late" — the budget, what was used, and by how much
  *  it slipped. An "SLA" column saying only "Delayed" would not say whether it
@@ -131,6 +187,13 @@ export function slaText(sla) {
   const base = `${sla.elapsed} of ${budget}`;
   if (sla.delayed) return `${base} · ${sla.overdueBy} late`;
   return sla.running ? `${base} · running` : `${base} · on time`;
+}
+
+/** "Entered Stage" cell text — plain formatted timestamp, or '—' when the
+ *  stage hasn't been entered yet (r.tat is null for a still-Pending stage,
+ *  same as r.sla already was). */
+export function tatEntryText(tat) {
+  return tat?.entryAt ? formatActionTimestamp(tat.entryAt) : '';
 }
 
 export function buildHistoryRows(result) {

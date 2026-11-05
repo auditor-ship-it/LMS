@@ -70,6 +70,14 @@ function padRow(row, len) {
   return out;
 }
 
+/** "YYYY-MM-DD" from a Date's own local y/m/d fields — never
+ *  date.toISOString(), which converts to UTC first and can shift the
+ *  calendar date by one depending on the server's timezone. */
+function _toLocalIsoDate(date) {
+  const y = date.getFullYear(), m = String(date.getMonth() + 1).padStart(2, '0'), d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 /** First column whose header exactly matches one of `names` (case/space
  *  insensitive), or -1. Located by header rather than hardcoded index: this
  *  sheet has had columns inserted/removed by hand before (see the Off-Lease
@@ -222,6 +230,41 @@ export function _resolveOrderNo(ordMap, containerNo, clientName) {
   return ordMap.map[k] || '';
 }
 
+const AGREEMENT_START_CACHE_KEY = 'agreement_start_map_v1';
+const AGREEMENT_START_TTL_SECS = 300;
+
+/**
+ * Order No -> Agreement START date ("YYYY-MM-DD"), for the PO & Agreement
+ * Tracker's coverage bar — explicit request 2026-10-16. The Deployed sheet
+ * only ever tracked Agreement VALID UPTO (the expiry end), never when the
+ * agreement actually started; this is sourced from "New lease reff"'s own
+ * "Agreement Date" column instead (col N, index 13 — confirmed start/signing
+ * date, not another expiry field, by its header match requiring "date" or
+ * "valid" alongside "agreement"), keyed by Order No (col D, index 3) — same
+ * sheet/columns verify.service.js's own agrMap already reads for Verify
+ * Lease, same reasoning, independent read here rather than a cross-file
+ * import (that map is scoped to verify.service.js's own request lifecycle).
+ * No equivalent PO start date exists anywhere in this system — PO has no
+ * entry in this map and the Tracker falls back to a single-day marker for
+ * it, not a bar.
+ */
+export async function _agreementStartDateMap() {
+  return cacheGetOrLoad(AGREEMENT_START_CACHE_KEY, AGREEMENT_START_TTL_SECS, async () => {
+    const map = {};
+    try {
+      const { rows } = await getSheetDataFromMongo(SHEETS.NEW_LEASE_REFF);
+      for (const raw of rows) {
+        const r = padRow(raw, 15);
+        const orderNo = safeStr(r[3]).trim(); // D = Order No
+        if (!orderNo || map[orderNo]) continue; // first non-blank wins, same convention as _expiryOrderNoMap
+        const d = parseDate(r[13]); // N = Agreement Date
+        if (d) map[orderNo] = _toLocalIsoDate(d);
+      }
+    } catch (e) { /* never break the tracker page — falls back to no bar for every row */ }
+    return map;
+  });
+}
+
 export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
 const DEPLOYED_RAW_TTL_SECS = 30;
 
@@ -273,6 +316,11 @@ export async function getExpiryDataByFilter(filterType, user) {
   const allHeaders = padRow(values[0], readWidth);
   const allRows = values.slice(1).map((r) => padRow(r, readWidth));
   const expiryRemarkCol = findExpiryRemarkCol(allHeaders);
+  // Real Agreement/PO file + PO No columns, resolved once here (same helper
+  // every other Agreement/PO PDF reader in this app uses) — only actually
+  // read below for filterType 'pending' (the PO & Agreement Tracker page's
+  // click-through detail), but cheap enough to resolve unconditionally.
+  const { agrCol: _poAgrCol, poCol: _poPoCol, poPdfCol: _poPoPdfCol, cycleCol: _poCycleCol } = _resolveRenewalColumns(allHeaders);
 
   let colIdx = -1;
   for (let h = 0; h <= 14; h++) {
@@ -369,9 +417,21 @@ export async function getExpiryDataByFilter(filterType, user) {
     // Status is no longer 'Pending', so it falls straight back into
     // 'documents' here for the submitter to fix and resubmit.
     const awaitingApproval = isDocsPending && String(row[APPROVAL_STATUS_COL] || '').trim().toLowerCase() === 'pending';
+    // Explicit request: 'documents' must show ONLY records still missing
+    // their Agreement or PO copy — not every 'documents pending'-status row
+    // unconditionally. Before this, a row whose Agreement AND PO had both
+    // already been uploaded via Save (draft) but never pushed through
+    // Submit (which is the only thing that used to change the status cell)
+    // stayed on this list — and in the Renew Pending count — forever, since
+    // nothing here checked the actual document fields. Once BOTH are
+    // present, the record now drops off this list and out of the count
+    // immediately, the same moment it's no longer actually missing anything
+    // — "sent back" already exits via isDocsPending turning false (status
+    // cleared by sendExpiryToPending), unchanged.
+    const missingDocs = !safeStr(row[24]).trim() || !safeStr(row[25]).trim();
     if (filterType === 'pending') include = true;
     else if (filterType === 'renewed') include = (wVal && String(wVal).trim().toLowerCase() === 'renewed');
-    else if (filterType === 'documents') include = isDocsPending && !awaitingApproval;
+    else if (filterType === 'documents') include = isDocsPending && !awaitingApproval && missingDocs;
     else if (filterType === 'approval') include = awaitingApproval;
     // off-lease stages removed
     if (!include) continue;
@@ -477,6 +537,71 @@ export async function getExpiryDataByFilter(filterType, user) {
       remark: expiryRemarkCol >= 0 ? safeStr(row[expiryRemarkCol]) : '',
       _rowNum: ri + 2
     };
+    // Raw Agreement/PO dates, as plain "YYYY-MM-DD" (local calendar date,
+    // not expDate.toISOString() — that converts to UTC first and can shift
+    // the date by a day depending on server timezone) — added for the PO &
+    // Agreement Tracker page, which needs the actual point-in-time dates,
+    // not just the derived band this function already returns above.
+    if (filterType === 'pending') {
+      item.agreementDate = expDate ? _toLocalIsoDate(expDate) : null;
+      item.poDate = poExpDate ? _toLocalIsoDate(poExpDate) : null;
+      // Deployed Date (col G) — explicit request 2026-10-23: the PO &
+      // Agreement Tracker's coverage checkboxes must never tick a month
+      // before the container was actually deployed, even when a coverage
+      // range (agreementStartDate) or the "extend to today" logic would
+      // otherwise reach further back/forward than that.
+      const deployedParsed = parseDate(row[6]);
+      item.deployedDate = deployedParsed ? _toLocalIsoDate(deployedParsed) : null;
+      // Agreement START date for the PO & Agreement Tracker's coverage
+      // range — explicit request 2026-10-16 (a live example container,
+      // CXRU1249797: Renewed Date 01-08-2026, Valid Till 30-09-2026 ->
+      // Aug+Sep should both tick). col AA ("Renewed Date") is written by
+      // every Save/Submit on the Documents form (saveRenewalDraft/
+      // completeDocStage) and reflects the ACTUAL start of the container's
+      // current agreement period — far better coverage than
+      // _agreementStartDateMap's New Lease Reff join (~15% of containers,
+      // and not necessarily the current renewal cycle). Falls back to that
+      // join in dashboard.service.js only when this is blank (a container
+      // that has never been through a renewal yet).
+      const renewedParsed = parseDate(row[26]);
+      item.renewedDate = renewedParsed ? _toLocalIsoDate(renewedParsed) : null;
+      // The STAGED valid-till (col AB) — needed alongside renewedDate,
+      // because the REAL "Agreement Valid Upto" (col H, read into
+      // item.agreementDate above) does NOT update on Save/Submit; it only
+      // gets promoted from AB once Pushpa actually Approves (see
+      // saveRenewalDraft's own doc comment: "Deliberately does NOT touch:
+      // Valid Upto (H/X)..."). Confirmed live 2026-10-16 on PCIU6016370: H
+      // still showed a stale 30-03-2026 (already overdue) while AA/AB had
+      // just been submitted for 01-10-2026 — explicit spec requirement
+      // ("if I renew again in May... mark green") needs the tracker to
+      // reflect a submitted renewal immediately, not wait for approval.
+      // dashboard.service.js decides whether to actually trust this over H
+      // (never when the submission was Rejected — see its own comment).
+      const stagedValidTillParsed = parseDate(row[27]);
+      item.stagedValidTill = stagedValidTillParsed ? _toLocalIsoDate(stagedValidTillParsed) : null;
+      item.approvalStatus = safeStr(row[APPROVAL_STATUS_COL]);
+      // For the PO & Agreement Tracker page's click-through detail view —
+      // explicit request 2026-10-16 ("click the ticket open PO"): the
+      // actual Agreement/PO file links, PO No and Billing Cycle, so
+      // clicking a container there can show them without a second
+      // round-trip. actionStatus (above, set for every filterType) already
+      // tells the frontend whether this container is in 'documents
+      // pending' — the only stage its Update Agreement form can save to.
+      item.agreementUrl = safeStr(row[_poAgrCol]);
+      item.poPdfUrl = safeStr(row[_poPoPdfCol]);
+      item.poNo = safeStr(row[_poPoCol]);
+      // Only the two real values this field is ever meant to hold — some
+      // rows carry leftover data from before this column's current use
+      // (e.g. a stray date) that isn't a billing cycle at all.
+      const cycleRaw = safeStr(row[_poCycleCol]).trim();
+      item.billingCycle = (cycleRaw === 'Monthly' || cycleRaw === 'Daily') ? cycleRaw : '';
+      // For the Month-Wise Renew Tracking table (explicit spec 2026-10-16,
+      // columns "Actual Renewal Entry Date" and "Remarks") — col AN is
+      // stamped by both Save and Submit (whichever ran most recently); col
+      // AD is the Remarks field from that same Documents form.
+      item.renewalSubmittedDate = safeStr(row[RENEWAL_SUBMITTED_DATE_COL]);
+      item.renewalRemarks = safeStr(row[29]);
+    }
     if (filterType === 'documents' || filterType === 'approval') {
       item.poUrl = safeStr(row[24]);
       item.agrUrl = safeStr(row[25]);
@@ -506,6 +631,9 @@ export async function getExpiryDataByFilter(filterType, user) {
       item.draftBillingCycle = safeStr(row[DRAFT_BILLING_CYCLE_COL]);
       item.draftPoValidity = safeStr(row[DRAFT_PO_VALIDITY_COL]);
       item.draftPoValue = safeStr(row[DRAFT_PO_VALUE_COL]);
+      item.draftAgreementValue = safeStr(row[DRAFT_AGREEMENT_VALUE_COL]);
+      item.draftPoRenewDate = safeStr(row[DRAFT_PO_RENEW_DATE_COL]);
+      item.draftOtherFileUrl = safeStr(row[DRAFT_OTHER_FILE_COL]);
       item.submittedBy = safeStr(row[SUBMITTED_BY_COL]);
     }
     finalData.push(item);
@@ -935,7 +1063,23 @@ export async function saveExpiryRemarkFast(containerNo, remark, callerEmail, kno
    here: _deployedClientName @681, _logRenewal @701 — see file header note)
 ============================================= */
 const RENEWAL_LOG_SHEET = SHEETS.RENEWAL_LOG;
-const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File'];
+// Explicit request 2026-10-16 ("pls update the sheet heder and data") — the
+// user pointed out this log had no Renewed Date, PO Valid Date, or Old
+// Valid Till columns (only Old PO No/File and Old Agreement File).
+// Appended at the end, never inserted — insertSheetIfMissing/the
+// curHeaders-extension logic below both already assume append-only growth,
+// same convention as every other positional sheet in this app.
+// 'PO Renew Date' appended 2026-11-03 (explicit request: "shoe this data
+// for Renewal Log add the po renew date"); 'PO Value'/'Agreement Value'/
+// 'Billing Cycle' appended the same day, same explicit request ("po renew
+// date save po value agremnet value and billing crycle data show") — the
+// user had already manually typed these 3 header labels into the live
+// sheet's Q/R/S columns before asking, so these positions were chosen to
+// match what's already there rather than insert a duplicate set. MUST stay
+// in sync with verify.service.js's own copy of this same array (both
+// write-paths append to the SAME physical sheet; see _logRenewal's own doc
+// comment).
+const RENEWAL_LOG_HEADERS = ['Timestamp', 'Container No', 'Client Name', 'PO No', 'PO File', 'Agreement File', 'Valid Till', 'Updated By', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Renewed Date', 'PO Valid Date', 'Old Agreement Date', 'Old PO Date', 'PO Renew Date', 'PO Value', 'Agreement Value', 'Billing Cycle'];
 
 function _deployedClientName(headers, row) {
   try {
@@ -999,6 +1143,13 @@ export async function getRenewalLogReport(user) {
         oldPoNo: safeStr(r[8]).trim(),
         oldPoFile: safeStr(r[9]).trim(),
         oldAgreementFile: safeStr(r[10]).trim(),
+        // Explicit request 2026-11-03 ("shoe this data for Renewal Log add
+        // the po renew date" / "po value agremnet value and billing crycle
+        // data show") — indices 15-18, see RENEWAL_LOG_HEADERS.
+        poRenewDate: safeStr(r[15]).trim(),
+        poValue: safeStr(r[16]).trim(),
+        agreementValue: safeStr(r[17]).trim(),
+        billingCycle: safeStr(r[18]).trim(),
         // Same "displayed for everyone, not just a scoped caller" reasoning
         // as getNewLeaseReport's own saleExec field.
         saleExec: canonicalSalePersonName(resolveSalePerson(clientName) || '')
@@ -1104,7 +1255,7 @@ function fmtCellDate(v) {
  *  Agreement/PO PDF columns on SHEETS.DEPLOYED (explicit request: "show
  *  agreement pdf and po pdf offlease"). */
 export function _resolveRenewalColumns(hdrs0) {
-  let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1, poValidityCol = -1, poValueCol = -1;
+  let agrCol = -1, poCol = -1, poPdfCol = -1, cycleCol = -1, poValidityCol = -1, poValueCol = -1, agreementValueCol = -1;
   for (let h = 0; h < hdrs0.length; h++) {
     const hd = String(hdrs0[h] || '').trim().toLowerCase();
     if (agrCol < 0 && hd.indexOf('agreement') !== -1 && hd.indexOf('valid') === -1 &&
@@ -1122,6 +1273,12 @@ export function _resolveRenewalColumns(hdrs0) {
        skipped) until a real "PO ... Value/Amount" column actually exists. */
     if (poValueCol < 0 && hd.indexOf('draft') === -1 && hd.indexOf('po') !== -1 &&
       (hd.indexOf('value') !== -1 || hd.indexOf('amount') !== -1)) poValueCol = h;
+    /* Agreement Value — same reasoning/exclusions as poValueCol just above
+       (excludes 'draft' so it can't match the Draft Agreement Value column
+       we just added, AZ; no hardcoded fallback; stays -1 until a real
+       "Agreement ... Value/Amount" column exists). */
+    if (agreementValueCol < 0 && hd.indexOf('draft') === -1 && hd.indexOf('agreement') !== -1 &&
+      (hd.indexOf('value') !== -1 || hd.indexOf('amount') !== -1)) agreementValueCol = h;
   }
   for (let h2 = 0; h2 < hdrs0.length; h2++) {
     const hd2 = String(hdrs0[h2] || '').trim().toLowerCase();
@@ -1132,7 +1289,7 @@ export function _resolveRenewalColumns(hdrs0) {
   if (poPdfCol < 0) poPdfCol = 11; // col L fallback
   if (cycleCol < 0) cycleCol = 14; // col O fallback
   if (poValidityCol < 0) poValidityCol = 12; // col M fallback
-  return { agrCol, poCol, poPdfCol, cycleCol, poValidityCol, poValueCol };
+  return { agrCol, poCol, poPdfCol, cycleCol, poValidityCol, poValueCol, agreementValueCol };
 }
 
 /** Appended 2026-09-28, explicit request — a persistent "when was this
@@ -1160,7 +1317,7 @@ async function _ensureRenewalSubmittedDateHeader(hdrs0) {
  * Signed Copy/Remarks, and only get promoted into the real columns by
  * decideRenewalApproval on an Approve decision.
  */
-const APPROVAL_STATUS_COL = 40;     // AO — '' | 'Pending' | 'Approved' | 'Rejected'
+const APPROVAL_STATUS_COL = 40;     // AO — '' | 'Pending' | 'Approved' | 'Sent Back' (older rows: 'Rejected' — see decideRenewalApproval's own comment)
 const APPROVAL_REMARKS_COL = 41;    // AP
 const APPROVAL_DATE_COL = 42;       // AQ
 const APPROVER_COL = 43;            // AR
@@ -1176,6 +1333,20 @@ const SUBMITTED_BY_COL = 48;        // AW — who clicked Submit, read back by d
 // a deliberate exception for this one field, scoped to the specific views
 // that read item.draftPoValue by name, not the generic all-headers dump.
 const DRAFT_PO_VALUE_COL = 50;      // AY
+// AZ — next free column. Explicit request 2026-11-03 ("add the two oprion
+// po value and agremenet value"): same shown-everywhere exception as
+// DRAFT_PO_VALUE_COL just above (isRateOrAmountHeader does NOT hide this one).
+const DRAFT_AGREEMENT_VALUE_COL = 51; // AZ
+// BA — next free column. Explicit request 2026-11-03 ("add the Po renew
+// date"): when the PO itself was renewed/raised — PO's own counterpart to
+// Renewed Date (AA), distinct from PO Valid Date (DRAFT_PO_VALIDITY_COL),
+// which is the PO's expiry, not when it was raised.
+const DRAFT_PO_RENEW_DATE_COL = 52; // BA
+// BB — next free column. Explicit request 2026-11-04 ("add this renew from
+// other file upload"): a third, generic attachment alongside Signed Copy
+// (Agreement basis) and PO File (PO basis) — for a renewal document that's
+// neither of those (e.g. a covering letter, an addendum).
+const DRAFT_OTHER_FILE_COL = 53; // BB
 
 const APPROVAL_COL_HEADERS = {
   [APPROVAL_STATUS_COL]: 'Approval Status',
@@ -1187,7 +1358,10 @@ const APPROVAL_COL_HEADERS = {
   [DRAFT_BILLING_CYCLE_COL]: 'Draft Billing Cycle',
   [DRAFT_PO_VALIDITY_COL]: 'Draft PO Validity',
   [SUBMITTED_BY_COL]: 'Submitted By',
-  [DRAFT_PO_VALUE_COL]: 'Draft PO Value'
+  [DRAFT_PO_VALUE_COL]: 'Draft PO Value',
+  [DRAFT_AGREEMENT_VALUE_COL]: 'Draft Agreement Value',
+  [DRAFT_PO_RENEW_DATE_COL]: 'Draft PO Renew Date',
+  [DRAFT_OTHER_FILE_COL]: 'Draft Other File URL'
 };
 async function _ensureApprovalColumnsHeader(hdrs0) {
   const missing = Object.keys(APPROVAL_COL_HEADERS).map(Number).filter((c) => !safeStr(hdrs0[c]).trim());
@@ -1248,7 +1422,7 @@ export async function _ensureDeployedEmailIdHeader() {
  * RENEWAL_SUBMITTED_DATE_COL is stamped, same column Submit also stamps —
  * whichever action ran most recently is what that column shows.
  */
-export async function saveRenewalDraft(containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
+export async function saveRenewalDraft(containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue, agreementValue, poRenewDate, otherFileUrl) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
@@ -1275,6 +1449,9 @@ export async function saveRenewalDraft(containerNo, renewedDate, validTill, sign
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_BILLING_CYCLE_COL)}${targetRow}`, values: [[billingCycle]] });
     if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[fmtCellDate(poValidity)]] });
     if (poValue) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALUE_COL)}${targetRow}`, values: [[poValue]] });
+    if (agreementValue) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_AGREEMENT_VALUE_COL)}${targetRow}`, values: [[agreementValue]] });
+    if (poRenewDate) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_RENEW_DATE_COL)}${targetRow}`, values: [[fmtCellDate(poRenewDate)]] });
+    if (otherFileUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_OTHER_FILE_COL)}${targetRow}`, values: [[otherFileUrl]] });
     updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[dmyTime(new Date())]] });
 
     await batchUpdateValues(updates);
@@ -1307,15 +1484,16 @@ export async function saveRenewalDraft(containerNo, renewedDate, validTill, sign
  * awaitingApproval split) — from the submitter's point of view, indistinguishable
  * from "removed from Pending", which is what the request asked for.
  */
-export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue) {
+export async function completeDocStage(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue, skipEmail, agreementValue, poRenewDate, otherFileUrl) {
   await checkActionPermission('renew', callerEmail);
   return withSheetLock(SHEETS.DEPLOYED, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
-    if (!renewedDate) throw new AppError('Renewed Date is required');
-    // Agreement Valid Till is NOT required — explicit request 2026-10-03
-    // ("this is not complusoly"): same reasoning as the Signed Copy/PO
-    // fields just below — a renewal can go through on a PO basis alone with
-    // no agreement, so there's no agreement expiry date to give.
+    // Renewed Date (renamed "Agreement Renew Date" on the form) is NOT
+    // required — explicit request 2026-11-04 ("this not complusory"), same
+    // reasoning Agreement Valid Till already got 2026-10-03 ("this is not
+    // complusoly") and the Signed Copy/PO fields below: a renewal can go
+    // through on a PO basis alone with no agreement, so there's no
+    // agreement renewal date to give either.
 
     const { headers, rows } = await getSheetData(SHEETS.DEPLOYED);
     if (!rows.length) throw new AppError('No data rows');
@@ -1341,6 +1519,9 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_BILLING_CYCLE_COL)}${targetRow}`, values: [[billingCycle || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALIDITY_COL)}${targetRow}`, values: [[poValidity ? fmtCellDate(poValidity) : '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_VALUE_COL)}${targetRow}`, values: [[poValue || '']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_AGREEMENT_VALUE_COL)}${targetRow}`, values: [[agreementValue || '']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_PO_RENEW_DATE_COL)}${targetRow}`, values: [[poRenewDate ? fmtCellDate(poRenewDate) : '']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DRAFT_OTHER_FILE_COL)}${targetRow}`, values: [[otherFileUrl || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(RENEWAL_SUBMITTED_DATE_COL)}${targetRow}`, values: [[stamp]] },
       // A resubmission after a prior Rejection clears that old decision out —
       // it no longer describes the request now being made.
@@ -1360,17 +1541,153 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
     cacheRemove(DEPLOYED_RAW_CACHE_KEY);
     cacheRemoveByPrefix('mytasks_v1');
 
-    try {
-      await _sendRenewalApprovalRequestEmail({
-        container: containerNo,
-        clientName: _deployedClientName(hdrs0, matchedRow),
-        renewedDate, validTill, poNo: poNo || '', billingCycle: billingCycle || '',
-        submittedBy
-      });
-    } catch (e) { console.error('[RENEWAL-APPROVAL-EMAIL]', e.message); }
+    // skipEmail: set only when this call is the outbox worker REPLAYING a
+    // completeDocStageFast write that already sent this email immediately
+    // (see that function below) — without this, Pushpa would get the same
+    // approval-request email twice, once right away and once again whenever
+    // the queued Sheets write actually lands (seconds later, or minutes
+    // later under quota pressure).
+    if (!skipEmail) {
+      try {
+        await _sendRenewalApprovalRequestEmail({
+          container: containerNo,
+          clientName: _deployedClientName(hdrs0, matchedRow),
+          renewedDate, validTill, poNo: poNo || '', billingCycle: billingCycle || '',
+          submittedBy
+        });
+      } catch (e) { console.error('[RENEWAL-APPROVAL-EMAIL]', e.message); }
+    }
 
     return 'Submitted for approval — awaiting Pushpa Shetty';
   });
+}
+
+/**
+ * Mongo-first fast path for saveRenewalDraft ("Save" on the Update
+ * Agreement form) — same design as completeDocumentStageFast/
+ * saveExpiryActionFast above. Explicit request 2026-10-23: the live-Sheets
+ * version above used to hit withQuotaRetry's "already locked out" error
+ * during a Sheets quota outage and fail the WHOLE Save with a 500 — the
+ * user's filled-in form data was simply lost, with nothing saved anywhere.
+ * This always succeeds to Mongo first; the real Sheets write replays in the
+ * background once quota allows (jobs/outboxWorker.js), with a persistent
+ * log of exactly what's still pending (Sync Status page / _sync_outbox).
+ *
+ * Skips _ensureRenewalSubmittedDateHeader/_ensureApprovalColumnsHeader
+ * (both live Sheets calls — exactly what this path exists to avoid): safe
+ * because every container reachable here is already in 'documents pending',
+ * meaning an earlier write already created these headers; the replay (the
+ * unchanged original saveRenewalDraft) still calls them for real, covering
+ * a genuine first-ever case.
+ */
+export async function saveRenewalDraftFast(containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue, agreementValue, poRenewDate, otherFileUrl) {
+  await checkActionPermission('renew', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+
+  // Same column set/semantics as the live saveRenewalDraft above (AA-AD,
+  // DRAFT_*, RENEWAL_SUBMITTED_DATE_COL) — only write a field if it was
+  // actually provided, same "a draft is allowed to be partial" rule.
+  const patch = {};
+  if (renewedDate) patch['row.26'] = fmtCellDate(renewedDate);
+  if (validTill) patch['row.27'] = fmtCellDate(validTill);
+  if (signedCopyUrl) patch['row.28'] = signedCopyUrl;
+  if (remarks) patch['row.29'] = remarks;
+  if (poNo) patch[`row.${DRAFT_PO_NO_COL}`] = poNo;
+  if (poFileUrl) patch[`row.${DRAFT_PO_FILE_COL}`] = poFileUrl;
+  if (billingCycle) patch[`row.${DRAFT_BILLING_CYCLE_COL}`] = billingCycle;
+  if (poValidity) patch[`row.${DRAFT_PO_VALIDITY_COL}`] = fmtCellDate(poValidity);
+  if (poValue) patch[`row.${DRAFT_PO_VALUE_COL}`] = poValue;
+  if (agreementValue) patch[`row.${DRAFT_AGREEMENT_VALUE_COL}`] = agreementValue;
+  if (poRenewDate) patch[`row.${DRAFT_PO_RENEW_DATE_COL}`] = fmtCellDate(poRenewDate);
+  if (otherFileUrl) patch[`row.${DRAFT_OTHER_FILE_COL}`] = otherFileUrl;
+  patch[`row.${RENEWAL_SUBMITTED_DATE_COL}`] = dmyTime(new Date());
+
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY); // so the very next read (this page's own reload) sees it instantly, not up to 30s later
+
+  // Resolved row through to the replay — see completeDocumentStageFast's
+  // identical note above on why (the live write must target the SAME row
+  // this Mongo patch just did, not re-search by container number later).
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.saveRenewalDraft', [containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, callerEmail, poValidity, resolvedRow, poValue, agreementValue, poRenewDate, otherFileUrl], { actor: callerEmail });
+
+  return 'Draft saved — still pending';
+}
+
+/**
+ * Mongo-first fast path for completeDocStage ("Submit" on the Update
+ * Agreement form) — same design and same motivation as
+ * saveRenewalDraftFast immediately above. The one real difference: the
+ * live completeDocStage also sends Pushpa an approval-request email as
+ * part of the same call. That email is sent HERE instead, immediately —
+ * Mongo already has everything it needs (the whole approval workflow
+ * reviews the STAGED data, which Mongo now holds, not the live Sheet cell)
+ * — and the replayed completeDocStage call is passed skipEmail=true so
+ * Pushpa doesn't get it a second time once the real Sheets write lands,
+ * possibly minutes later under quota pressure.
+ */
+export async function completeDocStageFast(containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, knownRow, poValue, agreementValue, poRenewDate, otherFileUrl) {
+  await checkActionPermission('renew', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  // Renewed Date not required — see completeDocStage's identical note above.
+
+  const docs = await getMongoRowsWithKeys(SHEETS.DEPLOYED);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  if (String(found.row[22] || '').trim().toLowerCase() !== 'documents pending') return 'INVALID_STATE';
+
+  const stamp = dmyTime(new Date());
+  const submittedBy = userEmail || callerEmail || '';
+  const patch = {
+    'row.26': fmtCellDate(renewedDate),
+    'row.27': fmtCellDate(validTill),
+    'row.28': signedCopyUrl || '',
+    'row.29': remarks || '',
+    [`row.${DRAFT_PO_NO_COL}`]: poNo || '',
+    [`row.${DRAFT_PO_FILE_COL}`]: poFileUrl || '',
+    [`row.${DRAFT_BILLING_CYCLE_COL}`]: billingCycle || '',
+    [`row.${DRAFT_PO_VALIDITY_COL}`]: poValidity ? fmtCellDate(poValidity) : '',
+    [`row.${DRAFT_PO_VALUE_COL}`]: poValue || '',
+    [`row.${DRAFT_AGREEMENT_VALUE_COL}`]: agreementValue || '',
+    [`row.${DRAFT_PO_RENEW_DATE_COL}`]: poRenewDate ? fmtCellDate(poRenewDate) : '',
+    [`row.${DRAFT_OTHER_FILE_COL}`]: otherFileUrl || '',
+    [`row.${RENEWAL_SUBMITTED_DATE_COL}`]: stamp,
+    // A resubmission after a prior Rejection clears that old decision out —
+    // same as the live version above.
+    [`row.${APPROVAL_STATUS_COL}`]: 'Pending',
+    [`row.${APPROVAL_REMARKS_COL}`]: '',
+    [`row.${APPROVAL_DATE_COL}`]: '',
+    [`row.${APPROVER_COL}`]: '',
+    [`row.${SUBMITTED_BY_COL}`]: submittedBy
+  };
+
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+  cacheRemoveByPrefix('mytasks_v1');
+
+  try {
+    await _sendRenewalApprovalRequestEmail({
+      container: containerNo,
+      // B (index 1) = Client Name, fixed position — no live headers
+      // available here to do the name-based lookup _deployedClientName
+      // does; this whole Fast-path family already treats the Deployed
+      // sheet's column layout as fixed (see e.g. the hardcoded 21/22 used
+      // throughout saveExpiryActionFast/completeDocumentStageFast above).
+      clientName: safeStr(found.row[1]),
+      renewedDate, validTill, poNo: poNo || '', billingCycle: billingCycle || '',
+      submittedBy
+    });
+  } catch (e) { console.error('[RENEWAL-APPROVAL-EMAIL]', e.message); }
+
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.completeDocStage', [containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, callerEmail, poValidity, resolvedRow, poValue, true, agreementValue, poRenewDate, otherFileUrl], { actor: callerEmail });
+
+  return 'Submitted for approval — awaiting Pushpa Shetty';
 }
 
 /**
@@ -1395,7 +1712,7 @@ export async function completeDocStage(containerNo, renewedDate, validTill, sign
  * in the main system is touched. Notifies the row's own Sale Person +
  * Shivani Dhall, per the request.
  */
-export async function decideRenewalApproval(containerNo, decision, remarks, callerEmail, knownRow) {
+export async function decideRenewalApproval(containerNo, decision, remarks, callerEmail, knownRow, skipEmail = false) {
   await checkActionPermission('renewApproval', callerEmail);
   if (decision !== 'approved' && decision !== 'rejected') throw new AppError('decision must be "approved" or "rejected"');
 
@@ -1412,8 +1729,21 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     if (String(matchedRow[APPROVAL_STATUS_COL] || '').trim().toLowerCase() !== 'pending') return 'INVALID_STATE';
 
     const stamp = dmyTime(new Date());
+    /* BUG FOUND AND FIXED 2026-10-29 ("mail reject... database col mai bhi
+       reject aaraha hai", re: Renew Approval's "Send Back" button): the
+       2026-10-10 relabel only changed what the UI/email SAID, deliberately
+       leaving the stored cell value as 'Rejected' (see that commit's own
+       comment, still on CompleteDocumentModal.jsx) to avoid touching every
+       read site. Now writing 'Sent Back' here too, since the raw sheet
+       column and the email were still confusingly showing "Reject" even
+       though the button and banner say "Send Back". Every read site that
+       compares against this value (RenewDocumentPage.jsx's status filter/
+       badge, CompleteDocumentModal.jsx's banner) now accepts EITHER string
+       — see isRenewalSentBack below — so existing rows already written as
+       'Rejected' keep displaying correctly; only NEW decisions write the
+       new label. */
     const updates = [
-      { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_STATUS_COL)}${targetRow}`, values: [[decision === 'approved' ? 'Approved' : 'Rejected']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_STATUS_COL)}${targetRow}`, values: [[decision === 'approved' ? 'Approved' : 'Sent Back']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_REMARKS_COL)}${targetRow}`, values: [[remarks || '']] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVAL_DATE_COL)}${targetRow}`, values: [[stamp]] },
       { range: `'${SHEETS.DEPLOYED}'!${colLetter(APPROVER_COL)}${targetRow}`, values: [[callerEmail || '']] }
@@ -1428,12 +1758,37 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       await patchMongoMirrorRow(SHEETS.DEPLOYED, targetRow, updates);
       cacheRemove(DEPLOYED_RAW_CACHE_KEY);
 
-      try {
+      // skipEmail — set when decideRenewalApprovalRejectFast already sent
+      // this from Mongo data moments ago and this call is just its
+      // background replay catching the real Sheets cell up; same
+      // "send once, from whichever path got there first" convention as
+      // completeDocStageFast's own skipEmail.
+      if (!skipEmail) try {
         const salePersonColIdx = hdrs0.findIndex((h) => String(h || '').trim().toLowerCase() === 'sale person');
         const salePersonName = salePersonColIdx >= 0 ? safeStr(matchedRow[salePersonColIdx]) : '';
+        /* Explicit request 2026-10-29 ("jo renew kiya hai uska data and
+           remaks... sab bhi dikh na chahiye hai"): the email used to carry
+           only Container/Client/Submitted By/the send-back reason — none of
+           what was actually SUBMITTED (what the email is about in the first
+           place). Same AA-AD/AS-AY draft columns formFromDraft's own
+           pre-fill reads (CompleteDocumentModal.jsx) — this is the exact
+           same submission, just read straight from the sheet instead of
+           round-tripping through the frontend. */
         await _sendRenewalRejectionEmail({
           container: containerNo, clientName, remarks: remarks || '',
-          submittedBy, salePersonName
+          submittedBy, salePersonName,
+          renewedDate: fmtCellDate(matchedRow[26]),
+          validTillDate: fmtCellDate(matchedRow[27]),
+          signedCopyUrl: safeStr(matchedRow[28]),
+          submissionRemarks: safeStr(matchedRow[29]),
+          poNo: safeStr(matchedRow[DRAFT_PO_NO_COL]),
+          poFileUrl: safeStr(matchedRow[DRAFT_PO_FILE_COL]),
+          poValidity: fmtCellDate(matchedRow[DRAFT_PO_VALIDITY_COL]),
+          poValue: safeStr(matchedRow[DRAFT_PO_VALUE_COL]),
+          agreementValue: safeStr(matchedRow[DRAFT_AGREEMENT_VALUE_COL]),
+          poRenewDate: fmtCellDate(matchedRow[DRAFT_PO_RENEW_DATE_COL]),
+          otherFileUrl: safeStr(matchedRow[DRAFT_OTHER_FILE_COL]),
+          billingCycle: safeStr(matchedRow[DRAFT_BILLING_CYCLE_COL])
         });
       } catch (e) { console.error('[RENEWAL-REJECTION-EMAIL]', e.message); }
 
@@ -1441,7 +1796,7 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     }
 
     // Approved — promote the staged draft into the real columns.
-    const { agrCol, poCol, poPdfCol, cycleCol, poValidityCol, poValueCol } = _resolveRenewalColumns(hdrs0);
+    const { agrCol, poCol, poPdfCol, cycleCol, poValidityCol, poValueCol, agreementValueCol } = _resolveRenewalColumns(hdrs0);
     const [oldAgrCell, oldPoNoCell, oldPoPdfCell] = await Promise.all([
       getRange(SHEETS.DEPLOYED, `${colLetter(agrCol)}${targetRow}:${colLetter(agrCol)}${targetRow}`),
       getRange(SHEETS.DEPLOYED, `${colLetter(poCol)}${targetRow}:${colLetter(poCol)}${targetRow}`),
@@ -1450,6 +1805,11 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     const oldAgr = safeStr(oldAgrCell?.[0]?.[0]);
     const oldPoNo = safeStr(oldPoNoCell?.[0]?.[0]);
     const oldPoPdf = safeStr(oldPoPdfCell?.[0]?.[0]);
+    // Old PO Date (explicit request 2026-10-16) — the PO Validity value
+    // this approval is about to overwrite. Read straight from matchedRow
+    // (captured at the top of this function, before any writes), same as
+    // Old Agreement Date's matchedRow[7] — no extra getRange call needed.
+    const oldPoDate = fmtCellDate(matchedRow[poValidityCol]);
 
     const signedCopyUrl = safeStr(matchedRow[28]); // AC
     const poNo = safeStr(matchedRow[DRAFT_PO_NO_COL]);
@@ -1457,16 +1817,18 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
     const billingCycle = safeStr(matchedRow[DRAFT_BILLING_CYCLE_COL]);
     const poValidity = safeStr(matchedRow[DRAFT_PO_VALIDITY_COL]);
     const poValue = safeStr(matchedRow[DRAFT_PO_VALUE_COL]);
+    const agreementValue = safeStr(matchedRow[DRAFT_AGREEMENT_VALUE_COL]);
 
     if (signedCopyUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(agrCol)}${targetRow}`, values: [[signedCopyUrl]] });
     if (poNo) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poCol)}${targetRow}`, values: [[poNo]] });
     if (poFileUrl) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poPdfCol)}${targetRow}`, values: [[poFileUrl]] });
     if (billingCycle) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(cycleCol)}${targetRow}`, values: [[billingCycle]] });
     if (poValidity) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poValidityCol)}${targetRow}`, values: [[poValidity]] });
-    // poValueCol is -1 (no real column found) on most sheets today — see
-    // _resolveRenewalColumns' own doc comment; this simply does nothing
-    // until one exists.
+    // poValueCol/agreementValueCol are -1 (no real column found) on most
+    // sheets today — see _resolveRenewalColumns' own doc comment; this
+    // simply does nothing until one exists.
     if (poValue && poValueCol >= 0) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(poValueCol)}${targetRow}`, values: [[poValue]] });
+    if (agreementValue && agreementValueCol >= 0) updates.push({ range: `'${SHEETS.DEPLOYED}'!${colLetter(agreementValueCol)}${targetRow}`, values: [[agreementValue]] });
     if (validTillDraft) {
       updates.push({ range: `'${SHEETS.DEPLOYED}'!H${targetRow}`, values: [[validTillDraft]] });
       updates.push({ range: `'${SHEETS.DEPLOYED}'!X${targetRow}`, values: [[validTillDraft]] });
@@ -1483,11 +1845,106 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       container: containerNo, clientName,
       poNo, poFileUrl, agreementUrl: signedCopyUrl,
       oldPoNo, oldPoFileUrl: oldPoPdf, oldAgreementUrl: oldAgr,
-      validTill: fmtCellDate(validTillDraft), userEmail: submittedBy, source: 'Renewal Approval (Pushpa)'
+      validTill: fmtCellDate(validTillDraft), userEmail: submittedBy, source: 'Renewal Approval (Pushpa)',
+      // New columns (explicit request 2026-10-16) — the start date entered
+      // on the Documents form (AA, staged by Save/Submit, still present on
+      // matchedRow from the read at the top of this function) and the PO's
+      // own valid-till, plus the Agreement valid-till THIS approval is
+      // about to overwrite (matchedRow[7] — col H, read before any of the
+      // updates above were applied).
+      renewedDate: safeStr(matchedRow[26]), poValidDate: poValidity, oldValidTill: fmtCellDate(matchedRow[7]), oldPoDate,
+      poRenewDate: fmtCellDate(matchedRow[DRAFT_PO_RENEW_DATE_COL]),
+      poValue, agreementValue, billingCycle
     });
 
     return 'Approved — renewal applied';
   });
+}
+
+/**
+ * Mongo-first fast path for decideRenewalApproval's REJECTED/"Send Back"
+ * branch only — explicit request 2026-10-29 ("pls solve this error", the
+ * same "Google Sheets API rate limit" failure already fixed for Save/
+ * Submit, now hit on Pushpa's own Approve/Send Back decision). Same design
+ * as saveRenewalDraftFast/completeDocStageFast above: always succeeds to
+ * Mongo first, the real Sheets write replays in the background once quota
+ * allows, with a persistent log of exactly what's still pending.
+ *
+ * Deliberately NOT covering the 'approved' decision: that branch reads
+ * several OLD cell values live (for the Renewal Log's audit trail) and then
+ * promotes the staged draft into the REAL Agreement/PO/PO PDF/Billing
+ * Cycle/PO Validity columns plus a separate Renewal Log append — a
+ * materially bigger, financial-document-adjacent write than this one's 4
+ * cells, and not the action failing in the report that prompted this fix
+ * (Pushpa was Sending Back, not Approving). Still goes through the
+ * original, unchanged, live decideRenewalApproval — same robustness it
+ * always had, not worse than before this fix.
+ */
+export async function decideRenewalApprovalRejectFast(containerNo, remarks, callerEmail, knownRow) {
+  await checkActionPermission('renewApproval', callerEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  /* Headers ARE read here, unlike saveRenewalDraftFast/completeDocStageFast
+     above — this path needs them for the SAME salePersonName/clientName
+     resolution the live decideRenewalApproval uses (by header name, not a
+     fixed index — Sale Person's column position isn't guaranteed). Fetched
+     separately from the row/key resolution below rather than destructuring
+     getSheetDataFromMongo's own `rows`: that function's rows are NOT
+     guaranteed to be in sheet-row order (no .sort() — see its own
+     definition in mongoSheetData.service.js), unlike getMongoRowsWithKeys'
+     rows, which ARE explicitly sorted by the row_N suffix. Using
+     getSheetDataFromMongo's unordered rows with _resolveDeployedRow's own
+     positional "row = i+2" math would risk patching the WRONG container's
+     row — caught in review before this ever ran. Both calls are still pure
+     Mongo (the second internally cached too, mongo_raw_v1:Deployed sheet),
+     so this stays just as resilient to a Sheets quota outage either way. */
+  const [{ headers: hdrs0 }, docs] = await Promise.all([
+    getSheetDataFromMongo(SHEETS.DEPLOYED),
+    getMongoRowsWithKeys(SHEETS.DEPLOYED)
+  ]);
+  const found = _resolveDeployedMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw notFound(`Not found: ${containerNo}`);
+  const matchedRow = found.row;
+  if (String(matchedRow[APPROVAL_STATUS_COL] || '').trim().toLowerCase() !== 'pending') return 'INVALID_STATE';
+
+  const stamp = dmyTime(new Date());
+  const patch = {
+    [`row.${APPROVAL_STATUS_COL}`]: 'Sent Back',
+    [`row.${APPROVAL_REMARKS_COL}`]: remarks || '',
+    [`row.${APPROVAL_DATE_COL}`]: stamp,
+    [`row.${APPROVER_COL}`]: callerEmail || ''
+  };
+  await getCollection(SHEETS.DEPLOYED).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(DEPLOYED_RAW_CACHE_KEY);
+
+  const submittedBy = safeStr(matchedRow[SUBMITTED_BY_COL]);
+  const clientName = _deployedClientName(hdrs0, matchedRow);
+
+  try {
+    const salePersonColIdx = hdrs0.findIndex((h) => String(h || '').trim().toLowerCase() === 'sale person');
+    const salePersonName = salePersonColIdx >= 0 ? safeStr(matchedRow[salePersonColIdx]) : '';
+    await _sendRenewalRejectionEmail({
+      container: containerNo, clientName, remarks: remarks || '',
+      submittedBy, salePersonName,
+      renewedDate: fmtCellDate(matchedRow[26]),
+      validTillDate: fmtCellDate(matchedRow[27]),
+      signedCopyUrl: safeStr(matchedRow[28]),
+      submissionRemarks: safeStr(matchedRow[29]),
+      poNo: safeStr(matchedRow[DRAFT_PO_NO_COL]),
+      poFileUrl: safeStr(matchedRow[DRAFT_PO_FILE_COL]),
+      poValidity: fmtCellDate(matchedRow[DRAFT_PO_VALIDITY_COL]),
+      poValue: safeStr(matchedRow[DRAFT_PO_VALUE_COL]),
+      agreementValue: safeStr(matchedRow[DRAFT_AGREEMENT_VALUE_COL]),
+      poRenewDate: fmtCellDate(matchedRow[DRAFT_PO_RENEW_DATE_COL]),
+      otherFileUrl: safeStr(matchedRow[DRAFT_OTHER_FILE_COL]),
+      billingCycle: safeStr(matchedRow[DRAFT_BILLING_CYCLE_COL])
+    });
+  } catch (e) { console.error('[RENEWAL-REJECTION-EMAIL]', e.message); }
+
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('expiry.decideRenewalApproval', [containerNo, 'rejected', remarks, callerEmail, resolvedRow, true], { actor: callerEmail });
+
+  return 'Sent Back — sent back to Pending';
 }
 
 /* ★★★ RENEWAL LOG — every renewal (Update Lease Period + Complete Document
@@ -1509,7 +1966,9 @@ export async function _logRenewal(info) {
     const logRow = [
       stamp, info.container || '', info.clientName || '', info.poNo || '',
       info.poFileUrl || '', info.agreementUrl || '', info.validTill || '', info.userEmail || '',
-      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || ''
+      info.oldPoNo || '', info.oldPoFileUrl || '', info.oldAgreementUrl || '',
+      info.renewedDate || '', info.poValidDate || '', info.oldValidTill || '', info.oldPoDate || '', info.poRenewDate || '',
+      info.poValue || '', info.agreementValue || '', info.billingCycle || ''
     ];
     await appendRow(RENEWAL_LOG_SHEET, logRow);
     await appendMongoMirrorRow(RENEWAL_LOG_SHEET, logRow);
@@ -1588,33 +2047,74 @@ async function _sendRenewalApprovalRequestEmail(info) {
   console.log(`[RENEWAL-APPROVAL-EMAIL] sent for ${info.container}`);
 }
 
-/** Sent by decideRenewalApproval on a Reject decision — explicit request
+/** Sent by decideRenewalApproval on a Send Back decision — explicit request
  *  2026-09-29 — to the row's own Sale Person (resolved by name via
  *  emailForSalePerson; silently skipped if that name isn't one of the
  *  mapped logins, same "best effort" shape the rest of this file's
- *  notifications already use) and unconditionally to Shivani Dhall. */
-async function _sendRenewalRejectionEmail(info) {
+ *  notifications already use) and unconditionally to Shivani Dhall.
+ *
+ *  BUG FOUND AND FIXED 2026-10-29 ("this not reject iam send back button"):
+ *  this still said "Rejected"/"rejected" throughout, even though the
+ *  button, the on-screen banner and (as of today) the stored sheet value
+ *  all say "Sent Back" — the ONE place still using the old wording. Renamed
+ *  the subject, body copy and the "Rejection Remarks" field label; function
+ *  name/log-tag left as-is (internal only, nobody reads those). */
+async function _sendRenewalRejectionEmail(info, toOverride) {
   const salePersonEmail = info.salePersonName ? emailForSalePerson(info.salePersonName) : null;
-  const toList = [salePersonEmail, 'shivani.dhall@crystalgroup.in'].filter(Boolean);
+  const toList = toOverride ? [toOverride] : [salePersonEmail, 'shivani.dhall@crystalgroup.in'].filter(Boolean);
   if (!toList.length) return;
   const to = toList.join(', ');
 
-  const fields = [
+  const identityFields = [
     ['Container No', info.container || ''],
     ['Client Name', info.clientName || ''],
-    ['Submitted By', info.submittedBy || ''],
-    ['Rejection Remarks', info.remarks || '-']
+    ['Submitted By', info.submittedBy || '']
   ];
-  const subject = `Renewal Rejected – ${info.container || 'Unknown Container'}`;
-  const body = `Pushpa Shetty rejected this renewal request. It has been sent back to Renew & Document's Pending list for correction.\n\n`
-    + fields.map(([label, val]) => `${label}: ${val || '-'}`).join('\n') + '\n';
+  /* What was actually submitted — explicit request 2026-10-29 ("jo renew
+     kiya hai uska data... sab bhi dikh na chahiye hai"), see
+     decideRenewalApproval's own comment on where these come from. Only the
+     Agreement OR the PO side is usually filled (never both mandatory — same
+     "basis" convention CompleteDocumentModal.jsx's own fields use), so blank
+     ones just show '-' rather than implying something's missing. */
+  const submissionFields = [
+    ['Renewed Date', info.renewedDate || ''],
+    ['Agreement Valid Till', info.validTillDate || ''],
+    ['Signed Copy', info.signedCopyUrl || ''],
+    ['Other File', info.otherFileUrl || ''],
+    ['PO No', info.poNo || ''],
+    ['PO File', info.poFileUrl || ''],
+    ['PO Renew Date', info.poRenewDate || ''],
+    ['PO Valid Date', info.poValidity || ''],
+    ['PO Value', info.poValue || ''],
+    ['Agreement Value', info.agreementValue || ''],
+    ['Billing Cycle', info.billingCycle || ''],
+    ['Submission Remarks', info.submissionRemarks || '']
+  ];
+  const sendBackFields = [
+    ['Send Back Remarks', info.remarks || '']
+  ];
+  const subject = `Renewal Sent Back – ${info.container || 'Unknown Container'}`;
+  const plainLine = ([label, val]) => `${label}: ${val || '-'}`;
+  const body = `Pushpa Shetty sent this renewal request back. It is back in Renew & Document's Pending list for correction.\n\n`
+    + identityFields.map(plainLine).join('\n') + '\n\n'
+    + 'Submitted:\n' + submissionFields.map(plainLine).join('\n') + '\n\n'
+    + sendBackFields.map(plainLine).join('\n') + '\n';
   const th = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
-  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${s || '-'}</td>`;
-  const html = `
-    <p>Pushpa Shetty rejected this renewal request. It has been sent back to Renew &amp; Document's Pending list for correction.</p>
+  const isUrl = (s) => /^https?:\/\//i.test(String(s || ''));
+  const td = (s) => `<td style="padding:8px 12px;border:1px solid #ddd;font-size:13px;">${isUrl(s) ? `<a href="${s}">Open</a>` : (s || '-')}</td>`;
+  const section = (title, fields) => `
+    <p style="font-family:Arial,sans-serif;font-weight:bold;margin-top:16px;">${title}</p>
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
       ${fields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
     </table>
+  `;
+  const html = `
+    <p>Pushpa Shetty sent this renewal request back. It is back in Renew &amp; Document's Pending list for correction.</p>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
+      ${identityFields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
+    </table>
+    ${section('Submitted', submissionFields)}
+    ${section('Send Back Reason', sendBackFields)}
   `;
   await sendMail({ to, subject, body, html });
   console.log(`[RENEWAL-REJECTION-EMAIL] sent for ${info.container} to ${to}`);

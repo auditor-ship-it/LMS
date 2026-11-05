@@ -8,9 +8,10 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised, submitHold } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
+import { HoldModal } from './HoldModal.jsx';
 import { RefundSubmitForm } from '../refunds/RefundSubmitForm.jsx';
 import { exportLookupToPdf } from '../offLease/lookupExport.js';
 import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.api.js';
@@ -86,6 +87,31 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   const [reportBusy, setReportBusy] = useState(false);
 
 
+  /* Stage 1 (Intimation) "Hold" — explicit bug report 2026-10-30 ("HOLD
+     button not show"): this action already existed from the Stage 1
+     pending-queue LIST (StagePageBase.jsx's row-level Hold button, same
+     HoldModal/submitHold), but was never offered from inside this
+     per-container detail form — the only way to hold a record was to find
+     it in that separate list view first. Same capture-a-remark-first shape
+     as Send Back below, reusing the same HoldModal the list view uses. */
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdBusy, setHoldBusy] = useState(false);
+  const [holdError, setHoldError] = useState('');
+  const handleHoldSubmit = async (remarks) => {
+    setHoldBusy(true);
+    setHoldError('');
+    try {
+      await submitHold(containerNo, remarks, rowNum);
+      setHoldOpen(false);
+      onSaved?.();
+      onClose();
+    } catch (e) {
+      setHoldError(apiErrorMessage(e));
+    } finally {
+      setHoldBusy(false);
+    }
+  };
+
   /* Stage 5 (Billing Reconciliation) "Send Back" to Stage 1 — reopens both
      stages for correction (see backend saveOffLeaseSendBackFromBilling's
      doc comment). Same capture-a-remark-first shape as the Approval desk's
@@ -130,6 +156,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     () => ((stageNumber === SD_REFUNDS_STAGE || stageNumber === PAYMENT_STATUS_STAGE) && containerNo ? fetchSdRefundsForContainer(containerNo) : Promise.resolve(null)),
     [stageNumber, containerNo]
   );
+  /* fetchSdRefundsForContainer is keyed by CONTAINER NUMBER alone — it can
+     hold entries for a DIFFERENT lease of the same container (a re-lease to
+     a different client after an earlier lease ended). BUG FOUND AND FIXED
+     2026-11-04 (explicit report, live on TRIU6617353 — same root cause as
+     OrderBookView.jsx/PipelineDashboard.jsx's own fixes earlier today):
+     every use below used to take sdRefunds[0] (the single most-recent entry
+     for the container) completely unscoped, so OF0048/Kirloskar — which
+     has never even reached Stage 6 — showed OF0090/Zenfold's real pending
+     refund as its own. Scoped here once, reused everywhere below instead of
+     the raw `sdRefunds`. Falls back to the unscoped list only when there's
+     exactly ONE entry for the whole container (legacy data submitted
+     before offLeaseId was captured) — same fallback rule used in today's
+     other two fixes. */
+  const scopedSdRefunds = sdRefunds == null ? sdRefunds : (() => {
+    const exact = sdRefunds.filter((r) => r.offLeaseId && data?.col_1 && r.offLeaseId === data.col_1);
+    if (exact.length) return exact;
+    return sdRefunds.length === 1 ? sdRefunds : [];
+  })();
 
   /* Stage 7 (Payment Status)'s "Voucher Raised" — explicit request
      2026-10-03. No field of its own (see PAYMENT_STATUS_STAGE's doc
@@ -176,7 +220,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      simply never wired it up. Self-fetch here whenever the caller didn't
      supply it, rather than requiring every future caller to remember to. */
   const suppliedFms = movement !== undefined || transport !== undefined || delivery !== undefined;
-  const { data: ownFms, loading: fmsLoading } = useAsync(
+  const { data: ownFms, loading: fmsLoading, reload: reloadOwnFms } = useAsync(
     () => (identityOnly && !suppliedFms && containerNo
       ? getOffLeaseContainerDetail(containerNo).then((d) => d?.fms || null)
       : Promise.resolve(null)),
@@ -229,6 +273,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     setValues((prev) => (String(prev.col_308 ?? '').trim() !== '' ? prev : { ...prev, col_308: String(est) }));
   }, [stageNumber, data]);
 
+  /* Billing's "Date - Billed Till" (col_307) — explicit request 2026-10-30
+     ("auto fetch the final bi9lling date"): same blank-only pre-fill
+     pattern as col_306/col_308 above, from Stage 1's own Final Billing Date
+     (data._stage1Data.finalBillingDate — already fetched and shown
+     read-only in Stage1DataNote just above this form, but never used to
+     fill this field itself until now). Needs the same dd-mm-yyyy ->
+     yyyy-mm-dd conversion the main data-load effect above does for every
+     date field, since this runs from the raw _stage1Data value, not
+     through that effect's own field loop. */
+  useEffect(() => {
+    if (stageNumber !== BILLING_STAGE) return;
+    const raw = String(data?._stage1Data?.finalBillingDate ?? '').trim();
+    const m = raw.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (!m) return;
+    const iso = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    setValues((prev) => (String(prev.col_307 ?? '').trim() !== '' ? prev : { ...prev, col_307: iso }));
+  }, [stageNumber, data]);
+
   useEffect(() => {
     if (inline) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -249,7 +311,19 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
 
   const setField = (key, v) => setValues((prev) => ({ ...prev, [key]: v }));
 
-  const visibleFields = useMemo(() => fields.filter((f) => !f.showIf || f.showIf(values)), [fields, values]);
+  /* A field can carry `requiredIf(values)` instead of a static `required`
+     (e.g. Stage 1's Remark — explicit request 2026-10-17: mandatory only
+     when Final Billing Date isn't exactly one month after Off-Lease
+     Intimation Date) — resolved here, once, so the required-check below,
+     the asterisk Labeled renders, and both render paths (the flat grid and
+     FormSections) all see an already-resolved `required` without needing
+     to know about `requiredIf` themselves. */
+  const visibleFields = useMemo(
+    () => fields
+      .filter((f) => !f.showIf || f.showIf(values))
+      .map((f) => (f.requiredIf ? { ...f, required: f.requiredIf(values) } : f)),
+    [fields, values]
+  );
 
   /* Fields tagged `inspection` are pulled out of the plain grid and rendered
      as the Good/Damage table instead — grouped by item, so each row can show
@@ -520,6 +594,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                       { n: 9, label: 'Transport', record: fmsTransport, empty: 'No Offlease transport in STAGE-9 for this container and client.' },
                       { n: 10, label: 'Site Delivery', record: fmsDelivery, empty: "No STAGE-10 record for this container's DO number." }
                     ]}
+                    onRetry={!suppliedFms ? reloadOwnFms : undefined}
                   />
                 ))}
 
@@ -587,7 +662,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               {stageNumber === PAYMENT_STATUS_STAGE && (
                 <div className={styles.fmsWrap}>
                   <h3 className={styles.sectionTitle}>Payment Pipeline</h3>
-                  {!sdRefunds ? (
+                  {!scopedSdRefunds ? (
                     <p className={styles.sectionHint}>Loading…</p>
                   ) : (
                     <>
@@ -605,15 +680,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                       <div className={styles.pipelineRow}>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>HOD</span>
-                          <StatusBadge status={sdRefunds[0]?.hodStatus || 'Pending'} />
+                          <StatusBadge status={scopedSdRefunds[0]?.hodStatus || 'Pending'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>Accounts</span>
-                          <StatusBadge status={sdRefunds[0]?.accountsStatus || 'Pending'} />
+                          <StatusBadge status={scopedSdRefunds[0]?.accountsStatus || 'Pending'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>CEO</span>
-                          <StatusBadge status={sdRefunds[0]?.ceoRequired ? (sdRefunds[0]?.ceoStatus || 'Pending') : 'Skipped'} />
+                          <StatusBadge status={scopedSdRefunds[0]?.ceoRequired ? (scopedSdRefunds[0]?.ceoStatus || 'Pending') : 'Skipped'} />
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>VR</span>
@@ -624,9 +699,9 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                           <StatusBadge status={data?.col_351 ? 'Completed' : 'Pending'} />
                         </span>
                       </div>
-                      {!sdFinalApproved(sdRefunds[0]) ? (
+                      {!sdFinalApproved(scopedSdRefunds[0]) ? (
                         <p className={styles.sectionHint}>
-                          Waiting for Stage 6 (SD Refunds) to clear its final required approval ({sdRefunds[0]?.ceoRequired ? 'CEO' : 'Accounts'}) before payment can proceed — see SD Refunds Approval for full detail.
+                          Waiting for Stage 6 (SD Refunds) to clear its final required approval ({scopedSdRefunds[0]?.ceoRequired ? 'CEO' : 'Accounts'}) before payment can proceed — see SD Refunds Approval for full detail.
                         </p>
                       ) : data?.col_348 !== 'Completed' ? (
                         <>
@@ -683,33 +758,38 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   until this clears its final required approval for the
                   bill's amount bracket — see sdFinalApproved. */}
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
-                <div className={sdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
-                  {!sdRefunds ? (
+                <Stage5DataNote data={data?._stage5Data} />
+              )}
+
+              {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
+                <div className={scopedSdRefunds?.length === 0 ? `${styles.savedPanel} ${styles.savedPanelForm}` : styles.savedPanel}>
+                  {!scopedSdRefunds ? (
                     <p className={styles.sectionHint}>Loading…</p>
-                  ) : sdRefunds.length === 0 ? (
+                  ) : scopedSdRefunds.length === 0 ? (
                     <>
                       <p className={styles.savedTitle}>No SD Refund raised yet for {containerNo}</p>
                       <RefundSubmitForm
                         lockedContainerNo={containerNo}
                         lockedClientName={data?.col_5}
                         lockedOffLeaseId={data?.col_1}
+                        defaultSdAmount={data?._stage5Data?.securityDepositAmount}
                         onSubmitted={reloadSdRefunds}
                       />
                     </>
                   ) : (
                     <>
-                      <p className={styles.savedTitle}>SD Refund — {sdRefunds[0].vendorName || containerNo}</p>
+                      <p className={styles.savedTitle}>SD Refund — {scopedSdRefunds[0].vendorName || containerNo}</p>
                       <p className={styles.savedHint}>
-                        HOD: {sdRefunds[0].hodStatus || 'Pending'} · Accounts: {sdRefunds[0].accountsStatus || 'Pending'} · CEO: {sdRefunds[0].ceoRequired ? (sdRefunds[0].ceoStatus || 'Pending') : 'Skipped'}
+                        HOD: {scopedSdRefunds[0].hodStatus || 'Pending'} · Accounts: {scopedSdRefunds[0].accountsStatus || 'Pending'} · CEO: {scopedSdRefunds[0].ceoRequired ? (scopedSdRefunds[0].ceoStatus || 'Pending') : 'Skipped'}
                       </p>
                       <p className={styles.savedHint}>
-                        {sdFinalApproved(sdRefunds[0])
+                        {sdFinalApproved(scopedSdRefunds[0])
                           ? 'Fully approved — FMS Closed (Stage 7) can now be completed.'
-                          : sdRefunds[0].currentStage === 'rejected'
+                          : scopedSdRefunds[0].currentStage === 'rejected'
                             ? 'Rejected — raise a new SD Refund for this container to proceed.'
-                            : `Still working through HOD → Accounts${sdRefunds[0].ceoRequired ? ' → CEO' : ''} — see SD Refunds Approval for full detail.`}
+                            : `Still working through HOD → Accounts${scopedSdRefunds[0].ceoRequired ? ' → CEO' : ''} — see SD Refunds Approval for full detail.`}
                       </p>
-                      <SdRefundDetails entry={sdRefunds[0]} />
+                      <SdRefundDetails entry={scopedSdRefunds[0]} />
                     </>
                   )}
                 </div>
@@ -808,6 +888,11 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     Send Back to Stage 1
                   </Button>
                 )}
+                {!readOnly && stageNumber === 1 && !data?._skipped && canAct('offlease1') && (
+                  <Button type="button" variant="secondary" disabled={busy} onClick={() => setHoldOpen(true)}>
+                    Hold
+                  </Button>
+                )}
                 {/* visibleFields, not the raw fields array — explicit case
                     2026-10-03: Stage 7 (Payment Status)'s only field (UTR
                     Number) stays showIf-hidden until VR is done, and a Save
@@ -841,6 +926,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
         placeholder="What needs fixing before this can be resubmitted? (optional)"
         submitLabel="Send Back"
         variant="secondary"
+      />
+
+      <HoldModal
+        open={holdOpen}
+        item={{ row: [containerNo] }}
+        submitting={holdBusy}
+        error={holdError}
+        onClose={() => { setHoldOpen(false); setHoldError(''); }}
+        onSubmit={handleHoldSubmit}
       />
 
     </div>
@@ -1303,6 +1397,46 @@ function Stage1DataNote({ data }) {
 }
 
 /**
+ * Stage 5's (Billing Reconciliation) own data, read-only reference —
+ * explicit request 2026-10-30 ("stage 5 data filed dat shoe stage 6 show"):
+ * the SD Refund reviewer needs this same figure set Payment Status already
+ * got one stage later (getOffLeaseStageDetail's _stage5Data, built for
+ * internal stage 8 AND 11 — see that block's own doc comment). Mirrors
+ * Stage1DataNote's own shape/placement, just for the stage after it.
+ */
+function Stage5DataNote({ data }) {
+  if (!data) return null;
+  return (
+    <div className={styles.outstandingRow}>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Outstanding Amount (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.outstandingAmount || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Date - Billed Till (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.dateBilledTill || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Final Payable Amount (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.finalPayableAmount || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Security Deposit Amount (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.securityDepositAmount || '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Ledger (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.ledgerFileUrl ? renderCellValue(data.ledgerFileUrl) : '—'}</span>
+      </div>
+      <div className={styles.outstandingCard}>
+        <span className={styles.outstandingLabel}>Remark (Stage 5)</span>
+        <span className={styles.outstandingValue}>{data.remark || '—'}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * A labelled block of read-only values from one of the FMS tabs. Renders
  * nothing at all when that tab was not consulted for this stage, and an
  * explicit note when it was consulted but found no match — "no row matched" is
@@ -1494,7 +1628,7 @@ function _doNumberFromFms(record) {
  * One step at a time, in a grid that flows into columns, fits the detail in
  * the modal without any vertical scrolling.
  */
-function FmsSteps({ steps }) {
+function FmsSteps({ steps, onRetry }) {
   /* Opens on the first step that actually has data — landing on an empty
      STAGE-8 would hide the two populated ones behind a click. */
   const firstWithData = steps.find((s) => fmsState(s.record) === 'found')?.n ?? steps[0].n;
@@ -1541,8 +1675,17 @@ function FmsSteps({ steps }) {
         )
         : (
           <p className={styles.fmsEmpty}>
+            {/* This moved to a Mongo mirror 2026-08-28 specifically so a
+                Sheets quota hit can no longer cause this — a failure here now
+                is a transient read/connection hiccup, not the routine
+                "shared quota exhausted" the old wording described. */}
             {state === 'unread'
-              ? 'Sheet could not be read — Google Sheets read quota exhausted.'
+              ? (
+                <>
+                  Could not load this data just now — try again.{' '}
+                  {onRetry && <button type="button" className={styles.linkBtn} onClick={onRetry}>Retry</button>}
+                </>
+              )
               : step.empty}
           </p>
         )}
@@ -1593,14 +1736,16 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * doc comment on the backend. That destination stage then offers Send Back
  * (SendBackPanel below) to undo it.
  *
- * Reason = "Client Scope" additionally captures a free-text Scope. Reason =
- * "Other" additionally captures a free-text Comment / Type. Both stay
- * gated on `fmsFound` exactly as before: `fmsChecked` locks the whole form
- * until the STAGE-8 check above resolves at all; once resolved, these two
- * reasons stay locked until a STAGE-8 record IS found (explicit,
- * twice-confirmed request 2026-09-24 — a deliberate reversal of this
- * feature's original "escape hatch for containers with none" framing).
- * Enforced again server-side (saveOffLeaseMoveToStage/Fast).
+ * Reason = "Client Scope" additionally captures a free-text Scope, and
+ * stays gated on `fmsFound` exactly as before: `fmsChecked` locks the whole
+ * form until the STAGE-8 check above resolves at all; once resolved, it
+ * stays locked until a STAGE-8 record IS found (explicit, twice-confirmed
+ * request 2026-09-24 — a deliberate reversal of this feature's original
+ * "escape hatch for containers with none" framing). Enforced again
+ * server-side (saveOffLeaseMoveToStage/Fast). Reason = "Other" additionally
+ * captures a free-text Comment / Type — it ORIGINALLY had the same gate as
+ * Client Scope, but is now exempt from it (see the "Purchased"/"Other"
+ * paragraph below).
  *
  * Reason = "Client to Client" is REDESIGNED, same day, on top of that
  * (explicit follow-up request): it no longer needs fmsFound at all, and no
@@ -1612,17 +1757,29 @@ const MOVE_JUMP_TARGET_OPTIONS = [
  * background job matches that DO against STAGE-8 and finalizes the jump on
  * its own — nothing left to do here once the draft is saved.
  *
- * `doFetched` — explicit request 2026-09-25, on top of everything above: the
- * whole section (not just the submit button — the Reason dropdown itself)
- * stays closed for ALL THREE reasons until a DO Number is on file for this
- * container — OL_SHEET's own col_48 (set by the "Client to Client" Send Back
- * re-fetch, saveOffLeaseSendBack's _populateTransportationFromClientToClientLease)
- * OR, for every other container (col_48 is never written for a non-Client-
- * to-Client row — see _doNumberFromFms's own doc comment, bug found
- * 2026-10-03), the live STAGE-9 match shown in the FMS panel just above.
- * This sits ABOVE the per-reason checks above, not in place of them — Client
- * Scope/Other's own fmsChecked/fmsFound lock is unchanged once this outer
- * gate opens.
+ * `doFetched` — explicit request 2026-09-25: the Reason dropdown stays
+ * restricted to "Purchased"/"Other" only until a DO Number is on file for
+ * this container — OL_SHEET's own col_48 (set by the "Client to Client"
+ * Send Back re-fetch, saveOffLeaseSendBack's
+ * _populateTransportationFromClientToClientLease) OR, for every other
+ * container (col_48 is never written for a non-Client-to-Client row — see
+ * _doNumberFromFms's own doc comment, bug found 2026-10-03), the live
+ * STAGE-9 match shown in the FMS panel just above. Client Scope's own
+ * fmsChecked/fmsFound lock is unchanged once a DO Number opens up the
+ * other reasons.
+ *
+ * "Purchased" and "Other" ARE BOTH EXEMPT from the doFetched gate above and
+ * the fmsChecked/fmsFound gate below — "Purchased" from explicit request
+ * 2026-10-30 ("sale container... not any condition": a container sold
+ * outright is never transported, so it structurally never gets a DO Number
+ * or a STAGE-8 movement record — gating it on either made it unreachable
+ * for the exact containers it was added for), "Other" from the same day's
+ * explicit follow-up ("other add the only remaks" — a genuinely
+ * miscellaneous move shouldn't be blocked on a STAGE-8 match that may
+ * never come either; Comment/Type and Lifting Date both became optional
+ * for it at the same time, only Remarks + a destination are needed now).
+ * Both mirrored server-side in _skipsStage8Gate/_prepareMoveToStage.
+ * Client Scope/Client to Client are unaffected.
  */
 function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound, doFetched, alreadyMoved, ctcPending, onMoved }) {
   const [reason, setReason] = useState('');
@@ -1633,9 +1790,25 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
   const [remarks, setRemarks] = useState('');
   const [date, setDate] = useState('');
   const [moveToStage, setMoveToStage] = useState('');
+  // Reason = "Purchased" only — explicit request 2026-10-30. proofFile holds
+  // the SAME {base64Data, mimeType, fileName} payload shape the outer form's
+  // own pendingFiles does (FileFieldInput's onFile), uploaded at submit time
+  // via uploadStageFile — this section has no pendingFiles plumbing of its
+  // own from the parent, so it manages this one file locally instead.
+  const [newOrderNo, setNewOrderNo] = useState('');
+  const [proofFile, setProofFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(null); // { label } once moved or saved as pending
+
+  // 'Purchased' always lands on Stage 5 — Final Billing — never a client
+  // choice (see _prepareMoveToStage's own doc comment on the backend,
+  // which ignores whatever moveToStage is sent for this reason anyway).
+  // Kept in sync here too so the "Move To Stage" field below can just
+  // display it read-only rather than needing its own separate codepath.
+  useEffect(() => {
+    if (reason === 'Purchased') setMoveToStage('5');
+  }, [reason]);
 
   // Already recorded (this modal was reopened after a Move) — show what was
   // saved instead of an editable form; there's nothing left to submit here,
@@ -1651,8 +1824,12 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
           {alreadyMoved.clientScope ? ` (${alreadyMoved.clientScope})` : ''}
           {alreadyMoved.commentType ? ` — ${alreadyMoved.commentType}` : ''}
           {alreadyMoved.date ? ` · Lifting ${alreadyMoved.date}` : ''}
+          {alreadyMoved.newOrderNo ? ` · Order No: ${alreadyMoved.newOrderNo}` : ''}
           {alreadyMoved.remarks ? ` · ${alreadyMoved.remarks}` : ''}
           {target ? ` · Moved to ${target.label}` : ''}
+          {alreadyMoved.proofFileUrl && (
+            <> · <a href={alreadyMoved.proofFileUrl} target="_blank" rel="noreferrer">Proof file</a></>
+          )}
         </p>
       </div>
     );
@@ -1681,28 +1858,31 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
     );
   }
 
-  // Explicit request 2026-09-25: Move To Stage stays fully closed — not even
-  // the Reason dropdown — until this container's own DO Number is already on
-  // file (col_48). Fetch DO first, THEN Move To Stage opens.
-  if (!doFetched) {
-    return (
-      <div className={styles.fmsWrap}>
-        <h3 className={styles.sectionTitle}>Move To Stage</h3>
-        <p className={styles.sectionHint}>
-          Locked until this container's DO Number is fetched into Transportation — nothing to move yet.
-        </p>
-      </div>
-    );
-  }
-
   const handleMove = async () => {
     if (!reason) { setError('Select a Reason first.'); return; }
     setError('');
 
-    if (reason !== 'Purchased' && !date) { setError('Date is required.'); return; }
+    if (reason !== 'Purchased' && reason !== 'Other' && !date) { setError('Date is required.'); return; }
     if (!moveToStage) { setError('Select a Move To Stage destination.'); return; }
     const target = MOVE_JUMP_TARGET_OPTIONS.find((o) => o.value === moveToStage);
     const destLabel = target?.label || `Stage ${moveToStage}`;
+
+    if (reason === 'Purchased') {
+      const orderNo = newOrderNo.trim();
+      if (!orderNo) { setError('New Order No is required.'); return; }
+      if (!proofFile) { setError('Proof file is required.'); return; }
+      setBusy(true);
+      try {
+        const proofFileUrl = await uploadStageFile(proofFile);
+        await submitMoveToStage(containerNo, { reason, remarks: remarks.trim(), date, moveToStage: '5', newOrderNo: orderNo, proofFileUrl, rowNum });
+        setDone({ label: `Purchased (Order No ${orderNo}) — moved directly to Stage 5 – Final Billing` });
+      } catch (e) {
+        setError(apiErrorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
 
     if (reason === 'Client to Client') {
       const name = newClientName.trim();
@@ -1728,13 +1908,10 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
       if (!scope) { setError('Scope is required.'); return; }
       payload.clientScope = scope;
       successLabel = `Client Scope (${scope}) — moved directly to ${destLabel}`;
-    } else if (reason === 'Purchased') {
-      successLabel = `Purchased — moved directly to ${destLabel}`;
     } else {
       const ct = commentType.trim();
-      if (!ct) { setError('Comment / Type is required.'); return; }
       payload.commentType = ct;
-      successLabel = `Other (${ct}) — moved directly to ${destLabel}`;
+      successLabel = ct ? `Other (${ct}) — moved directly to ${destLabel}` : `Other — moved directly to ${destLabel}`;
     }
 
     setBusy(true);
@@ -1763,16 +1940,29 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
   /* Client to Client no longer needs fmsChecked/fmsFound at all — see this
      component's own doc comment. Client Scope/Other keep the REVERSED
      2026-09-24 gate (locked until STAGE-8 IS found), unaffected by the
-     Client to Client redesign. */
+     Client to Client redesign. 'Purchased' is exempt from every gate below
+     — see this component's own doc comment. */
   const isCtc = reason === 'Client to Client';
-  const locked = busy || !canMove || (!isCtc && (!fmsChecked || !fmsFound));
+  const isPurchased = reason === 'Purchased';
+  const isOther = reason === 'Other';
+  const locked = busy || !canMove || (!isCtc && !isPurchased && !isOther && (!fmsChecked || !fmsFound));
+  // 'Client Scope' stays restricted until a DO Number is on file — see the
+  // doFetched doc comment above. 'Purchased' and 'Other' are both exempt
+  // (explicit request 2026-10-30, "other add the only remaks").
+  const reasonOptions = doFetched ? MOVE_REASON_OPTIONS : ['Purchased', 'Other'];
 
   return (
     <div className={styles.fmsWrap}>
       <h3 className={styles.sectionTitle}>Move To Stage</h3>
+      {!doFetched && (
+        <p className={styles.sectionHint}>
+          Locked for "Client Scope" and "Client to Client" until this container's DO Number is fetched into
+          Transportation — "Purchased" (sold outright) and "Other" can both move without one.
+        </p>
+      )}
       <div className={styles.fieldGrid}>
         <Field
-          field={{ key: 'reason', label: 'Reason', type: 'select', options: MOVE_REASON_OPTIONS }}
+          field={{ key: 'reason', label: 'Reason', type: 'select', options: reasonOptions }}
           value={reason}
           onChange={(v) => { setReason(v); setError(''); }}
           disabled={busy || !canMove}
@@ -1803,11 +1993,29 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
         )}
         {reason === 'Other' && (
           <Field
-            field={{ key: 'commentType', label: 'Comment / Type', type: 'text', required: true }}
+            field={{ key: 'commentType', label: 'Comment / Type (optional)', type: 'text' }}
             value={commentType}
             onChange={setCommentType}
             disabled={locked}
           />
+        )}
+        {isPurchased && (
+          <>
+            <Field
+              field={{ key: 'newOrderNo', label: 'New Order No', type: 'text', required: true }}
+              value={newOrderNo}
+              onChange={setNewOrderNo}
+              disabled={locked}
+            />
+            <Field
+              field={{ key: 'proofFile', label: 'Proof (Invoice / Sale Confirmation)', type: 'file', required: true }}
+              value=""
+              pendingFileName={proofFile?.fileName}
+              onFile={setProofFile}
+              onChange={() => {}}
+              disabled={locked}
+            />
+          </>
         )}
         {reason && (
           <>
@@ -1817,7 +2025,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
               onChange={setRemarks}
               disabled={locked}
             />
-            {reason !== 'Purchased' && (
+            {reason !== 'Purchased' && reason !== 'Other' && (
               <Field
                 field={{ key: 'moveDate', label: 'Lifting Date', type: 'date', required: true }}
                 value={date}
@@ -1829,16 +2037,19 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
               field={{ key: 'moveToStage', label: 'Move To Stage', type: 'select', options: MOVE_JUMP_TARGET_OPTIONS, required: true }}
               value={moveToStage}
               onChange={setMoveToStage}
-              disabled={locked}
+              disabled={locked || isPurchased}
             />
+            {isPurchased && (
+              <p className={styles.sectionHint}>A purchased container always moves directly to Stage 5 – Final Billing.</p>
+            )}
           </>
         )}
       </div>
 
       {error && <div className={styles.error}>{error}</div>}
       {!canMove && <p className={styles.sectionHint}>You don't have permission to move this stage.</p>}
-      {canMove && !isCtc && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
-      {canMove && !isCtc && fmsChecked && !fmsFound && (
+      {canMove && !isCtc && !isPurchased && !isOther && !fmsChecked && <p className={styles.sectionHint}>Checking STAGE-8 for this container — Move To Stage unlocks once that finishes.</p>}
+      {canMove && !isCtc && !isPurchased && !isOther && fmsChecked && !fmsFound && (
         <p className={styles.sectionHint}>
           No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.
         </p>
@@ -2163,6 +2374,7 @@ function CabinTable({ fields, size, values, disabled, onChange }) {
                     className={`${styles.cabinQty} ${short ? styles.cabinShort : ''}`}
                     value={raw ?? ''}
                     onChange={(e) => onChange(f.key, e.target.value)}
+                    onWheel={(e) => e.target.blur()}
                     disabled={disabled}
                     aria-label={`${f.cabin.item} available`}
                   />
@@ -2337,7 +2549,22 @@ function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
   if (type === 'number') {
     return (
       <Labeled label={label} required={required}>
-        <input type="number" step="any" value={value || ''} onChange={(e) => onChange(e.target.value)} disabled={disabled} />
+        {/* onWheel blur — explicit request 2026-10-29 ("not scolling amout
+            increse and descre"): a focused number input's native behavior
+            changes its value when the mouse wheel scrolls over it, which
+            reads as the page silently scrolling the number up/down instead
+            of the page itself — blurring on wheel hands scrolling back to
+            the page immediately, the same fix used site-wide for this exact
+            browser quirk. Affects every number field here (SD Amount,
+            Return Transportation PO Amount, etc.), not just one. */}
+        <input
+          type="number"
+          step="any"
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          onWheel={(e) => e.target.blur()}
+          disabled={disabled}
+        />
       </Labeled>
     );
   }

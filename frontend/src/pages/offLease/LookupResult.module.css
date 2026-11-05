@@ -200,9 +200,19 @@
 
 .histStage { font-weight: 800; white-space: nowrap; color: var(--text-2); }
 
-/* SLA — elapsed against budget, and how far past it. */
+/* TAT Delay/Early — explicit request 2026-11-04 ("green ?"): shown as a
+   green chip (not plain grey text, which this .slaOk class originally was
+   when it only ever said "on time") so Early/On Time reads as clearly
+   positive at a glance, same visual weight as .slaLate's red chip below. */
 .slaCell { white-space: nowrap; }
-.slaOk { color: var(--text-2); }
+.slaOk {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--success-bg);
+  color: var(--success);
+  font-weight: 800;
+}
 .slaLate {
   display: inline-block;
   padding: 2px 8px;

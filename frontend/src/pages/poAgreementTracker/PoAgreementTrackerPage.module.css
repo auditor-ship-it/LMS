@@ -1,0 +1,270 @@
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.monthNav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.navBtn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.navBtn:hover { background: var(--surface-2); }
+.monthLabel {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 13px;
+  min-width: 130px;
+  text-align: center;
+}
+.todayBtn {
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.viewToggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+.viewBtn, .viewBtnActive {
+  border: none;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.viewBtn:hover { background: var(--surface-2); }
+.viewBtnActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.totals strong { color: var(--text-1); font-size: 14px; }
+
+.clickRow { cursor: pointer; }
+.clickRow:hover td { background: var(--surface-2); }
+
+/* Explicit request 2026-10-23: highlight the whole row once a date is
+   overdue or within 30 days — grey (var(--surface-2)), not amber/red (see
+   .warn/.textWarn's own comment below). The sticky Container/Client
+   columns need their own override since they otherwise paint their own
+   opaque background (see .colContainer/.colClient below) over the row's. */
+.rowDueSoon td { background: var(--surface-2); }
+.rowDueSoon:hover td { background: var(--surface-2); }
+.rowDueSoon .colContainer,
+.rowDueSoon .colClient { background: var(--surface-2); }
+
+.detailPanel {
+  padding: 4px 0 0;
+}
+.detailHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.detailHeader h3 { margin: 0; font-family: var(--f-display); font-size: 18px; }
+.detailHeader span { color: var(--text-2); font-size: 13px; }
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.detailField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.detailField a { color: var(--accent); font-weight: 600; }
+.detailField .label {
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.hintText { color: var(--text-3); font-style: italic; }
+
+.detailActions {
+  display: flex;
+  gap: 10px;
+}
+
+.scrollWrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.table {
+  border-collapse: collapse;
+  /* Explicit request 2026-10-23 ("container no and client name white space
+     zyada hai"): no forced width: 100% — that made the table always stretch
+     to fill .scrollWrap, and since Container/Client have the widest natural
+     content among columns without their own fixed width, the browser's
+     table auto-layout dumped most of that extra slack space into exactly
+     those two, as large blank gaps. Letting the table size to its own
+     content removes that stretch; .scrollWrap's overflow-x: auto still
+     handles the case where content is wider than the viewport. */
+  font-size: 12px;
+}
+.table th, .table td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+.table thead th {
+  background: var(--surface-2);
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+  position: sticky;
+  top: 0;
+}
+/* Explicit request 2026-10-23 ("yah middle pe hai left side hona chahiye"):
+   `.table td { text-align: center }` above has HIGHER CSS specificity
+   (.table + td = 0,1,1) than `.colContainer`/`.colClient` alone (0,1,0), so
+   it was silently winning and centering these two columns despite the
+   text-align: left below — fixed by matching that specificity (td prefix)
+   so source order (this comes later) decides it correctly.
+   max-width + ellipsis (new): caps these two columns so one unusually long
+   client name elsewhere in the ~400-row list can't balloon the column's
+   auto-layout width for every row — see .table's own comment on why
+   width: 100% was dropped; this is the companion fix for the column-width
+   side of that same complaint. */
+td.colContainer, td.colClient {
+  text-align: left;
+}
+.colContainer, .colClient {
+  padding-left: 12px;
+  position: sticky;
+  background: var(--surface);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Explicit follow-up 2026-10-23 ("gap abhi bhi hai bhot" — still too much
+   gap): min-width/max-width set to the SAME value each, forcing a true
+   fixed width sized to the common case (an 11-char container code; a
+   typical client name) instead of leaving room for the rare outlier (a
+   combined multi-container cell like "TITU9230980,TITU9231009", or an
+   unusually long client name) — those now always ellipsis-truncate, with
+   the title attribute (see JSX) showing the full value on hover. */
+.colContainer { left: 0; min-width: 115px; max-width: 115px; }
+.colClient { left: 115px; min-width: 150px; max-width: 150px; border-right: 1px solid var(--line); }
+thead .colContainer, thead .colClient { background: var(--surface-2); }
+
+/* Same fix as colContainer/colClient above, same complaint, same cause:
+   these also only had a min-width, so auto table layout still handed them
+   the leftover slack space once the sticky columns stopped absorbing it. */
+/* Explicit follow-up 2026-10-23 ("agrement and po vaid is gap more"):
+   tightened further, 95px -> 80px — still comfortably fits the fixed
+   "DD-MM-YYYY" format (10 chars) with no overflow risk. */
+.colDate { min-width: 80px; max-width: 80px; font-weight: 600; }
+
+.dayCell { min-width: 22px; max-width: 22px; position: relative; }
+.todayCol { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  margin: 0 1px;
+  vertical-align: middle;
+}
+.dotSquare { border-radius: 2px; }
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.checkboxChecked { border-style: solid; }
+.bad { background: var(--error); }
+/* Explicit request 2026-10-23 ("not red col gey col... not red"): overdue
+   and due-soon both read as grey here, not the amber --warn token (which
+   still looked too close to red/orange) — .warn/.textWarn keep their names
+   (bandForDate still calls these states 'overdue'/'dueSoon' internally)
+   but are repointed to the neutral grey text/surface tokens. */
+.warn { background: var(--text-2); }
+.info { background: var(--info); }
+.ok { background: var(--success); }
+
+.textBad { color: var(--error); }
+.textWarn { color: var(--text-2); }
+.textInfo { color: var(--info); }
+.textOk { color: var(--success); }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.legendItem { display: inline-flex; align-items: center; gap: 6px; }
+.legendDivider {
+  width: 1px;
+  height: 14px;
+  background: var(--line);
+}

@@ -40,7 +40,7 @@ export function ContainerDetailModal({ container, leaseId, onClose, actions }) {
       width="1100px"
       title={`${container}${leaseId ? ` · ${leaseId}` : ''} — all stage data`}
     >
-      {loading && <LoadingState label="Loading stage data…" />}
+      {loading && <LoadingState label="Loading stage data…" showElapsed />}
       {!loading && error && <ErrorState message={error} onRetry={reload} />}
       {!loading && !error && data && !data.found && (
         <ErrorState message={data.message || 'No off-lease record found for this container'} />

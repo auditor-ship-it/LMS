@@ -2,7 +2,7 @@ import { renderCellValue } from '../../components/ui/CellValue.jsx';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import {
   buildIdentityRows, buildHistoryRows, buildMovements, buildInvoices, buildEstimateTotals,
-  HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD, ESTIMATE_HEAD, slaText, money
+  HISTORY_HEAD, MOVEMENT_HEAD, INVOICE_HEAD, ESTIMATE_HEAD, tatEntryText, money
 } from './lookupModel.js';
 import styles from './LookupResult.module.css';
 
@@ -228,11 +228,13 @@ export function HistoryTable({ rows }) {
                 <td className={styles.histStage}>{r.stage}</td>
                 <td>{r.name || '—'}</td>
                 <td><span className={tone ? styles[tone] : styles.histNeutral}>{r.status}</span></td>
+                <td>{r.tat?.budgetLabel || '—'}</td>
                 <td>{r.on || '—'}</td>
                 <td>{r.by || '—'}</td>
+                <td>{tatEntryText(r.tat) || '—'}</td>
                 <td className={styles.slaCell}>
-                  {r.sla
-                    ? <span className={r.sla.delayed ? styles.slaLate : styles.slaOk}>{slaText(r.sla)}</span>
+                  {r.tat?.delayLabel
+                    ? <span className={r.tat.status === 'Delayed' ? styles.slaLate : styles.slaOk}>{r.tat.delayLabel}</span>
                     : '—'}
                 </td>
                 <td>{r.detail || '—'}</td>

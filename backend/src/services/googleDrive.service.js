@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
-import { getDriveAuthClient } from './googleSheets.service.js';
+import { getDriveAuthClient, withQuotaRetry } from './googleSheets.service.js';
 import { env } from '../config/env.js';
 
 let _driveClient = null;
@@ -22,16 +22,24 @@ export async function uploadToDrive(base64Data, mimeType, fileName) {
   }
   const drive = getDriveClient();
   const buffer = Buffer.from(base64Data, 'base64');
-  const stream = Readable.from(buffer);
 
-  const res = await drive.files.create({
+  /* BUG FOUND AND FIXED 2026-10-29 ("why again again this error"): this call
+     had NO retry/backoff on a quota error — a single transient 429 failed
+     the whole upload (and with it, the whole Save/Submit it blocks) outright,
+     unlike every Sheets call, which self-heals via withQuotaRetry. Now reuses
+     that same helper — same shared-project-quota reasoning (see its own doc
+     comment in googleSheets.service.js). The stream MUST be rebuilt inside
+     the retried function: Readable.from(buffer) can only be consumed once,
+     so reusing one stream object across retry attempts would silently upload
+     an empty body (or hang) on attempt 2+. */
+  const res = await withQuotaRetry(`uploadToDrive(${fileName})`, () => drive.files.create({
     requestBody: {
       name: fileName,
       parents: [env.googleDriveFolderId]
     },
     media: {
       mimeType,
-      body: stream
+      body: Readable.from(buffer)
     },
     fields: 'id, webViewLink, webContentLink',
     // Required for the target folder to be treated as living inside a Shared
@@ -40,7 +48,7 @@ export async function uploadToDrive(base64Data, mimeType, fileName) {
     // Accounts do not have storage quota"). Still requires GOOGLE_DRIVE_FOLDER_ID
     // to actually be a folder inside a real Shared Drive (see error handling below).
     supportsAllDrives: true
-  });
+  }));
 
   // Make link-shareable within the org the same way the original relies on the
   // parent folder's inherited sharing — grant "anyone with the link, reader"

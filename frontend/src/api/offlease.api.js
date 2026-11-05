@@ -44,11 +44,27 @@ export const getOutstanding = (containerNo, clientName) =>
     .then((r) => r.data);
 
 /** GET /api/offlease/:containerNo/detail — container lookup. `leaseId` picks
- *  one record when the container has been off-leased more than once. */
-export const getOffLeaseContainerDetail = (containerNo, leaseId) =>
-  apiClient
-    .get(`/offlease/${encodeURIComponent(containerNo)}/detail`, leaseId ? { params: { leaseId } } : undefined)
+ *  one record when the container has been off-leased more than once.
+ *
+ *  `timeout` (explicit request 2026-10-19, "Loading stage data…" never
+ *  resolving): this single endpoint reads several large external sheets
+ *  (STAGE-8/9/10, Deployed, Off-Lease Tracking) and proxies the Accounts
+ *  API — on a cold application-level cache (first request after a deploy,
+ *  or a genuinely slow upstream) it can take tens of seconds; confirmed
+ *  live at ~78s worst case. Scoped to just this call, not the shared
+ *  axios instance, so it never affects any other endpoint's own timing —
+ *  generous enough that the normal (warm-cache) ~2-3s case never trips
+ *  it, but bounded so the page's loading spinner always eventually gives
+ *  way to ContainerDetailPage's existing ErrorState + Retry instead of
+ *  spinning forever. */
+export const getOffLeaseContainerDetail = (containerNo, leaseId, row) => {
+  const params = {};
+  if (leaseId) params.leaseId = leaseId;
+  if (row) params.row = row;
+  return apiClient
+    .get(`/offlease/${encodeURIComponent(containerNo)}/detail`, { params, timeout: 45000 })
     .then((r) => r.data);
+};
 
 /** POST /api/offlease/tracking — add a deployed container into the Stage 1 queue.
  *  `deployedRow`: the specific Deployed sheet row (item._rowNum from Lease
@@ -70,6 +86,13 @@ export const getOffLeaseDashboardData = () => apiClient.get('/offlease/dashboard
 
 /** GET /api/offlease/efficiency — per-stage SLA/TAT performance, bottleneck ranking, throughput, owner performance. */
 export const getOffLeaseEfficiencyData = () => apiClient.get('/offlease/efficiency').then((r) => r.data);
+
+/** GET /api/offlease/tat-report — every Off-Lease Tracking record's full
+ *  11-stage Entry/Planned/Actual/Delay breakdown (TAT Tracking page), or one
+ *  record when `containerNo` (optionally with `leaseId`) is given. */
+export const getOffLeaseTatReport = (containerNo, leaseId) => apiClient
+  .get('/offlease/tat-report', { params: { container: containerNo || undefined, leaseId: leaseId || undefined } })
+  .then((r) => r.data);
 
 /* ---- Dashboard live remarks ---- */
 

@@ -68,6 +68,33 @@ const quotationShown = (v) => String(v.col_164 || '').toLowerCase() === 'yes';
  *  moved to a since-removed Stage 10 2026-09-18, back here 2026-09-22. */
 const poRequiredShown = (v) => String(v.col_319 || '').toLowerCase() === 'yes';
 
+/** Final Billing Date is normally exactly one calendar month after Off-Lease
+ *  Intimation Date (explicit request 2026-10-17 — client billing is
+ *  month-based, so a full month between the two is the expected case: e.g.
+ *  1-1-2026 -> 1-2-2026). Parses "YYYY-MM-DD" by its own y/m/d parts rather
+ *  than `new Date(str)`, same reasoning as _toLocalIsoDate on the backend —
+ *  avoids a UTC-parse day shift depending on the browser's timezone. Returns
+ *  true (can't yet tell) while either date is still blank, so Remark isn't
+ *  forced required before the user has even picked both dates. */
+function exactlyOneMonthLater(startStr, endStr) {
+  if (!startStr || !endStr) return true;
+  const [sy, sm, sd] = startStr.split('-').map(Number);
+  const [ey, em, ed] = endStr.split('-').map(Number);
+  if (!sy || !sm || !sd || !ey || !em || !ed) return true;
+  // `sm` is 1-indexed (Jan=1); passing it straight as Date's 0-indexed
+  // month arg lands one month ahead of the start date — exactly the
+  // "+1 month" this is checking for.
+  const expected = new Date(sy, sm, sd);
+  return expected.getFullYear() === ey && expected.getMonth() === em - 1 && expected.getDate() === ed;
+}
+
+/** Remark becomes mandatory on Stage 1's form whenever Final Billing Date
+ *  (col_13) isn't exactly one month after Off-Lease Intimation Date
+ *  (col_10) — e.g. 27-1-2026 instead of 1-2-2026 — so there's always a
+ *  recorded reason for billing the client for something other than a full
+ *  month. */
+const billingRemarkRequired = (v) => !exactlyOneMonthLater(v.col_10, v.col_13);
+
 /** Stage 7 (Payment Status)'s UTR Number field only makes sense once VR
  *  (Voucher Raised, a separate custom action — see StageDetailModal.jsx's
  *  PAYMENT_STATUS_STAGE block) is done; col_348 is OL_VR_STATUS_COL on the
@@ -251,9 +278,21 @@ const MACHINE_FIELDS = [
 export const STAGE_FIELDS = {
   1: [
     { key: 'col_10', label: 'Off-Lease Intimation Date', type: 'date', required: true },
-    { key: 'col_11', label: 'Off-Lease Date', type: 'date', required: true },
+    // Renamed 2026-10-29 (explicit request, "this is Off-Lease Date rename
+    // expt Off-Lease Date") — col_11 is filled in at intimation time,
+    // before the container has actually left, so "Expected" is the
+    // accurate word; the column/header text itself (OL Date,
+    // olHeaders.generated.js) is unchanged, only this form's own label.
+    { key: 'col_11', label: 'Expected Off-Lease Date', type: 'date', required: true },
     { key: 'col_12', label: 'Email Notification', type: 'file' },
     { key: 'col_13', label: 'Final Billing Date', type: 'date', required: true },
+    // Explicit request 2026-10-29 ("add the sd amounts", re-added same day
+    // after a momentary revert) — the security deposit amount on file at
+    // intimation time, see OL_SD_AMOUNT_COL's own doc comment on the
+    // backend for why this is separate from the later-stage SD fields
+    // (Stage 5's own Security Deposit Amount, Stage 6's SD Amount to be
+    // Refunded). Made required the same day ("complusory").
+    { key: 'col_353', label: 'SD Amount', type: 'number', required: true },
     /* Return Transportation PO Required/PO/Amount — Stage 1's own form, per
        the original spec ("Return PO will be created/processed at [Stage
        1]"). Briefly lived on a since-removed internal Stage 10 ("LR &
@@ -269,7 +308,14 @@ export const STAGE_FIELDS = {
        StageDetailModal.jsx) so Stage 1A only has one file to open — see
        OL_HEADERS[336] / result.col_336 in offlease.service.js. */
     { key: 'col_336', label: 'Container Photos', type: 'imagesToPdf' },
-    { key: 'col_14', label: 'Remark', type: 'text' }
+    { key: 'col_14', label: 'Remark', type: 'text' },
+    /* Explicit follow-up request 2026-10-17 ("one remarks add his difrent
+       final billing remarks") — a DEDICATED remark for the billing-date
+       gap, kept separate from the plain Remark above rather than reusing
+       it. col_352 (OL_FINAL_BILLING_REMARK_COL in offlease.service.js) is
+       a new, hand-added column — see olHeaders.generated.js's own doc
+       comment for why. */
+    { key: 'col_352', label: 'Final Billing Remark', type: 'text', requiredIf: billingRemarkRequired }
   ],
 
   2: [
@@ -328,7 +374,12 @@ export const STAGE_FIELDS = {
     { key: 'col_310', label: 'Adjust Security Deposit if applicable', type: 'radio', options: YES_NO },
     { key: 'col_311', label: 'Security Deposit Amount', type: 'number' },
     { key: 'col_315', label: 'Reconcile entire billing cycle', type: 'radio', options: YES_NO },
-    { key: 'col_316', label: 'Remark', type: 'text' }
+    { key: 'col_316', label: 'Remark', type: 'text' },
+    // col_356/357, not 317/318 — outside this stage's own 305-316 range,
+    // see OL_BILLING_LEDGER_COL/OL_FINAL_PAYABLE_AMOUNT_COL's doc comments
+    // in offlease.service.js.
+    { key: 'col_356', label: 'Ledger', type: 'file' },
+    { key: 'col_357', label: 'Final Payable Amount (post adjustment, if any)', type: 'number' }
   ],
 
   6: [

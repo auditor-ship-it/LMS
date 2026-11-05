@@ -6,11 +6,21 @@ export function notFoundHandler(req, res) {
 
 /** Detects a real Google Sheets/Drive API rate-limit error bubbling up from
  *  googleapis (gaxios throws with `.code`/`.response.status` 429, or a 403
- *  whose message mentions "Quota exceeded" for the older quota-error shape). */
+ *  whose message mentions "Quota exceeded" for the older quota-error shape).
+ *
+ *  Also matches the "already locked out" message withQuotaRetry
+ *  (googleSheets.service.js) throws WITHOUT ever calling Google, while the
+ *  in-process circuit breaker (quotaLock.js) is tripped — found 2026-10-23:
+ *  that message has no `.code` and doesn't contain "quota exceeded", so the
+ *  outbox worker's own retry loop (outboxWorker.js) was treating it as an
+ *  ordinary failure — burning through its limited attempt count and backoff
+ *  schedule instead of pausing, so a replay could go permanently 'dead'
+ *  during a long quota outage even though the underlying write was always
+ *  going to succeed once the lock cleared. */
 export function isGoogleQuotaError(err) {
   const status = err?.code || err?.response?.status;
   const message = String(err?.message || err?.response?.data?.error?.message || '');
-  return status === 429 || /quota exceeded/i.test(message);
+  return status === 429 || /quota exceeded/i.test(message) || /already locked out/i.test(message);
 }
 
 // eslint-disable-next-line no-unused-vars

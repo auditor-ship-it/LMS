@@ -419,7 +419,10 @@ export async function addRefundEntry(payload, userEmail) {
     // submitted Stage 1 record drops out of Stage 1 once it's at 1A).
     // Best-effort inside markOffLeaseSdRefundSubmitted itself — never lets an
     // Off-Lease write failure undo an already-saved refund submission.
-    if (containerNo) await markOffLeaseSdRefundSubmitted(containerNo);
+    // offLeaseId threaded through 2026-11-04 (see that function's own doc
+    // comment) — a container number alone can match more than one Off-Lease
+    // Tracking row (payload.offLeaseId is already captured into the row above).
+    if (containerNo) await markOffLeaseSdRefundSubmitted(containerNo, safeStr(payload.offLeaseId).trim());
 
     return { message: 'SAVED', entry: _mapRow(row, rowNum ?? null) };
   });
@@ -551,7 +554,10 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
     // Off-Lease write failure undo an already-recorded approval.
     if (decision === 'approved' && !nextStage) {
       const containerNo = safeStr(updatedRow[CONTAINER_NO_COL]).trim();
-      if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || cfg.label}`);
+      // offLeaseId threaded through 2026-11-04 (see markOffLeaseSdRefundApproved's
+      // own doc comment) — a container number alone can match more than one
+      // Off-Lease Tracking row.
+      if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || cfg.label}`, safeStr(updatedRow[OFFLEASE_ID_COL]).trim());
     }
 
     return 'OK';

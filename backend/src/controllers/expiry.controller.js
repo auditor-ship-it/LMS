@@ -124,13 +124,17 @@ export async function sendBackToPending(req, res) {
   res.json({ result: await expiryService.sendExpiryToPendingFast(containerNo, req.user.email, rowNum) });
 }
 
-/** POST /api/expiry/renewal/complete-document-stage — completeDocStage (LMS.js 5892) */
+/** POST /api/expiry/renewal/complete-document-stage — completeDocStageFast
+ *  (LMS.js 5892 was the original synchronous version; switched to the
+ *  Mongo-first fast path 2026-10-23 — explicit request after a Sheets quota
+ *  lockout failed this whole call with a 500 and lost the user's filled-in
+ *  form. See completeDocStageFast's own doc comment for the full design.) */
 export async function completeRenewalDocStage(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, userEmail, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl } = req.body;
   res.json({
-    result: await expiryService.completeDocStage(
+    result: await expiryService.completeDocStageFast(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
+      userEmail || req.user.email, poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl
     )
   });
 }
@@ -138,25 +142,34 @@ export async function completeRenewalDocStage(req, res) {
 /** POST /api/expiry/renewal/save-document-draft — "Save" (draft), explicit
  *  request 2026-09-28: same fields as complete-document-stage above, but the
  *  record stays in Documents Pending and nothing required — see
- *  saveRenewalDraft's own doc comment. */
+ *  saveRenewalDraft's own doc comment. Switched to the Mongo-first
+ *  saveRenewalDraftFast 2026-10-23 — same reason/design as
+ *  completeRenewalDocStage above. */
 export async function saveRenewalDraft(req, res) {
-  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue } = req.body;
+  const { containerNo, renewedDate, validTill, signedCopyUrl, remarks, poNo, poFileUrl, billingCycle, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl } = req.body;
   res.json({
-    result: await expiryService.saveRenewalDraft(
+    result: await expiryService.saveRenewalDraftFast(
       containerNo, renewedDate, validTill, signedCopyUrl, remarks,
-      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue
+      poNo, poFileUrl, billingCycle, req.user.email, poValidity, rowNum, poValue, agreementValue, poRenewDate, otherFileUrl
     )
   });
 }
 
 /** POST /api/expiry/renewal/decide-approval — Pushpa's Approve/Reject
  *  decision, explicit request 2026-09-29. `decision` is 'approved' or
- *  'rejected'; see decideRenewalApproval's own doc comment. */
+ *  'rejected'; see decideRenewalApproval's own doc comment.
+ *
+ *  Switched the 'rejected' ("Send Back") decision to the Mongo-first
+ *  decideRenewalApprovalRejectFast 2026-10-29 ("pls solve this error", the
+ *  same Sheets-quota failure already fixed for Save/Submit, now hit here
+ *  too) — see that function's own doc comment for why 'approved' still
+ *  goes through the original, unchanged, live path. */
 export async function decideRenewalApproval(req, res) {
   const { containerNo, decision, remarks, rowNum } = req.body;
-  res.json({
-    result: await expiryService.decideRenewalApproval(containerNo, decision, remarks, req.user.email, rowNum)
-  });
+  const result = decision === 'rejected'
+    ? await expiryService.decideRenewalApprovalRejectFast(containerNo, remarks, req.user.email, rowNum)
+    : await expiryService.decideRenewalApproval(containerNo, decision, remarks, req.user.email, rowNum);
+  res.json({ result });
 }
 
 /* ---- Renew Approval Pending live remarks (explicit request 2026-10-05) ---- */

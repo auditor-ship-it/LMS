@@ -71,6 +71,12 @@ import { checkPendingClientToClientMoves } from '../services/offlease.service.js
 import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js';
 import { sendMonthlyReport } from '../services/monthlyReport.service.js';
 import { runSlaEscalation } from '../services/slaEscalation.service.js';
+import { sendPoAgreementDigest } from '../services/poAgreementDigest.service.js';
+import { sendDeployedSummaryDigest } from '../services/deployedSummaryDigest.service.js';
+import { saveDeployedSheetSnapshotIfNeeded } from '../services/deployedSheetSnapshot.service.js';
+import { sendRenewalReminderDigest } from '../services/renewalReminderDigest.service.js';
+import { expireOldHolds } from '../services/offlease.service.js';
+import { sendOffLeaseStageDigest } from '../services/offLeaseStageDigest.service.js';
 import { logger } from '../utils/logger.js';
 import { isCentral } from '../services/centralSheets.service.js';
 
@@ -95,6 +101,42 @@ export function registerCronJobs() {
      leaseExpiryDigest.service.js for the grouping/send logic. */
   cron.schedule('0 9 * * *', safeRun('leaseExpiryDigest', () => sendLeaseExpiryDigest()));
 
+  /* Daily, 10:00 AM and 5:00 PM — explicit request 2026-10-31 ("offlease
+     mai yah pending hai sub 10 bhje and samjho ko 5 bhje"): one separate
+     email per Off-Lease stage to that stage's own responsible person,
+     listing what's pending there right now — see
+     offLeaseStageDigest.service.js for the exact stage-owner table and
+     data source. Comma-separated hour list ('10,17'), same safe syntax
+     this file's own header note already covers for a day-of-month list
+     ('25-31,1,2') — not the range+step pattern that note warns against. */
+  cron.schedule('0 10,17 * * *', safeRun('offLeaseStageDigest', () => sendOffLeaseStageDigest()));
+
+  /* Daily, 9:05 AM — explicit request 2026-10-27 ("sep deployed sheet and
+     oct deployed... kya kya change nahi hua hai" — what changed from one
+     month's Deployed sheet to the next): saves one dated snapshot of the
+     Deployed sheet PER CALENDAR MONTH, so the Deployed Summary digest
+     (below) can show a real row-by-row diff against the previous month
+     once two snapshots exist. Safe to run daily — saving is idempotent per
+     month (see deployedSheetSnapshot.service.js's own doc comment); this
+     just needs to land once near the start of each month, and running
+     daily means a single missed/failed run self-heals the next day rather
+     than waiting a whole month. Deliberately its own small job, not folded
+     into deployedSummaryDigest below — that one only runs the 25th-2nd,
+     which would miss most of the month for taking a fresh snapshot if the
+     process happened to restart and lose whichever day it first landed on. */
+  cron.schedule('5 9 * * *', safeRun('deployedSheetSnapshot', () => saveDeployedSheetSnapshotIfNeeded()));
+
+  /* Daily, 9:10 AM — explicit request 2026-10-30 ("hold mai 7 din tak hi
+     hold pe rahega, 7 days ho gye na stage 1 intimation stage mai wapas
+     show karwayega"): any Off-Lease Stage 1 record on Hold for more than 7
+     days auto-reverts to the normal Stage 1 pending queue — see
+     expireOldHolds's own doc comment for the exact rule (applies to every
+     held row, no date-specific exemption; re-clicking Hold just starts a
+     fresh 7-day window). Daily is plenty for a 7-day threshold — offset
+     from the other 9:00/9:05 AM jobs above so none of their Sheets reads
+     land in the same instant. */
+  cron.schedule('10 9 * * *', safeRun('expireOldHolds', () => expireOldHolds()));
+
   /* 1st of every month, 6:00 AM — explicit request 2026-10-07: the complete
      PREVIOUS calendar month's Renew + Off-Lease activity, to Pushpa Shetty
      and Shivani Dhall. A single value in the day-of-month field, not a
@@ -105,7 +147,40 @@ export function registerCronJobs() {
      against a manual re-trigger or a restart landing on the same day. */
   cron.schedule('0 6 1 * *', safeRun('monthlyRenewOffLeaseReport', () => sendMonthlyReport()));
 
-  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM)');
+  /* 25th of every month, 9:00 AM — explicit request 2026-10-21: which
+     deployed containers need their PO and/or Agreement updated (overdue or
+     due within 30 days), same data the PO & Agreement Tracker page shows,
+     to the same two recipients as the monthly report above. A single value
+     in the day-of-month field, same reasoning as that job's own schedule
+     above. Idempotency handled inside poAgreementDigest.service.js. */
+  cron.schedule('0 9 25 * *', safeRun('poAgreementDigest', () => sendPoAgreementDigest()));
+
+  /* EVERY DAY from the 25th through the 2nd of the following month, 10:00
+     AM — explicit request 2026-10-23 for the content (Deployed Summary
+     page's own month-wise movement numbers, Excel attachment matching that
+     page's "Export to Excel" button), schedule widened 2026-10-27 from a
+     single day to this daily window ("25 to 2 date tak maild jana chahiye
+     hai subh 10 bhje") — a reminder on each of the last few days of the
+     month plus the first couple of the next, not just once. "25-31,1,2" is
+     a plain comma-separated day list (verified via cron.validate), not the
+     range+STEP combination this file's own header warns about — a month
+     without a 31st (or 30th/29th) simply never fires that literal date,
+     same as standard cron day-of-month semantics; no special handling
+     needed. Idempotency is now PER-DAY (lastSentDateKey), not per-month —
+     see deployedSummaryDigest.service.js's own header comment; the old
+     monthly key would have let only the first of these 9 daily sends
+     through each cycle. */
+  cron.schedule('0 10 25-31,1,2 * *', safeRun('deployedSummaryDigest', () => sendDeployedSummaryDigest()));
+
+  // STOPPED 2026-10-30 — explicit request ("mail stop for this... stop the
+  // mails agrment and po reminder") after the every-5-minute testing
+  // cadence below kept re-sending a 160-container digest. Left as a plain
+  // comment (not deleted) so this can be re-enabled later at a sane
+  // cadence once the feature itself is revisited — see
+  // renewalReminderDigest.service.js for what it would send.
+  // cron.schedule('*/5 * * * *', safeRun('renewalReminderDigest', () => sendRenewalReminderDigest()));
+
+  logger.info('[CRON] registered: runAutoApproval + copyApprovedData (hourly), leaseExpiryDigest (daily 9:00 AM), offLeaseStageDigest (daily 10:00 AM & 5:00 PM), deployedSheetSnapshot (daily 9:05 AM), expireOldHolds (daily 9:10 AM), monthlyRenewOffLeaseReport (1st of month, 6:00 AM), poAgreementDigest (25th of month, 9:00 AM), deployedSummaryDigest (25th-2nd daily, 10:00 AM), renewalReminderDigest (STOPPED 2026-10-30, was every 5 min testing cadence)');
 }
 
 /**

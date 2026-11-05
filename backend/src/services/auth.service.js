@@ -197,6 +197,34 @@ export async function empSsoLogin(empCode) {
 }
 
 /**
+ * Same as empSsoLogin above, keyed by EMAIL instead of EmpID — explicit
+ * request 2026-10-30 (renewal reminder's no-login link auto-signing the
+ * resolved KAM in, so the link lands on the REAL Lease Expiry page with
+ * full real functionality instead of a separate no-login replica). The
+ * caller (renewalReminderLink.service.js) only ever has the KAM's email on
+ * hand (emailForSalePerson's own 6-login map), not their EmpID, so this
+ * avoids a second resolution step rather than requiring one.
+ */
+export async function empSsoLoginByEmail(email) {
+  email = String(email == null ? '' : email).trim().toLowerCase();
+  if (!email) return { ok: false, error: 'email not mapped' };
+
+  const emp = await authFind(AUTH_COL_EMAIL, email);
+  if (!emp) return { ok: false, error: 'email not mapped' };
+
+  await _ensureSessionIndex();
+  const token = authToken();
+  const nowIso = new Date().toISOString();
+  await getCollection(SESSION_COLLECTION).insertOne({
+    _id: token, empId: emp.empId, name: emp.name, email: emp.email, at: nowIso, srow: null, expiresAt: _sessionExpiry()
+  });
+  await authLogEvent('sso-login', emp);
+  await authStartSession(token, emp);
+  logger.info(`[AUTH] SSO login successful (email=${email})`);
+  return { ok: true, token, name: emp.name, email: emp.email, empId: emp.empId, at: nowIso };
+}
+
+/**
  * Pure read lookup of the USER sheet by EmpID — no session created, no
  * login/session-log side effects. Used by the Sales OS renewal-stats API
  * (salesOsRenewal.service.js#getRenewalStats), which needs to resolve an

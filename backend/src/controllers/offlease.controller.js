@@ -7,6 +7,7 @@ import * as stage8Service from '../services/stage8.service.js';
 import * as stage3FormService from '../services/stage3Form.service.js';
 import * as slaService from '../services/offleaseSla.service.js';
 import { getOffLeaseEfficiencyReport } from '../services/offleaseEfficiency.service.js';
+import { getOffLeaseTatReport } from '../services/offLeaseTatTracking.service.js';
 import { assertRolesAdmin } from '../services/roles.service.js';
 import { notFound, AppError } from '../utils/AppError.js';
 import { isRateOrAmountHeader } from '../utils/isRateOrAmountHeader.js';
@@ -201,9 +202,11 @@ export async function nextLeaseId(req, res) {
  *  Permission ('offlease6') is checked inside the service, same as saveStage
  *  above. */
 export async function saveMoveToStage(req, res) {
-  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, rowNum } = req.body || {};
+  const { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, newOrderNo, proofFileUrl, rowNum } = req.body || {};
   const message = await offLeaseService.saveOffLeaseMoveToStageFast(
-    req.params.containerNo, { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }, req.user.email, rowNum
+    req.params.containerNo,
+    { reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, newOrderNo, proofFileUrl },
+    req.user.email, rowNum
   );
   res.json({ message });
 }
@@ -301,7 +304,7 @@ export async function saveApprovalClientToClient(req, res) {
  *  doc comment). Explicit request 2026-09-11. */
 export async function sendBackFromApproval(req, res) {
   const { remarks, rowNum } = req.body;
-  const message = await offLeaseService.saveOffLeaseSendBackFromApproval(req.params.containerNo, req.user.email, remarks, rowNum);
+  const message = await offLeaseService.saveOffLeaseSendBackFromApprovalFast(req.params.containerNo, req.user.email, remarks, rowNum);
   res.json({ message });
 }
 
@@ -357,7 +360,10 @@ export async function getOutstanding(req, res) {
 export async function getContainerDetail(req, res) {
   // ?leaseId= picks one record when a container has been off-leased more than
   // once; without it the service returns the candidate list to choose from.
-  const detail = await offLeaseService.getOffLeaseContainerDetail(req.params.containerNo, req.query.leaseId, req.user);
+  // ?row= (from a direct list-row click, which already knows exactly which
+  // record it means) takes priority over leaseId — see
+  // getOffLeaseContainerDetail's own doc comment.
+  const detail = await offLeaseService.getOffLeaseContainerDetail(req.params.containerNo, req.query.leaseId, req.user, req.query.row);
 
   /* Stage 9 movements are joined HERE rather than inside offlease.service so
      the two services keep pointing one way: stage9 reads offlease (for the
@@ -366,45 +372,55 @@ export async function getContainerDetail(req, res) {
      an addition to the lookup, so a Stage 9 read failure must not take the
      whole container detail down with it. */
   if (detail?.found && !detail?.multiple) {
-    try {
-      detail.movements = await stage9Service.getMovementsForContainer(req.params.containerNo);
-    } catch (e) {
+    /* BUG FOUND AND FIXED 2026-10-19 (Off-Lease Record page stuck on
+       "Loading stage data..." for 10s+): these four lookups were awaited
+       one after another — none of them depends on another's RESULT, only
+       on `detail` itself (already resolved above), so the sequential
+       chain was paying the SUM of their latencies (movements + invoice
+       attachments + FMS + entry stamp) when it only ever needed the MAX.
+       Promise.allSettled, not Promise.all, so one failing lookup still
+       can't take the others down with it — same as each one's own
+       try/catch already guaranteed before, just running together now. */
+    const [movementsResult, invoiceAttachmentsResult, fmsResult, slaResult] = await Promise.allSettled([
+      stage9Service.getMovementsForContainer(req.params.containerNo),
+      offLeaseService.getInvoiceAttachments((detail.outstanding?.invoiceTotals || []).map((i) => i.invoiceNo)),
+      /* The FMS chain (STAGE-8 movement, STAGE-9 transport, STAGE-10 site
+         delivery) — the same data the Stage 2 grid shows, so the container's
+         full history includes its transportation, not just the off-lease
+         stages. Best-effort like the rest.
+
+         No cycle-start bound (REVERTED 2026-08-28, same day it was added):
+         briefly passed this container's own Stage 1 completion time so
+         getFmsForContainer would ignore an older, unrelated cycle's FMS rows
+         for the same reused container number. Reverted — confirmed against
+         real data (SZLU9446439, SZLU9915829, GESU9563904, CXRU1037294,
+         CAIU5404270 and others) that this app's own Stage 1 timestamp
+         routinely completes AFTER the external FMS system's own event
+         timestamps (paperwork catching up to physical reality), not before —
+         so the bound hid real, correct movement/transport/delivery data on
+         more containers than the one cross-cycle case it was protecting
+         against. See getFmsForContainer's own doc comment for the full
+         history of this back-and-forth. */
+      stage8Service.getFmsForContainer(req.params.containerNo, detail.clientName),
+      /* When the container was flagged Off-Lease on the Deployed sheet — not
+         its deployed date, which is when it went OUT on lease and made every
+         container read as a 600-day breach. */
+      offLeaseService.getOffLeaseEntryStamp(req.params.containerNo)
+    ]);
+
+    if (movementsResult.status === 'fulfilled') {
+      detail.movements = movementsResult.value;
+    } else {
       detail.movements = [];
-      detail.movementsError = e?.message || 'Could not load Stage 9 movements';
+      detail.movementsError = movementsResult.reason?.message || 'Could not load Stage 9 movements';
     }
 
     /* Invoice attachments, looked up by invoice number rather than through the
        billing records — those are matched on container + client and come back
        empty for most containers. Best-effort, same as above. */
-    try {
-      const nos = (detail.outstanding?.invoiceTotals || []).map((i) => i.invoiceNo);
-      detail.invoiceAttachments = await offLeaseService.getInvoiceAttachments(nos);
-    } catch (e) {
-      detail.invoiceAttachments = {};
-    }
+    detail.invoiceAttachments = invoiceAttachmentsResult.status === 'fulfilled' ? invoiceAttachmentsResult.value : {};
 
-    /* The FMS chain (STAGE-8 movement, STAGE-9 transport, STAGE-10 site
-       delivery) — the same data the Stage 2 grid shows, so the container's
-       full history includes its transportation, not just the off-lease
-       stages. Best-effort like the rest.
-
-       No cycle-start bound (REVERTED 2026-08-28, same day it was added):
-       briefly passed this container's own Stage 1 completion time so
-       getFmsForContainer would ignore an older, unrelated cycle's FMS rows
-       for the same reused container number. Reverted — confirmed against
-       real data (SZLU9446439, SZLU9915829, GESU9563904, CXRU1037294,
-       CAIU5404270 and others) that this app's own Stage 1 timestamp
-       routinely completes AFTER the external FMS system's own event
-       timestamps (paperwork catching up to physical reality), not before —
-       so the bound hid real, correct movement/transport/delivery data on
-       more containers than the one cross-cycle case it was protecting
-       against. See getFmsForContainer's own doc comment for the full
-       history of this back-and-forth. */
-    try {
-      detail.fms = await stage8Service.getFmsForContainer(req.params.containerNo, detail.clientName);
-    } catch (e) {
-      detail.fms = null;
-    }
+    detail.fms = fmsResult.status === 'fulfilled' ? fmsResult.value : null;
 
     /* Stage 2 (internal 6) is COMPLETE once all three FMS legs exist — booked
        in STAGE-8, transported in STAGE-9, delivered in STAGE-10. The stage
@@ -431,6 +447,43 @@ export async function getContainerDetail(req, res) {
       detail.delayedCount = sla.delayedCount;
       detail.anyDelayed = sla.anyDelayed;
     } catch (e) { /* timers are additive — never fail the lookup over them */ }
+
+    /* New TAT Tracking engine (offLeaseTatTracking.service.js) — explicit
+       request 2026-11-04 ("pls add the kab stage mai aaya kab form filled
+       kiya kitna dely hua aur kitna jaldi yah table pe show hoga", then
+       "showw tata and actual and dely this history"): the Container History
+       tab's own SLA column above uses offleaseSla.service.js's older,
+       narrower budgets (e.g. a flat 1h for every stage) and produces
+       confusing numbers like "106d 19h of 2d · 104d 19h late" — this
+       attaches the SAME Entry/Planned/Actual/Delay data the new TAT
+       Tracking page shows, scoped to this one container+lease, additive
+       (never replaces detail.stages' own .sla — see the block above) so
+       LookupResult.jsx's HistoryTable can read it alongside what's already
+       there. Named tatV2 to keep it unambiguous from the older .tat shape
+       attachStageTat attaches elsewhere (stage-queue pages, a different
+       shape entirely). internalToTatKey mirrors OL_ACTIVE_STAGE_NUMS'
+       exact internal-stage-number -> display-stage mapping. */
+    if (detail.container) {
+      try {
+        const tatReport = await getOffLeaseTatReport({ containerNo: detail.container, leaseId: detail.leaseId, user: req.user });
+        const record = tatReport.records[0];
+        if (record) {
+          const tatByKey = new Map(record.stages.map((s) => [s.key, s]));
+          const internalToTatKey = { 1: '1', 6: '2', 7: '3', 3: '4', 5: '5', 11: '6', 8: '7' };
+          for (const s of detail.stages || []) {
+            const tatKey = internalToTatKey[s.stage];
+            if (tatKey && tatByKey.has(tatKey)) s.tatV2 = tatByKey.get(tatKey);
+          }
+          detail.gateTatV2 = tatByKey.get('1A') || null;
+          detail.refundTatV2 = { '6A': tatByKey.get('6A') || null, '6B': tatByKey.get('6B') || null, '6C': tatByKey.get('6C') || null };
+          detail.tatTotals = {
+            plannedTotalLabel: record.plannedTotalLabel,
+            actualTotalLabel: record.actualTotalLabel,
+            overdueStageCount: record.overdueStageCount
+          };
+        }
+      } catch (e) { /* additive, same reasoning as the SLA block above */ }
+    }
 
     const f = detail.fms;
     const s2 = (detail.stages || []).find((s) => s.stage === STAGE2_INTERNAL);
@@ -486,6 +539,18 @@ export async function getEfficiencyData(req, res) {
   res.json(await getOffLeaseEfficiencyReport(req.user));
 }
 
+/** TAT (Turnaround Time) Tracking report — explicit spec 2026-11-04. Every
+ *  Off-Lease Tracking record's full Entry/Planned/Actual/Delay breakdown
+ *  across all 11 stages, or one record when ?container= (and optionally
+ *  ?leaseId=) is given — same query shape the container detail lookup uses. */
+export async function getTatReport(req, res) {
+  res.json(await getOffLeaseTatReport({
+    containerNo: req.query.container || undefined,
+    leaseId: req.query.leaseId || undefined,
+    user: req.user
+  }));
+}
+
 export async function getDashboardData(req, res) {
   const data = await offLeaseService.getOffLeaseDashboardData(req.user);
 
@@ -519,6 +584,15 @@ export async function getDashboardData(req, res) {
   }
 
   res.json(data);
+}
+
+/** GET /api/public/v1/reports/off-lease — flat "total Off-Lease" report for
+ *  the public API, explicit request 2026-10-30. See
+ *  offlease.service.js's getOffLeaseTotalReport for the shape/reasoning —
+ *  same { data, count } convention as reports/renewal-log and
+ *  reports/new-lease (expiry.controller.js). */
+export async function getTotalReport(req, res) {
+  res.json(await offLeaseService.getOffLeaseTotalReport(req.user));
 }
 
 /* ---- Dashboard live remarks ---- */

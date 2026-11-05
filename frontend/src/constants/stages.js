@@ -18,7 +18,7 @@ export const ALL_STAGES = [
   // RENAMED 2026-09-18 (explicit request): 'Billing Reconciliation' -> 'Final Billing'.
   { number: 5, label: 'Final Billing', owner: 'Shivani' },
   { number: 6, label: 'Transportation', owner: 'Kshirod Khatua' },
-  { number: 7, label: 'Gate In', owner: 'Pritam' },
+  { number: 7, label: 'Gate In', owner: 'Nikhil' },
   // RENAMED 2026-09-18 (explicit request): 'FMS Closure' -> 'KAM', owner added ('Sales').
   // RENAMED AGAIN 2026-09-29 (explicit request): 'KAM' -> 'FMS Closed', and the
   // 'Sales' owner (shown as the tab strip's "Stage 6 (Sales)") -> 'FMS Closed'

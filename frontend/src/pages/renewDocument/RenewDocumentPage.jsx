@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { PageHeader, Card, Button, StatCard, SearchBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { PageHeader, Card, Button, StatCard, SearchBar, FilterBar, Pagination, DataGrid, StatusBadge, renderCellValue } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { usePagination } from '../../hooks/usePagination.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
@@ -10,66 +11,33 @@ import { useAuth, apiErrorMessage } from '../../shared/auth/index.js';
 import { fetchDocumentList, submitDocumentCompletion, saveDocumentDraft, submitSendBackToPending } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
+import { settleSequentially, describeBulkFailures } from '../../utils/bulkRenewalSubmit.js';
 import { CompleteDocumentModal } from './CompleteDocumentModal.jsx';
 import styles from './RenewDocumentPage.module.css';
 
 // Kept out of the compact table view and shown only in the row detail panel.
 const DETAIL_ONLY_HEADERS = /^(location|size|type|city|po)$/i;
 
-const RESULT_CODE_TEXT = {
-  INVALID_STATE: 'not in the document-upload stage',
-  MISSING_PO: 'PO number/file required',
-  MISSING_AGR: 'signed agreement copy required'
-};
+// Status filter — explicit request: the table's own Status column already
+// distinguishes a row sent-back by Pushpa (approvalStatus === 'Sent Back',
+// shown as "Sent Back") from one never submitted yet (shown as '—'); this
+// just lets that same distinction be filtered on.
+const STATUS_FILTER_OPTIONS = [
+  { value: 'sentBack', label: 'Sent Back' },
+  { value: 'awaitingUpload', label: 'Awaiting Upload' }
+];
 
-/**
- * Runs `fn` for each item ONE AT A TIME, in the same { status, value|reason }
- * shape Promise.allSettled returns — a drop-in replacement for it, not a new
- * contract describeBulkFailures has to learn.
- *
- * Bulk Save/Submit used to fire every container's request at once
- * (Promise.allSettled(items.map(...))). Each one does its own LIVE Sheets
- * read-then-write (completeDocStage/saveRenewalDraft's "re-read before a
- * write" guard — see expiry.service.js), and firing a dozen-plus of those in
- * the same instant is exactly the burst this project's shared Sheets quota
- * keeps failing under (same root cause documented in
- * mongoSheetData.service.js's own header note — "any burst of traffic...
- * tripped the... rate limit... repeatedly"). Confirmed live 2026-10-06: a
- * 7-of-14 Sales OS bulk Submit failed with no INVALID_STATE/MISSING_PO/
- * MISSING_AGR reason on any of the 7 — a quota/transient-error signature, not
- * a data problem (all 7 were still plain 'Documents Pending' rows). Running
- * these one at a time costs a little wall-clock time on a big batch, but
- * never exceeds the per-minute quota the way firing them all at once does.
- */
-async function settleSequentially(items, fn) {
-  const results = [];
-  for (const item of items) {
-    try {
-      results.push({ status: 'fulfilled', value: await fn(item) });
-    } catch (e) {
-      results.push({ status: 'rejected', reason: e });
-    }
-  }
-  return results;
-}
+/* decideRenewalApproval wrote 'Rejected' for this state until 2026-10-29
+ * ("this not reject iam send back button"), when the stored value itself
+ * was renamed to 'Sent Back' to match the button/banner/email wording — but
+ * existing rows already written as 'Rejected' before that change still
+ * carry the old value, so both are treated as the same state everywhere
+ * this gets compared, rather than old rows silently losing their badge/
+ * filter match. */
+const isSentBack = (status) => status === 'Sent Back' || status === 'Rejected';
 
-/* Bulk Save/Submit failure summary — groups containers by the actual
-   reason (server message or result code) instead of listing bare numbers. */
-function describeBulkFailures(results, items, doneVerb) {
-  const byReason = new Map();
-  results.forEach((r, i) => {
-    if (r.status !== 'rejected') return;
-    const e = r.reason;
-    const reason = RESULT_CODE_TEXT[e?.message] || apiErrorMessage(e) || 'Unknown error';
-    if (!byReason.has(reason)) byReason.set(reason, []);
-    byReason.get(reason).push(items[i].row?.[0]);
-  });
-  const failedCount = [...byReason.values()].reduce((n, list) => n + list.length, 0);
-  if (!failedCount) return '';
-  const detail = [...byReason.entries()].map(([reason, list]) => `${list.join(', ')} — ${reason}`).join(' | ');
-  const tail = failedCount === items.length ? `None were ${doneVerb}.` : `The other ${items.length - failedCount} were ${doneVerb}.`;
-  return `Failed for ${failedCount} of ${items.length}: ${detail}. ${tail}`;
-}
+// settleSequentially/describeBulkFailures: see ../../utils/bulkRenewalSubmit.js
+// (shared with LeaseExpiryPage.jsx's own bulk Renew, 2026-11-04).
 
 /**
  * Renew & Document — post-renewal documentation (agreement/PO upload) for
@@ -101,8 +69,16 @@ export function RenewDocumentPage() {
   const { user } = useAuth();
   const canActRenew = canAct('renew');
 
-  const [search, setSearch] = useState('');
+  // Explicit request 2026-10-16: PO & Agreement Tracker's click-through
+  // "open PO" action lands here (the Documents list this container is
+  // actually actionable from) with the container pre-filled into search,
+  // via navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainer } }) —
+  // so the user doesn't have to retype it. Read once; a later in-page
+  // search edit should not keep snapping back to this.
+  const location = useLocation();
+  const [search, setSearch] = useState(() => location.state?.focusContainer || '');
   const debouncedSearch = useDebouncedValue(search, 250);
+  const [statusFilter, setStatusFilter] = useState('');
   const [selectedContainer, setSelectedContainer] = useState(null);
 
   const [docItem, setDocItem] = useState(null);
@@ -130,8 +106,17 @@ export function RenewDocumentPage() {
   /* Bulk selection, keyed by container number — same identity
      setSelectedContainer already uses for the single-row detail view, and
      stable across pagination/filtering (unlike a row index, which shifts
-     depending on which page or filtered set it's read from). */
-  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+     depending on which page or filtered set it's read from).
+     Explicit request 2026-10-27 ("click the renew not open form"): Lease
+     Expiry's bulk Renew button used to just silently mark containers
+     'Documents Pending' with no form — it now also hands off here via
+     navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainers } }), same
+     pattern as the single-container focusContainer above but a LIST,
+     pre-selecting them so the bulk bar (below) is already showing and one
+     click away from the actual Renewed Date/Valid Till/PO form, instead of
+     making the user find and re-select the exact containers they just
+     processed. */
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set(location.state?.focusContainers || []));
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState('');
@@ -153,9 +138,12 @@ export function RenewDocumentPage() {
 
   const filtered = useMemo(() => {
     const term = debouncedSearch.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
-  }, [rows, debouncedSearch]);
+    let out = rows;
+    if (statusFilter === 'sentBack') out = out.filter((r) => isSentBack(r.approvalStatus));
+    else if (statusFilter === 'awaitingUpload') out = out.filter((r) => !isSentBack(r.approvalStatus));
+    if (term) out = out.filter((r) => (r.row || []).some((v) => String(v ?? '').toLowerCase().includes(term)));
+    return out;
+  }, [rows, debouncedSearch, statusFilter]);
 
   const { page, totalPages, pageRows, setPage, nextPage, prevPage, resetPage } = usePagination(filtered, 10);
 
@@ -168,7 +156,26 @@ export function RenewDocumentPage() {
     [filtered, selectedKeys]
   );
 
+  // Explicit follow-up 2026-10-27 ("samjhe from open hona chhaiye hai hai
+  // na" — the FORM itself should open, not just land here pre-selected):
+  // once the pre-selected containers from a bulk-Renew handoff actually
+  // resolve to real rows in the loaded list, open the bulk form
+  // automatically instead of leaving one more click (the bulk bar's own
+  // "Update") between landing here and actually seeing it. Guarded with a
+  // ref so this only ever fires once — selectedItems recomputes on every
+  // filter/search change, and bulkOpen must stay closeable afterward.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (!location.state?.focusContainers?.length) return;
+    if (!selectedItems.length) return;
+    autoOpenedRef.current = true;
+    setBulkError('');
+    setBulkOpen(true);
+  }, [selectedItems, location.state]);
+
   const handleSearchChange = (v) => { setSearch(v); resetPage(); };
+  const handleStatusFilterChange = (v) => { setStatusFilter(v); resetPage(); };
 
   const toggleRow = (key) => setSelectedKeys((prev) => {
     const next = new Set(prev);
@@ -203,10 +210,20 @@ export function RenewDocumentPage() {
         poNo: item.draftPoNo || '',
         poValidity: item.draftPoValidity || '',
         poValue: item.draftPoValue || '',
+        agreementValue: item.draftAgreementValue || '',
+        poRenewDate: item.draftPoRenewDate || '',
         billingCycle: item.draftBillingCycle || '',
         submittedDate: item.renewalSubmittedDate || '',
         approvalStatus: item.approvalStatus || '',
-        approvalRemarks: item.approvalRemarks || ''
+        approvalRemarks: item.approvalRemarks || '',
+        // Explicit request 2026-10-28 ("send back for renew approval
+        // document aatmnent show pls"): a Sent-Back record already has a
+        // previously-uploaded signed copy/PO file on it (that's WHY Pushpa
+        // could review it in the first place) — show a link to what's
+        // already on file, not just a blank "Choose file" button, so the
+        // submitter can see/compare before deciding whether to replace it.
+        signedCopyUrl: item.draftSignedCopyUrl || '',
+        poFileUrl: item.draftPoFileUrl || ''
       }
     });
   };
@@ -217,9 +234,10 @@ export function RenewDocumentPage() {
     // Uploaded concurrently, not one after the other — the PO file has no
     // reason to wait on the signed copy finishing first, and this was
     // roughly doubling the wait whenever a form carried both.
-    const [signedCopyUrl, poFileUrl] = await Promise.all([
+    const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
       payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-      payload.poFile ? uploadStageFile(payload.poFile) : ''
+      payload.poFile ? uploadStageFile(payload.poFile) : '',
+      payload.otherFile ? uploadStageFile(payload.otherFile) : ''
     ]);
     return {
       containerNo,
@@ -233,6 +251,9 @@ export function RenewDocumentPage() {
       billingCycle: payload.billingCycle,
       poValidity: payload.poValidity,
       poValue: payload.poValue,
+      agreementValue: payload.agreementValue,
+      poRenewDate: payload.poRenewDate,
+      otherFileUrl,
       rowNum
     };
   };
@@ -324,9 +345,10 @@ export function RenewDocumentPage() {
     try {
       // Uploaded ONCE — every selected container gets the same file/URL,
       // per the "one form entry for the whole batch" request.
-      const [signedCopyUrl, poFileUrl] = await Promise.all([
+      const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
         payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-        payload.poFile ? uploadStageFile(payload.poFile) : ''
+        payload.poFile ? uploadStageFile(payload.poFile) : '',
+        payload.otherFile ? uploadStageFile(payload.otherFile) : ''
       ]);
 
       const results = await settleSequentially(selectedItems, async (it) => {
@@ -342,13 +364,16 @@ export function RenewDocumentPage() {
           billingCycle: payload.billingCycle,
           poValidity: payload.poValidity,
           poValue: payload.poValue,
+          agreementValue: payload.agreementValue,
+          poRenewDate: payload.poRenewDate,
+          otherFileUrl,
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE' || result === 'MISSING_PO' || result === 'MISSING_AGR') {
           throw new Error(result);
         }
       });
-      const failureText = describeBulkFailures(results, selectedItems, 'submitted');
+      const failureText = describeBulkFailures(results, selectedItems, 'submitted', apiErrorMessage);
       if (failureText) {
         setBulkError(failureText);
       } else {
@@ -373,9 +398,10 @@ export function RenewDocumentPage() {
     setBulkBusy(true);
     setBulkError('');
     try {
-      const [signedCopyUrl, poFileUrl] = await Promise.all([
+      const [signedCopyUrl, poFileUrl, otherFileUrl] = await Promise.all([
         payload.signedCopy ? uploadStageFile(payload.signedCopy) : '',
-        payload.poFile ? uploadStageFile(payload.poFile) : ''
+        payload.poFile ? uploadStageFile(payload.poFile) : '',
+        payload.otherFile ? uploadStageFile(payload.otherFile) : ''
       ]);
 
       const results = await settleSequentially(selectedItems, async (it) => {
@@ -390,11 +416,14 @@ export function RenewDocumentPage() {
           billingCycle: payload.billingCycle,
           poValidity: payload.poValidity,
           poValue: payload.poValue,
+          agreementValue: payload.agreementValue,
+          poRenewDate: payload.poRenewDate,
+          otherFileUrl,
           rowNum: it._rowNum
         });
         if (result === 'INVALID_STATE') throw new Error(result);
       });
-      const failureText = describeBulkFailures(results, selectedItems, 'saved');
+      const failureText = describeBulkFailures(results, selectedItems, 'saved', apiErrorMessage);
       if (failureText) {
         setBulkError(failureText);
       } else {
@@ -437,6 +466,9 @@ export function RenewDocumentPage() {
           <>
             <div className={styles.toolbar}>
               <SearchBar value={search} onChange={handleSearchChange} placeholder="Search container, client…" />
+              <FilterBar
+                filters={[{ key: 'status', label: 'Status', options: STATUS_FILTER_OPTIONS, value: statusFilter, onChange: handleStatusFilterChange }]}
+              />
             </div>
             {sendBackError && <p className={styles.actionError}>{sendBackError}</p>}
 
@@ -481,7 +513,7 @@ export function RenewDocumentPage() {
                 // list itself (what it looked like opening each row to find
                 // out), not only inside the detail modal's own banner.
                 <td key="status" className={styles.clickCell} onClick={() => setSelectedContainer(item.row?.[0])}>
-                  {item.approvalStatus === 'Rejected' ? <StatusBadge status="Sent Back" dot /> : '—'}
+                  {isSentBack(item.approvalStatus) ? <StatusBadge status="Sent Back" dot /> : '—'}
                 </td>
               ]}
               renderActions={(item) => (

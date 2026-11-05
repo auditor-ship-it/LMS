@@ -10,6 +10,9 @@ const router = Router();
 router.use(requireAuth);
 
 router.get('/deployed-summary', asyncHandler(dashboardController.getDeployedSummary));
+router.get('/deployed-summary/export', asyncHandler(dashboardController.getDeployedSummaryExport));
+router.get('/deployed-summary/export-month-categories', asyncHandler(dashboardController.getDeployedSummaryExportMonthCategories));
 router.get('/deployed-detail', asyncHandler(dashboardController.getDeployedDetail));
+router.get('/po-agreement-tracker', asyncHandler(dashboardController.getPoAgreementTracker));
 
 export default router;

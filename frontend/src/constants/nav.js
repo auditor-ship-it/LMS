@@ -36,6 +36,15 @@ export const NAV_TREE = {
   label: 'Lease Management System',
   items: [
     { key: 'myTask', label: 'My Task', path: ROUTES.MY_TASK, icon: 'check-circle', sidebarKey: 'myTask', section: 'Overview' },
+    // Explicit request 2026-10-28 ("add overview SOP and Video"), then
+    // consolidated same day ("one navigation... click sop open iframe to
+    // sop and click video then open iframe") — ONE sidebar entry, SOP and
+    // Video as tabs on that one page (pages/sop/DriveEmbedPage.jsx), not
+    // two separate sidebar items. 'offLeaseSopVideo' stays reserved as an
+    // inert SIDEBAR_KEYS slot (permissions.config.js) from the earlier,
+    // superseded two-item version — same "do not remove a slot" convention
+    // as that file's own retired-keys comment.
+    { key: 'offLeaseSop', label: 'SOP', path: ROUTES.OFF_LEASE_SOP, icon: 'info', sidebarKey: 'offLeaseSop', section: 'Overview' },
     { key: 'verify', label: 'Verify Lease', path: ROUTES.VERIFY_LEASE, icon: 'search', sidebarKey: 'verify', section: 'Agreements', taskKey: 'pendingVerify' },
     // Removed from the sidebar app-wide 2026-09-11 (explicit request) — the
     // page/route/backend are untouched, so it's still reachable directly
@@ -54,12 +63,20 @@ export const NAV_TREE = {
     { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending', taskKey: 'renewApprovalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
+    { key: 'poAgreementTracker', label: 'PO & Agreement Tracker', path: ROUTES.PO_AGREEMENT_TRACKER, icon: 'clock', sidebarKey: 'poAgreementTracker', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
     // sidebarKey added 2026-09-10 — the matching SIDEBAR_KEYS column now
     // exists (permissions.config.js) and roles.service.js backfills every
     // existing user's row to TRUE for it, so this doesn't silently vanish
     // for anyone the moment this ships (see _ensureSidebarHeaderWidth).
     { key: 'offLeaseEfficiency', label: 'Off-Lease Efficiency', path: ROUTES.OFF_LEASE_EFFICIENCY, icon: 'grid', sidebarKey: 'offLeaseEfficiency', section: 'Returns' },
+    // No sidebarKey — explicit new page 2026-11-04 ("Offlease New TAT
+    // Tracking System"); a nav item with no sidebarKey is always visible
+    // (see Sidebar.jsx's own doc comment) — simplest option, avoids a
+    // backend SIDEBAR_KEYS/permissions.config.js change + user backfill for
+    // a brand-new report page with no more sensitivity than what's already
+    // shown elsewhere in Off-Lease.
+    { key: 'offLeaseTat', label: 'TAT Tracking', path: ROUTES.OFF_LEASE_TAT, icon: 'clock', section: 'Returns' },
     // sidebarKey added 2026-10-01 (explicit request) — the matching
     // SIDEBAR_KEYS column already existed (added 2026-09-16) but was never
     // wired here or added to RELEVANT_SIDEBAR_KEYS, so it controlled nothing.
@@ -85,6 +102,10 @@ export const NAV_TREE = {
     { key: 'rolesAccess', label: 'Roles & Access', path: ROUTES.ROLES_ACCESS, icon: 'lock', section: 'Admin', sidebarKey: 'rolesAccess', permKey: 'rolesAdmin' },
     // Same reasoning/exception as Roles & Access directly above, gated on
     // 'apiAdmin' + 'apiAccess' instead.
-    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin', sidebarKey: 'apiAccess', permKey: 'apiAdmin' }
+    { key: 'apiAccess', label: 'API Access', path: ROUTES.API_ACCESS, icon: 'external', section: 'Admin', sidebarKey: 'apiAccess', permKey: 'apiAdmin' },
+    // Same reasoning/exception as Roles & Access above, gated on the same
+    // 'rolesAdmin' permission (this page's own backend controller checks
+    // it too) — explicit request 2026-10-17.
+    { key: 'syncStatus', label: 'Sync Status', path: ROUTES.SYNC_STATUS, icon: 'clock', section: 'Admin', sidebarKey: 'syncStatus', permKey: 'rolesAdmin' }
   ]
 };

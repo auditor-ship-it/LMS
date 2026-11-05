@@ -18,6 +18,28 @@ const TOKEN_TTL_MS = 20 * 60 * 1000; // re-login well inside any server-side exp
 /** /api/search returns only 6 rows unless `limit` is passed — high enough that
  *  no invoice's container list is ever cut short. */
 const SEARCH_LIMIT = 500;
+// BUG FOUND AND FIXED 2026-10-19 (Off-Lease Record page stuck on "Loading
+// stage data..."): neither fetch() call below had a timeout — a slow or
+// unresponsive Accounts API (already seen failing with "Too many attempts"
+// this same week) could hang the ENTIRE container-detail request
+// indefinitely, since getOutstandingForContainer is awaited directly in that
+// chain with nothing else to time it out. 8s matches this file's own
+// existing "this is a nice-to-have enrichment, not core data" posture (every
+// call site already wraps this in try/catch and treats failure as
+// out.error, never blocking the rest of the page).
+const FETCH_TIMEOUT_MS = 8000;
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error(`Accounts API timed out after ${FETCH_TIMEOUT_MS / 1000}s`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 let cached = { token: '', at: 0 };
 
@@ -26,7 +48,7 @@ async function getToken(force = false) {
   if (!env.accountsApiEmpId || !env.accountsApiPassword) {
     throw new Error('ACCOUNTS_API_EMP_ID / ACCOUNTS_API_PASSWORD are not set in backend/.env');
   }
-  const res = await fetch(`${BASE}/api/auth/login`, {
+  const res = await fetchWithTimeout(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ empId: env.accountsApiEmpId, password: env.accountsApiPassword })
@@ -41,7 +63,7 @@ async function getToken(force = false) {
 /** GET with the cached token; one silent retry after a fresh login on 401. */
 async function apiGet(path, retry = true) {
   const token = await getToken();
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetchWithTimeout(`${BASE}${path}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
   });
   if (res.status === 401 && retry) { cached = { token: '', at: 0 }; return apiGet(path, false); }

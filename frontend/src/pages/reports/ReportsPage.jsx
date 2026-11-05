@@ -197,8 +197,8 @@ export function ReportsPage() {
       newLeaseRows.map((r) => [r.deployedDate, r.container, r.clientName, r.orderNo, r.orderType, r.qty, r.size, r.productType, r.location, r.saleExec]));
 
     add('Agreement Renewals',
-      ['Renewed On', 'Container No', 'Client Name', 'Valid Till', 'PO No', 'PO File', 'Agreement File', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By', 'Sale Person'],
-      renewalRows.map((r) => [r.timestamp, r.container, r.clientName, r.validTill, r.poNo, r.poFile, r.agreementFile, r.oldPoNo, r.oldPoFile, r.oldAgreementFile, r.updatedBy, r.saleExec]));
+      ['Renewed On', 'Container No', 'Client Name', 'Valid Till', 'PO No', 'PO File', 'PO Renew Date', 'PO Value', 'Agreement File', 'Agreement Value', 'Billing Cycle', 'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By', 'Sale Person'],
+      renewalRows.map((r) => [r.timestamp, r.container, r.clientName, r.validTill, r.poNo, r.poFile, r.poRenewDate, r.poValue, r.agreementFile, r.agreementValue, r.billingCycle, r.oldPoNo, r.oldPoFile, r.oldAgreementFile, r.updatedBy, r.saleExec]));
 
     const stamp = periodLabel.replace(/[^A-Za-z0-9]+/g, '-');
     XLSX.writeFile(wb, `Reports-${stamp}.xlsx`);
@@ -322,7 +322,7 @@ export function ReportsPage() {
           <DataGrid
             headers={[
               'Renewed On', 'Container No', 'Client Name', 'Valid Till',
-              'PO No', 'PO File', 'Agreement File',
+              'PO No', 'PO File', 'PO Renew Date', 'PO Value', 'Agreement File', 'Agreement Value', 'Billing Cycle',
               'Old PO No', 'Old PO File', 'Old Agreement File', 'Updated By', 'Sale Person'
             ]}
             rows={renewalRows}
@@ -336,7 +336,11 @@ export function ReportsPage() {
               <td key="v">{r.validTill || '—'}</td>,
               <td key="p">{r.poNo || '—'}</td>,
               <td key="pf">{renderCellValue(r.poFile)}</td>,
+              <td key="prd">{r.poRenewDate || '—'}</td>,
+              <td key="pv">{r.poValue || '—'}</td>,
               <td key="af">{renderCellValue(r.agreementFile)}</td>,
+              <td key="av">{r.agreementValue || '—'}</td>,
+              <td key="bc">{r.billingCycle || '—'}</td>,
               <td key="op">{r.oldPoNo || '—'}</td>,
               <td key="opf">{renderCellValue(r.oldPoFile)}</td>,
               <td key="oaf">{renderCellValue(r.oldAgreementFile)}</td>,

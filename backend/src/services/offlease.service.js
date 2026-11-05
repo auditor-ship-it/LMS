@@ -92,7 +92,7 @@ import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from '
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { _deployedRawValues, _resolveRenewalColumns, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer } from './stage8.service.js';
+import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer, readStage9RawRows } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
@@ -477,6 +477,46 @@ const OL_UTR_NUMBER_COL = 351;
  *  startCol..endCol range (10-17), same reasoning as OL_RETURN_PO_COLS
  *  above. Added 2026-09-23 (explicit request). */
 const OL_CONTAINER_PHOTOS_COL = 336;
+
+/** Stage 1's "Final Billing Remark" — a dedicated remark distinct from the
+ *  generic "Stage 1 Remark" (col_14), only meant to explain why Final
+ *  Billing Date (col_13) isn't exactly one month after OL Intimation Date
+ *  (col_10) — see billingRemarkRequired in frontend/stageFields.js. Outside
+ *  Stage 1's own startCol..endCol range (10-17), same reasoning as
+ *  OL_CONTAINER_PHOTOS_COL above. Added 2026-10-17 (explicit request). */
+const OL_FINAL_BILLING_REMARK_COL = 352;
+
+/** Stage 1's "SD Amount" — the security deposit amount on file at
+ *  intimation time, explicit request 2026-10-29 ("add the sd amounts").
+ *  Outside Stage 1's own startCol..endCol range (10-17), same reasoning as
+ *  OL_FINAL_BILLING_REMARK_COL above. Distinct from Stage 5's own "Security
+ *  Deposit Amount" (col 35) and Stage 6's "SD Amount to be Refunded"
+ *  (refunds.service.js) — both filled much later in the process; this one
+ *  is captured up front. */
+const OL_SD_AMOUNT_COL = 353;
+
+/** Stage 5's (Billing Reconciliation) "Ledger" file upload — explicit
+ *  request 2026-10-30 ("one upload file option" / "ledger file u0load
+ *  name"). col_356, not part of OL_STAGE5_EXTRA_COLS's own 305-316
+ *  positional array (adding a 13th slot there would mean touching all 3 of
+ *  that array's destructuring call sites for one unrelated field) — read
+ *  as its own standalone line in getOffLeaseStageDetail's Stage 5 block,
+ *  same reasoning OL_CONTAINER_PHOTOS_COL/OL_FINAL_BILLING_REMARK_COL/
+ *  OL_SD_AMOUNT_COL above already use for landing outside their own
+ *  stage's contiguous range. No write-side wiring needed — saveOffLeaseStage
+ *  writes any col_N key in its payload generically (see that function's own
+ *  "Write stage data" loop). */
+const OL_BILLING_LEDGER_COL = 356;
+
+/** Stage 5's (Billing Reconciliation) "Final Payable Amount (post
+ *  adjustment, if any)" — explicit request 2026-10-30, same batch as
+ *  OL_BILLING_LEDGER_COL above and outside this stage's own range for the
+ *  same reason (see that constant's own doc comment). Distinct from
+ *  col_306 "Outstanding Amount" — that's the raw figure before any
+ *  adjustment; this is what's actually payable once Adjust Security
+ *  Deposit (col_310/311) and any other reconciliation adjustment are
+ *  applied. */
+const OL_FINAL_PAYABLE_AMOUNT_COL = 357;
 
 /** Stage 1A's "Client to Client" decision (alongside Approve/Send Back/
  *  Reject) — the new client this container is going straight to. Added
@@ -1122,6 +1162,14 @@ async function _scanSheetForLeaseInfo(sheetName, want) {
     // Read-only lookup, no write follows — also on the regular container-
     // detail path (getOffLeaseContainerDetail -> _findLeaseInfoForContainer),
     // not just the admin diagnostics below. Safe for the Mongo mirror.
+    //
+    // PERF FIX 2026-10-28 ("very much time to loading" / "20-25s to 2s
+    // max"): New Lease and (especially) Operation sheet (1732 rows, ~15s
+    // full read — confirmed live) used to be read fresh on every single
+    // container-detail load. getSheetDataFromMongo now carries its own 60s
+    // cache (raised from 8s the same day, see that file's own doc comment)
+    // — a dedicated wrapper cache here would just be a second layer on top
+    // of that one, so this now calls it directly.
     const { headers, rows } = await getSheetDataFromMongo(sheetName);
     if (!rows.length) return info;
     const cols = _orderScanCols(headers);
@@ -1198,10 +1246,38 @@ async function _findOrderNosForContainer(want) {
  *  tolerant-but-not-alias-fooled comparison every other FMS lookup in this
  *  file already uses, same "prefer client-matched, fall back to
  *  container-only if that filters out everything" rescue as matchByContainer. */
-async function _lookupStage9OrderNos(containerNo, clientName) {
+/** `rawPromise`, optional (PERF FIX 2026-10-28, "very much time to loading"):
+ *  the STAGE-9 sheet read itself never depends on `clientName` — only the
+ *  filtering below does — so getOffLeaseContainerDetail can kick this read
+ *  off the moment it knows the container, in parallel with
+ *  _findLeaseInfoForContainer, instead of waiting for leaseInfo to resolve
+ *  first and only then starting a cold ~17-24s STAGE-9 read. Defaults to
+ *  starting the read itself so the other call site (line ~3092, which
+ *  already has nothing else to overlap this with) is unaffected.
+ *
+ *  `requireClientMatch`, optional (BUG FOUND AND FIXED 2026-10-28,
+ *  "coustomwr name is diffrent order no wrong fethc", container
+ *  TCKU2842760): the "fall back to every hit for this container number,
+ *  regardless of client" rescue below exists for a real client genuinely
+ *  spelled differently between systems (see clientMatches' own doc comment,
+ *  SZLU9181535) — but it's indiscriminate: given a trustworthy `clientName`
+ *  that matches NOTHING because the container number was simply reused by a
+ *  DIFFERENT, unrelated past customer, it just as happily returns that
+ *  unrelated customer's order. TCKU2842760 is currently Luthra Projects',
+ *  but its only STAGE-9 row is an old "Mantra Events And Promotions"
+ *  booking of the same box — getOffLeaseContainerDetail's display (where
+ *  the client name shown right next to this order is the one the user
+ *  actually trusts) must not attribute Mantra Events' order to Luthra.
+ *  Default false/unset keeps the existing rescue for the other call site
+ *  (getOffLeaseCardEnrichment), which isn't reported broken. */
+async function _lookupStage9OrderNos(containerNo, clientName, rawPromise, requireClientMatch = false) {
   const want = normKey(containerNo);
   if (!want) return [];
-  const { headers, rows } = await getSheetDataFromMongo(SHEETS.FMS_STAGE9);
+  // BUG FOUND AND FIXED 2026-10-19 — was a raw getSheetDataFromMongo call,
+  // bypassing stage8.service.js's 330s warm FMS cache entirely and paying
+  // the full ~17-22s cold STAGE-9 read on most detail-page loads (see
+  // readStage9RawRows's own doc comment). Same data, same shape, just cached.
+  const { headers, rows } = await (rawPromise || readStage9RawRows());
   const contCol = headers.findIndex((h) => /container number/i.test(String(h || '')));
   const ordCol = headers.findIndex((h) => /order received number/i.test(String(h || '')));
   const custCol = headers.findIndex((h) => /customer name/i.test(String(h || '')));
@@ -1210,7 +1286,7 @@ async function _lookupStage9OrderNos(containerNo, clientName) {
   const picked = clientName && custCol >= 0
     ? hits.filter((r) => clientMatches(safeStr(r[custCol]), clientName))
     : [];
-  const chosen = picked.length ? picked : hits;
+  const chosen = picked.length ? picked : (requireClientMatch && clientName ? [] : hits);
   const seen = new Set();
   const orders = [];
   for (const r of chosen) {
@@ -1643,7 +1719,10 @@ async function _sendOffLeaseNotification(row) {
     ['Location', safeStr(row[6])],
     ['Deployed Date', safeStr(row[7])],
     ['Valid Upto', safeStr(row[8])],
-    ['Rate', safeStr(row[9])],
+    // Rate — removed from this email, explicit request 2026-10-30 ("rate
+    // nahi jana chahiye hai maild pe"): rate/amount data shouldn't go out
+    // in this notification. row[9] itself is untouched — only this one
+    // field list entry is gone.
     ['OL Intimation Date', safeStr(row[10])],
     ['OL Date', safeStr(row[11])],
     ['Email Notification URL', safeStr(row[12])],
@@ -2706,6 +2785,12 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       // safeStr, not fmtCell — a Drive URL, same reasoning as every other
       // upload field in this file.
       result[`col_${OL_CONTAINER_PHOTOS_COL}`] = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
+      // Final Billing Remark (col_352) — plain text, same reasoning as the
+      // other Stage 1 *_EXTRA_COLS fields above.
+      result[`col_${OL_FINAL_BILLING_REMARK_COL}`] = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
+      // SD Amount (col_353) — a number, same reasoning/fmtNumCell as Return
+      // Transportation PO Amount (col_318) just above.
+      result[`col_${OL_SD_AMOUNT_COL}`] = fmtNumCell(row[OL_SD_AMOUNT_COL]);
 
       /* "Sent back from Stage 1A" banner — explicit request 2026-10-01. See
          saveOffLeaseSendBackFromApproval's doc comment: Send Back writes
@@ -2802,6 +2887,9 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result[`col_${accruedRentalDate}`] = fmtCell(row[accruedRentalDate]);
       result[`col_${reconcileCycle}`] = safeStr(row[reconcileCycle]);
       result[`col_${remark}`] = safeStr(row[remark]);
+      // Drive URL, safeStr not fmtCell — see OL_BILLING_LEDGER_COL's own doc comment.
+      result[`col_${OL_BILLING_LEDGER_COL}`] = safeStr(row[OL_BILLING_LEDGER_COL]);
+      result[`col_${OL_FINAL_PAYABLE_AMOUNT_COL}`] = fmtNumCell(row[OL_FINAL_PAYABLE_AMOUNT_COL]);
 
       result._inspectionEstimateTotal = _olInspectionEstimateTotal(row);
 
@@ -2854,9 +2942,16 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
        range (info.startCol..endCol, 100-106) never reaches Stage 5's
        (29-44/305-316) or the payment columns (326-329), so both need their
        own explicit read, same reasoning as Stage 5's own _stage1Data read
-       just above. */
-    if (Number(stage) === 8) {
-      for (const eci of OL_STAGE8_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
+       just above.
+       ALSO BUILT for stage 11 (SD Refunds, internal — display Stage 6) —
+       explicit request 2026-10-30 ("stage 5 data filed dat shoe stage 6
+       show"): the SD Refund reviewer needs the same Billing Reconciliation
+       reference the Payment Status step already got, one stage earlier in
+       the pipeline (OL_ACTIVE_STAGE_NUMS has 11 immediately after 5, before
+       8) — OL_STAGE8_EXTRA_COLS' own read above stays stage-8-only, only
+       _stage5Data is shared. */
+    if (Number(stage) === 8 || Number(stage) === 11) {
+      if (Number(stage) === 8) for (const eci of OL_STAGE8_EXTRA_COLS) result[`col_${eci}`] = safeStr(row[eci]);
 
       const [rentalsBilled, outstanding, dateBilledTill, repairCharges, transportBilled,
         adjustDeposit, depositAmount, , , , reconcileCycle, remark] = OL_STAGE5_EXTRA_COLS;
@@ -2870,7 +2965,10 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
         adjustSecurityDeposit: safeStr(row[adjustDeposit]),
         securityDepositAmount: fmtNumCell(row[depositAmount]),
         reconcileEntireCycle: safeStr(row[reconcileCycle]),
-        remark: safeStr(row[remark])
+        remark: safeStr(row[remark]),
+        // Added same day as OL_BILLING_LEDGER_COL/OL_FINAL_PAYABLE_AMOUNT_COL.
+        ledgerFileUrl: safeStr(row[OL_BILLING_LEDGER_COL]),
+        finalPayableAmount: fmtNumCell(row[OL_FINAL_PAYABLE_AMOUNT_COL])
       };
     }
 
@@ -2914,6 +3012,8 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       remarks: safeStr(row[OL_MOVE_REMARKS_COL]),
       commentType: safeStr(row[OL_MOVE_COMMENT_TYPE_COL]),
       date: safeStr(row[OL_MOVE_DATE_COL]),
+      newOrderNo: safeStr(row[OL_MOVE_NEW_ORDER_NO_COL]),
+      proofFileUrl: safeStr(row[OL_MOVE_PROOF_FILE_COL]),
       jumpTargetInternal,
       jumpTargetDisplay: jumpTargetInternal != null ? displayStageNum(jumpTargetInternal) : null,
       canSendBackHere: (jumpTargetInternal != null && jumpTargetInternal === Number(stage)) || ctcSendBackFromBilling
@@ -3187,7 +3287,7 @@ function _sanitizeRichTextPayload(payload) {
  * number (TRIU6681671-style reuse), and this has no row reference from the
  * submit form to disambiguate with, only the container number text.
  */
-export async function markOffLeaseSdRefundSubmitted(containerNo) {
+export async function markOffLeaseSdRefundSubmitted(containerNo, offLeaseId) {
   const info = OL_STAGE_INFO[11];
   try {
     await withSheetLock(OL_SHEET, async () => {
@@ -3196,8 +3296,21 @@ export async function markOffLeaseSdRefundSubmitted(containerNo) {
       const stamp = dmyTime(new Date());
       const updates = [];
       const mirrorOps = [];
+      // BUG FOUND AND FIXED 2026-11-04 (explicit report, live on
+      // TRIU6617353 — confirmed real data corruption: OF0048/Kirloskar's
+      // own Stage 6 status column was wrongly written "Submitted" by
+      // OF0090/Zenfold's refund submission). The original doc comment's
+      // premise ("this has no row reference from the submit form to
+      // disambiguate with") is now outdated — addRefundEntry's payload
+      // already carries offLeaseId (RefundSubmitForm's lockedOffLeaseId).
+      // When more than one row shares this container number, an exact
+      // Lease ID match is now required; a single-row container still
+      // matches on container number alone (nothing to disambiguate).
+      const matchingRowCount = rows.filter((r) => normKey(r[0]) === want).length;
+      const wantLease = offLeaseId ? normKey(offLeaseId) : '';
       rows.forEach((row, i) => {
         if (normKey(row[0]) !== want) return;
+        if (wantLease && matchingRowCount > 1 && normKey(row[1]) !== wantLease) return;
         if (safeStr(row[info.statusCol]).trim() !== '') return; // already submitted or completed
         const rn = i + 2;
         updates.push(
@@ -3247,7 +3360,7 @@ export async function markOffLeaseSdRefundSubmitted(containerNo) {
  * above already moved a normal row from blank to 'Submitted' long before
  * this ever runs, so a blank-only check would make this a permanent no-op.
  */
-export async function markOffLeaseSdRefundApproved(containerNo, note) {
+export async function markOffLeaseSdRefundApproved(containerNo, note, offLeaseId) {
   const info = OL_STAGE_INFO[11];
   try {
     await withSheetLock(OL_SHEET, async () => {
@@ -3256,8 +3369,13 @@ export async function markOffLeaseSdRefundApproved(containerNo, note) {
       const stamp = dmyTime(new Date());
       const updates = [];
       const mirrorOps = [];
+      // Same Lease ID scoping fix as markOffLeaseSdRefundSubmitted above —
+      // see that function's own doc comment for the full story.
+      const matchingRowCount = rows.filter((r) => normKey(r[0]) === want).length;
+      const wantLease = offLeaseId ? normKey(offLeaseId) : '';
       rows.forEach((row, i) => {
         if (normKey(row[0]) !== want) return;
+        if (wantLease && matchingRowCount > 1 && normKey(row[1]) !== wantLease) return;
         if (safeStr(row[info.statusCol]).trim() === 'Completed') return; // already done
         const rn = i + 2;
         updates.push(
@@ -3622,10 +3740,20 @@ const OL_MOVE_DATE_COL = 296;
 const OL_MOVE_JUMP_TARGET_COL = 297;
 const OL_MOVE_CLIENT_SCOPE_COL = 298;
 const OL_MOVE_ARRIVAL_DATE_COL = 299;
+/* Reason = "Purchased" only — explicit request 2026-10-30 ("one profe to
+   tyoe new order no and file upload to"): the new Order No the customer's
+   purchase was billed under, and a proof document (invoice/sale
+   confirmation). Not contiguous with 290-299 above — those ran straight
+   into 300-302 (Hold, offlease.service.js's OL_HOLD_*_COL) and 303-304
+   (Stage 5 extras) long ago; 354 is the next free column, right after
+   OL_SD_AMOUNT_COL (353), same reasoning OL_FINAL_BILLING_REMARK_COL's own
+   doc comment gives for landing outside its stage's contiguous range. */
+const OL_MOVE_NEW_ORDER_NO_COL = 354;
+const OL_MOVE_PROOF_FILE_COL = 355;
 const OL_MOVE_ALL_COLS = [
   OL_MOVE_REASON_COL, OL_MOVE_NEW_CLIENT_COL, OL_MOVE_REMARKS_COL, OL_MOVE_BY_COL,
   OL_MOVE_TIMESTAMP_COL, OL_MOVE_COMMENT_TYPE_COL, OL_MOVE_DATE_COL, OL_MOVE_JUMP_TARGET_COL,
-  OL_MOVE_CLIENT_SCOPE_COL, OL_MOVE_ARRIVAL_DATE_COL
+  OL_MOVE_CLIENT_SCOPE_COL, OL_MOVE_ARRIVAL_DATE_COL, OL_MOVE_NEW_ORDER_NO_COL, OL_MOVE_PROOF_FILE_COL
 ];
 
 /** Stage 2's "Client to Client" — REDESIGNED 2026-09-24 (explicit request):
@@ -3856,7 +3984,7 @@ function _jumpSkipsStage(jumpTargetInternal, s) {
  * duplication is fine), getting one of these two branches subtly out of
  * sync would silently write inconsistent columns.
  */
-function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage }) {
+function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, commentType, remarks, date, moveToStage, newOrderNo, proofFileUrl }) {
   const r = safeStr(reason).trim();
   if (!OL_MOVE_REASONS.includes(r)) throw new AppError(`Reason must be one of: ${OL_MOVE_REASONS.join(', ')}`);
   const rmk = safeStr(remarks).trim();
@@ -3867,10 +3995,30 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
   // whatever normally sits between Transportation and that stage. Container
   // No, DO No and Movement Type on the original record are untouched either
   // way. Date (the lifting date) is required for every reason except
-  // 'Purchased' — explicit request 2026-10-03 ("purchased select not ask the
-  // lifting date"): a purchase has no lifting event of its own to date.
+  // 'Purchased' (explicit request 2026-10-03 — a purchase has no lifting
+  // event of its own to date) and 'Other' (explicit request 2026-10-30,
+  // "other add the only remaks" — see that reason's own doc comment below).
   const d = safeStr(date).trim();
-  if (r !== 'Purchased' && !d) throw new AppError('Date is required');
+  if (r !== 'Purchased' && r !== 'Other' && !d) throw new AppError('Date is required');
+
+  // 'Purchased' ALWAYS lands on Billing directly — explicit request
+  // 2026-10-30 ("stage to mved stage 5 dircet"): a sold container has no
+  // Gate In/Inspection left to do, so unlike the other three reasons this
+  // one is never a client-chosen destination. The passed `moveToStage` is
+  // ignored entirely (not merely defaulted) — a stale/tampered value here
+  // must never land it anywhere except Billing.
+  if (r === 'Purchased') {
+    const orderNo = safeStr(newOrderNo).trim();
+    if (!orderNo) throw new AppError('New Order No is required');
+    const proof = safeStr(proofFileUrl).trim();
+    if (!proof) throw new AppError('Proof file is required');
+    return {
+      reason: r, newClientName: '', clientScope: '', arrivalDate: '',
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal: OL_BILLING_INTERNAL,
+      newOrderNo: orderNo, proofFileUrl: proof
+    };
+  }
+
   const display = parseInt(moveToStage, 10);
   const jumpTargetInternal = OL_INTERNAL_BY_DISPLAY.get(display);
   if (!OL_JUMP_TARGET_INTERNALS.includes(jumpTargetInternal)) {
@@ -3883,7 +4031,7 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
     const arrival = safeStr(arrivalDate).trim();
     return {
       reason: r, newClientName: clientName, clientScope: '', arrivalDate: arrival,
-      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal, newOrderNo: '', proofFileUrl: ''
     };
   }
 
@@ -3893,28 +4041,27 @@ function _prepareMoveToStage({ reason, newClientName, clientScope, arrivalDate, 
     const arrival = safeStr(arrivalDate).trim();
     return {
       reason: r, newClientName: '', clientScope: scope, arrivalDate: arrival,
-      remarks: rmk, commentType: '', date: d, jumpTargetInternal
+      remarks: rmk, commentType: '', date: d, jumpTargetInternal, newOrderNo: '', proofFileUrl: ''
     };
   }
 
-  if (r === 'Purchased') {
-    return {
-      reason: r, newClientName: '', clientScope: '', arrivalDate: '',
-      remarks: rmk, commentType: '', date: d, jumpTargetInternal
-    };
-  }
-
-  // 'Other'
+  // 'Other' — explicit request 2026-10-30 ("other add the only remaks"):
+  // Comment/Type is no longer required (still accepted if given, just
+  // optional now), matching Purchased's own exemption from the STAGE-8/DO
+  // gate above (see _skipsStage8Gate) — a container moved for some other
+  // reason entirely, with nothing on file for it either, can still move
+  // with just a Remarks note and a destination.
   const ct = safeStr(commentType).trim();
-  if (!ct) throw new AppError('Comment / Type is required');
   return {
     reason: r, newClientName: '', clientScope: '', arrivalDate: '',
-    remarks: rmk, commentType: ct, date: d, jumpTargetInternal
+    remarks: rmk, commentType: ct, date: d, jumpTargetInternal, newOrderNo: '', proofFileUrl: ''
   };
 }
 
 function _moveColumnValues(shaped, userEmail, stamp) {
   return {
+    [OL_MOVE_NEW_ORDER_NO_COL]: shaped.newOrderNo,
+    [OL_MOVE_PROOF_FILE_COL]: shaped.proofFileUrl,
     [OL_MOVE_REASON_COL]: shaped.reason,
     [OL_MOVE_NEW_CLIENT_COL]: shaped.newClientName,
     [OL_MOVE_CLIENT_SCOPE_COL]: shaped.clientScope,
@@ -3954,6 +4101,24 @@ async function _assertStage8MovementFound(containerNo, clientName) {
   if (!fms?.movement) {
     throw new AppError('No STAGE-8 movement record found for this container yet — Move To Stage stays locked until one is fetched.');
   }
+}
+
+/**
+ * Reason = "Purchased" (the container was sold outright, never transported
+ * onward) is exempt from the STAGE-8 gate above — explicit request
+ * 2026-10-30 ("sale container... not any condition"). A sold container
+ * structurally never gets a real STAGE-8 movement record (there is no
+ * transport event to match), so enforcing that gate for this one reason
+ * made it unreachable for the exact containers it exists for.
+ *
+ * Reason = "Other" is ALSO exempt — explicit follow-up request the same
+ * day ("other add the only remaks"): a genuinely miscellaneous move, with
+ * nothing on file for it either, shouldn't be blocked on a STAGE-8 match
+ * that may never come. Client Scope / Client to Client keep the gate
+ * unchanged (Client to Client never needed it in the first place — see
+ * this function's only caller's own doc comment). */
+function _skipsStage8Gate(reason) {
+  return reason === 'Purchased' || reason === 'Other';
 }
 
 /**
@@ -4016,7 +4181,7 @@ export async function saveOffLeaseMoveToStage(containerNo, payload = {}, userEma
 
     const row = rows[rn - 2] || [];
     if (_isMovedOut(row)) return 'ALREADY_PROCESSED';
-    await _assertStage8MovementFound(containerNo, safeStr(row[5]));
+    if (!_skipsStage8Gate(shaped.reason)) await _assertStage8MovementFound(containerNo, safeStr(row[5]));
 
     const stamp = dmyTime(new Date());
     const values = _moveColumnValues(shaped, userEmail, stamp);
@@ -4072,7 +4237,7 @@ export async function saveOffLeaseMoveToStageFast(containerNo, payload = {}, use
   const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
   if (!found) throw new AppError(`Not found: ${containerNo}`);
   if (_isMovedOut(found.row)) return 'ALREADY_PROCESSED';
-  await _assertStage8MovementFound(containerNo, safeStr(found.row[5]));
+  if (!_skipsStage8Gate(shaped.reason)) await _assertStage8MovementFound(containerNo, safeStr(found.row[5]));
 
   const stamp = dmyTime(new Date());
   const values = _moveColumnValues(shaped, userEmail, stamp);
@@ -4555,6 +4720,75 @@ export async function saveOffLeaseSendBackToStage1Fast(containerNo, userEmail, k
   await enqueueSheetReplay('offlease.saveOffLeaseSendBackToStage1', [containerNo, userEmail, resolvedRow], { actor: userEmail });
 
   return 'OK';
+}
+
+const OL_HOLD_MAX_DAYS = 7;
+
+/**
+ * 7-DAY HOLD AUTO-EXPIRY — explicit request 2026-10-30 ("hold mai 7 din tak
+ * hi hold pe rahega, 7 days ho gye na stage 1 intimation stage mai wapas
+ * show karwayega"): a container put on Hold (saveOffLeaseHold above)
+ * automatically reverts to Stage 1's normal pending queue once its Hold
+ * Timestamp is more than 7 days old — exactly the same effect as a manual
+ * Send Back To Stage 1 (clears the same 3 hold columns, same row, no
+ * duplicate ever created), just system-triggered instead of a person
+ * clicking the button. Intended to be called from a daily cron
+ * (jobs/index.js) — 7 days is a coarse enough threshold that checking once
+ * a day is plenty; it doesn't need the reconciliation job's 5-minute cycle.
+ *
+ * Explicitly confirmed with the user this applies to EVERY held row, with
+ * no separate "hold until a specific date" override or exemption — even a
+ * row held for a genuine, longer reason (e.g. a multi-month customer
+ * lock-in clause written into its Hold Remarks) still expires after 7 days
+ * like any other. If it still needs to stay held, the KAM just clicks Hold
+ * again from Stage 1 once it reappears there — same button, no new UI —
+ * which starts a fresh 7-day window.
+ *
+ * NO checkActionPermission call, deliberately — same precedent as
+ * runAutoApproval/copyApprovedData (see approve.service.js's own header
+ * comment: "getApproveData / runAutoApproval have NO checkActionPermission
+ * call... they were only ever invoked from a time trigger, never through a
+ * permission-gated UI action"). There is no real logged-in user here to
+ * check a grant against, and routing this through the normal Fast+outbox-
+ * replay path would require the replay to carry a real permitted user's
+ * email, which doesn't exist for a system-triggered action — so this
+ * writes the live sheet directly instead, exactly like those two existing
+ * cron-only functions do.
+ */
+export async function expireOldHolds() {
+  await _ensureOffLeaseSheet();
+  return withSheetLock(OL_SHEET, async () => {
+    const { rows } = await getSheetData(OL_SHEET);
+    const now = new Date();
+    const expired = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!_isOnHold(row)) continue;
+      const heldAt = parseDate(row[OL_HOLD_TIMESTAMP_COL]);
+      if (!heldAt) continue; // unparseable timestamp — leave it alone rather than guess
+      const ageDays = (now - heldAt) / 86400000;
+      if (ageDays < OL_HOLD_MAX_DAYS) continue;
+
+      const rn = i + 2;
+      const cellUpdates = OL_HOLD_ALL_COLS.map((c) => ({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] }));
+      await batchUpdateValues(cellUpdates);
+
+      try {
+        const patch = {};
+        for (const c of OL_HOLD_ALL_COLS) patch[`row.${c}`] = '';
+        await getCollection(OL_SHEET).updateOne({ key: `row_${i}` }, { $set: patch });
+      } catch (e) {
+        console.error('[OL-HOLD-EXPIRE] mirror update failed (reconcile will correct):', e?.message || e);
+      }
+
+      const containerNo = safeStr(row[0]);
+      expired.push(containerNo);
+      console.log(`[OL-HOLD-EXPIRE] ${containerNo} — hold expired after ${Math.floor(ageDays)}d, reverted to Stage 1 queue`);
+    }
+
+    return expired;
+  });
 }
 
 /**
@@ -5335,6 +5569,23 @@ export async function getOffLeaseDashboardData(user) {
 }
 
 /**
+ * Public API "total Off-Lease" report — explicit request 2026-10-30 ("this
+ * is report not aese api for total offlease"): a flat list of every
+ * Off-Lease Tracking record, same `{ data, count }` shape convention as the
+ * existing public reports/renewal-log and reports/new-lease endpoints
+ * (expiry.service.js), rather than the in-app Dashboard's own nested
+ * `{ kpis, items }` shape — a public API consumer doing their own
+ * reporting/BI just wants the flat row list. Reuses
+ * getOffLeaseDashboardData's own `items` array wholesale (same per-row
+ * fields, same sale-person access gate) — no separate aggregation or sheet
+ * read of its own.
+ */
+export async function getOffLeaseTotalReport(user) {
+  const { items } = await getOffLeaseDashboardData(user);
+  return { data: items, count: items.length };
+}
+
+/**
  * Per-stage TAT for the Container Lookup detail view — every ACTIVE stage,
  * whether currently pending or long since completed, unlike attachStageTat
  * (which only ever runs against a single stage's PENDING queue). Reuses the
@@ -5362,27 +5613,35 @@ async function _buildContainerStageTatMap(row, headers, gfRow, gatedIn, repairSk
   const clientName = row[5];
   const map = {};
 
-  let entryAt = null;
-  try {
-    const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
-    const updCol = _findOlColumnMulti(dh, ['update']);
-    const stsCol = _findOlColumnMulti(dh, ['status']);
-    if (updCol >= 0) {
-      const k = normKey(container);
-      for (const r of dr) {
-        if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
-        if (normKey(r[0]) === k) { entryAt = parseStamp(safeStr(r[updCol]).trim()); break; }
-      }
-    }
-  } catch (e) { /* best-effort — a missing entry stamp just leaves Stage 1's tat null */ }
+  /* PERF FIX 2026-10-28 ("very much time to loading"): entryAt's Deployed-
+     sheet read and fms's STAGE-8/9/10 lookup don't depend on each other —
+     awaiting them one after another paid the SUM of both reads for every
+     container-detail load. Promise.all so it pays the MAX instead (same
+     fix as getOffLeaseContainerDetail's own doc comment above). */
+  const [entryAt, fms] = await Promise.all([
+    (async () => {
+      try {
+        const { headers: dh, rows: dr } = await getSheetDataFromMongo(SHEETS.DEPLOYED);
+        const updCol = _findOlColumnMulti(dh, ['update']);
+        const stsCol = _findOlColumnMulti(dh, ['status']);
+        if (updCol >= 0) {
+          const k = normKey(container);
+          for (const r of dr) {
+            if (stsCol >= 0 && !/off[\s-]?lease/i.test(safeStr(r[stsCol]))) continue;
+            if (normKey(r[0]) === k) return parseStamp(safeStr(r[updCol]).trim());
+          }
+        }
+        return null;
+      } catch (e) { return null; /* best-effort — a missing entry stamp just leaves Stage 1's tat null */ }
+    })(),
+    getMatchedFmsForContainer(container, clientName).catch(() => null)
+  ]);
 
   const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
   const apStatus = apStatusCol >= 0 ? safeStr(row[apStatusCol]).trim().toLowerCase() : '';
   const approvedAt = (apStatus === 'approved' && apTsCol >= 0) ? parseStamp(row[apTsCol]) : null;
 
-  let fms = null;
-  try { fms = await getMatchedFmsForContainer(container, clientName); } catch (e) { fms = null; }
   const stage89At = (fms?.movement && fms?.transport)
     ? _laterStamp(parseStamp(fms.movement.timestamp), parseStamp(fms.transport.lastUpdated))
     : null;
@@ -5448,22 +5707,41 @@ async function _buildContainerStageTatMap(row, headers, gfRow, gatedIn, repairSk
  *                    several records returns the candidate list instead of
  *                    silently showing the first.
  */
-export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
+export async function getOffLeaseContainerDetail(containerNo, leaseId, user, knownRow) {
   const want = normKey(containerNo);
   if (!want) return { found: false, message: 'Enter a container number.' };
 
   const res = { found: false, container: safeStr(containerNo), orderNos: '' };
 
+  /* PERF FIX 2026-10-28 ("very much time to loading", confirmed live at
+     15.85s): these 4 reads (New Lease scan, Off-Lease Tracking sheet,
+     access gate, STAGE-9 order lookup) were awaited one after another even
+     though only STAGE-9's lookup actually depends on another's RESULT
+     (leaseInfo.clientName) — the other three are fully independent, so the
+     sequential chain was paying the SUM of their latencies instead of the
+     MAX. Kick off the two that don't depend on leaseInfo immediately, await
+     leaseInfo, then start STAGE-9's lookup alongside whatever's left of
+     those two instead of after them.
+
+     Read-only lookups: served from the Mongo mirror, with no
+     _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to
+     widen the sheet before a WRITE — on this path it only added a Sheets
+     round trip to a read, and on an exhausted quota it failed the whole
+     container detail. Same fix already applied to the dashboard and the
+     stage lists. */
+  const olSheetPromise = getSheetDataFromMongo(OL_SHEET);
+  const gatePromise = _offLeaseAccessGate(user);
+  /* Follow-up PERF FIX, same day: STAGE-9's own sheet read doesn't need
+     leaseInfo at all (only the filtering below does, via clientName) — start
+     it now too, so its cold ~17-24s read overlaps leaseInfo's own chain
+     (New Lease scan, plus its Operation-sheet fallback when New Lease finds
+     nothing) instead of only starting after leaseInfo resolves. */
+  const stage9RawPromise = readStage9RawRows();
+
   const leaseInfo = await _findLeaseInfoForContainer(want);
   res.orderNos = leaseInfo.orders.join(', ');
 
-  /* Read-only lookup: served from the Mongo mirror, with no
-     _ensureOffLeaseSheet(). That call is a live spreadsheets.get made to widen
-     the sheet before a WRITE — on this path it only added a Sheets round trip
-     to a read, and on an exhausted quota it failed the whole container detail.
-     Same fix already applied to the dashboard and the stage lists. */
-  const { headers, rows } = await getSheetDataFromMongo(OL_SHEET);
-  const gate = await _offLeaseAccessGate(user);
+  const [{ headers, rows }, gate] = await Promise.all([olSheetPromise, gatePromise]);
   /* Same Gate In / repair-skip bypass getOffLeaseData and
      getOffLeaseDashboardData use — see stage3Form.service.js and the doc
      comment on _classifyOffLeaseStages. Resolved per MATCH below (each
@@ -5491,31 +5769,47 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   const visibleMatches = gate ? matches.filter((m) => gate(safeStr(m.row[5]) || _clientNameFallback(leaseInfo))) : matches;
 
   const wantLease = safeStr(leaseId).trim().toLowerCase();
+  const wantRow = Number(knownRow) || null;
   let picked = visibleMatches[0] || null;
-  if (wantLease) {
-    picked = visibleMatches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
-    if (!picked) return { found: false, message: `No record for ${safeStr(containerNo)} under lease ${safeStr(leaseId)}.` };
-  } else if (visibleMatches.length > 1) {
-    // Let the caller choose which record they mean.
-    return {
-      found: true,
-      container: safeStr(visibleMatches[0].row[0]),
-      multiple: true,
-      matches: visibleMatches.map((m) => {
-        const mClient = safeStr(m.row[5]) || _clientNameFallback(leaseInfo);
-        const mGfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], mClient);
-        return {
-          leaseId: safeStr(m.row[1]),
-          clientName: mClient,
-          clientCode: safeStr(m.row[4]),
-          size: safeStr(m.row[2]),
-          type: safeStr(m.row[3]),
-          deployedDate: formatDateVal(m.row[7]),
-          validUpto: formatDateVal(m.row[8]),
-          currentStage: _classifyOffLeaseStages(headers, m.row, isGatedIn(mGfRow), isRepairNotRequired(mGfRow)).currentStage
-        };
-      })
-    };
+  if (wantRow) {
+    /* Exact-row match takes priority over leaseId — explicit request
+       (TRIU6617353): a container clicked straight from the Off-Lease list
+       already carries this exact record's own sheet row (openRecord in
+       PipelineDashboard.jsx passes ?row=), which uniquely identifies it
+       regardless of whether THIS record's own Lease ID happens to be blank
+       (common for a brand-new, just-raised Stage 1 intimation that hasn't
+       been assigned one yet) — unlike leaseId, a row number is never blank
+       or ambiguous. Falls through to the leaseId/multiple-choice logic
+       below only if the given row doesn't actually match (stale link). */
+    picked = visibleMatches.find((m) => m.rowNum === wantRow) || null;
+  }
+  if (!wantRow || !picked) {
+    if (wantLease) {
+      picked = visibleMatches.find((m) => safeStr(m.row[1]).trim().toLowerCase() === wantLease) || null;
+      if (!picked) return { found: false, message: `No record for ${safeStr(containerNo)} under lease ${safeStr(leaseId)}.` };
+    } else if (visibleMatches.length > 1) {
+      // Let the caller choose which record they mean.
+      return {
+        found: true,
+        container: safeStr(visibleMatches[0].row[0]),
+        multiple: true,
+        matches: visibleMatches.map((m) => {
+          const mClient = safeStr(m.row[5]) || _clientNameFallback(leaseInfo);
+          const mGfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], mClient);
+          return {
+            leaseId: safeStr(m.row[1]),
+            rowNum: m.rowNum,
+            clientName: mClient,
+            clientCode: safeStr(m.row[4]),
+            size: safeStr(m.row[2]),
+            type: safeStr(m.row[3]),
+            deployedDate: formatDateVal(m.row[7]),
+            validUpto: formatDateVal(m.row[8]),
+            currentStage: _classifyOffLeaseStages(headers, m.row, isGatedIn(mGfRow), isRepairNotRequired(mGfRow)).currentStage
+          };
+        })
+      };
+    }
   }
 
   const row = picked ? picked.row : null;
@@ -5568,6 +5862,36 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   res.deployedDate = formatDateVal(row[7]);
   res.validUpto = formatDateVal(row[8]);
   res.rate = safeAmt(row[9]);
+
+  /* BUG FOUND AND FIXED 2026-10-28 ("coustomwr name is diffrent order no
+     wrong fethc", container TCKU2842760): this STAGE-9 lookup used to run
+     filtered by leaseInfo.clientName — from _findLeaseInfoForContainer's
+     New Lease/Operation-sheet SCAN, computed above BEFORE this record's
+     actual client (res.clientName, from Off-Lease Tracking's own row[5] —
+     the authoritative client field everywhere else in this function, see
+     _fillBlanksFromDeployed's own "never the client" note) was even known.
+     When that scan's client was wrong, blank, or simply a DIFFERENT past
+     lease of the same container number, _lookupStage9OrderNos' own
+     "client-matched, else fall back to container-only" rescue silently
+     grabbed an unrelated customer's order: TCKU2842760 is currently
+     Luthra Projects' container, but its only STAGE-9 row belongs to a much
+     earlier "Mantra Events And Promotions" booking of the same box — the
+     page showed Client "Luthra Projects" right next to Order "OR246,
+     OR247", which is actually Mantra Events' order, not Luthra's.
+     Re-run with the now-confirmed real client instead — same SOURCE
+     reasoning as getOffLeaseCardEnrichment (2026-10-01): the external FMS
+     dispatch sheet (STAGE-9) carries this container's REAL current
+     transportation order, while the lease-level scan above can return a
+     stale/grouped order from an unrelated record — but it must be scoped
+     to the right client to mean anything. stage9RawPromise was already
+     kicked off before leaseInfo even resolved (see its own comment above),
+     so this is just the in-memory filter, not a second sheet read —
+     Best-effort: keep the lease-level orderNos (already set above) as the
+     fallback when STAGE-9 has nothing for this container+client. */
+  try {
+    const stage9Orders = await _lookupStage9OrderNos(containerNo, res.clientName, stage9RawPromise, true);
+    if (stage9Orders.length) res.orderNos = stage9Orders.join(', ');
+  } catch (e) { /* best-effort only — keep the lease-level fallback above */ }
 
   const apCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
   const apTsCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
@@ -5784,6 +6108,20 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
 
       const photosVal = safeStr(row[OL_CONTAINER_PHOTOS_COL]);
       if (photosVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_CONTAINER_PHOTOS_COL] || 'Container Photos', value: photosVal });
+
+      // Final Billing Remark (col_352) — explicit request 2026-10-17
+      // ("pushpa maam tick the final billing date"): this approval panel
+      // showed Final Billing Date but never the remark explaining it when
+      // it isn't exactly one month after OL Intimation Date, same gap as
+      // getOffLeaseStageDetail's own Stage 1 block had before the earlier
+      // fix today.
+      const billingRemarkVal = safeStr(row[OL_FINAL_BILLING_REMARK_COL]);
+      if (billingRemarkVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_FINAL_BILLING_REMARK_COL] || 'Final Billing Remark', value: billingRemarkVal });
+
+      // SD Amount (col_353) — explicit request 2026-10-29, same "show it in
+      // the approval panel too" reasoning as Final Billing Remark above.
+      const sdAmountVal = fmtNumCell(row[OL_SD_AMOUNT_COL]);
+      if (sdAmountVal.trim() !== '') fields.push({ label: OL_HEADERS[OL_SD_AMOUNT_COL] || 'SD Amount', value: sdAmountVal });
     }
 
     /* Gate In (internal 7) and a repair-not-required Inspection Checklist
@@ -5861,21 +6199,31 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user) {
   }
   res.stages = stages;
 
-  /* Invoices for the report come from the Accounts & Collection API — the same
-     call and the same response the Stage 1 panel renders, so the print view,
-     PDF and Excel can never disagree with it. The Google Sheet is deliberately
-     NOT consulted: no fallback, no merge. */
-  try {
-    const { getOutstandingForContainer } = await import('./accountsApi.service.js');
-    res.outstanding = await getOutstandingForContainer(res.container || containerNo, res.clientName);
-  } catch (e) {
-    console.error('[OL-DETAIL] outstanding fetch failed:', e?.message || e);
-    res.outstanding = null;
-  }
+  /* PERF FIX 2026-10-28 ("very much time to loading"): the Accounts API
+     round trip and _fillBlanksFromDeployed's own Deployed-sheet read (a
+     SEPARATE full read from the one _buildContainerStageTatMap already did
+     above for entryAt — confirmed live, each taking 6-7s on a cold cache)
+     don't depend on each other at all — res.outstanding and the
+     size/type/location/dates fields are disjoint. Run them together instead
+     of paying both in sequence.
 
-  /* Fill base fields still blank in the Off-Lease sheet (Rate, Location,
-     dates) from the Deployed sheet. Never the client — see helper's note. */
-  await _fillBlanksFromDeployed(res, want);
+     Invoices for the report come from the Accounts & Collection API — the
+     same call and the same response the Stage 1 panel renders, so the print
+     view, PDF and Excel can never disagree with it. The Google Sheet is
+     deliberately NOT consulted: no fallback, no merge. */
+  const outstandingPromise = (async () => {
+    try {
+      const { getOutstandingForContainer } = await import('./accountsApi.service.js');
+      return await getOutstandingForContainer(res.container || containerNo, res.clientName);
+    } catch (e) {
+      console.error('[OL-DETAIL] outstanding fetch failed:', e?.message || e);
+      return null;
+    }
+  })();
+  // Fill base fields still blank in the Off-Lease sheet (Rate, Location,
+  // dates) from the Deployed sheet. Never the client — see helper's note.
+  const [outstanding] = await Promise.all([outstandingPromise, _fillBlanksFromDeployed(res, want)]);
+  res.outstanding = outstanding;
 
   const apLower = approval.toLowerCase();
   const stage1 = stages.find((s) => s.stage === 1);
@@ -5953,14 +6301,18 @@ export async function getOffLeaseApprovalData(user, preFetchedSheetData, filter)
   // does — ApprovalDetail.jsx pulls that ONE column out explicitly, by this
   // same header text, as a deliberate exception rather than widening the
   // generic filter.
-  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337, 319, 317, 318];
+  // 353 (SD Amount, OL_SD_AMOUNT_COL) appended 2026-10-29, same "approver's
+  // own view" reasoning as 336/337/319/317/318 above — explicit request
+  // ("add the sd amounts").
+  const displayIndices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 336, 337, 319, 317, 318, 353];
   const dateCols = new Set([7, 8, 10, 11, 13]);
   const displayHeaders = [
     'Container No', 'Lease ID', 'Size', 'Type', 'Client Code', 'Client Name',
     'Location', 'Deployed Date', 'Valid Upto', 'Rate',
-    'OL Intimation Date', 'OL Date', 'Email Notification', 'Final Billing Date',
+    'OL Intimation Date', 'Expected Off-Lease Date', 'Email Notification', 'Final Billing Date',
     'Stage 1 Remark', 'Stage 1 Completed On', 'Container Photos', 'Client to Client — New Client Name',
-    'Return Transportation PO Required', 'Return Transportation PO', 'Return Transportation PO Amount'
+    'Return Transportation PO Required', 'Return Transportation PO', 'Return Transportation PO Amount',
+    'SD Amount'
   ];
 
   // Stage 1's own completion timestamp — 2 columns before its status column,
@@ -6471,6 +6823,49 @@ export async function saveOffLeaseSendBackFromApproval(containerNo, userEmail, r
 
     return 'OK';
   });
+}
+
+/** Mongo-first fast path for Send Back from Approval — same trade-off as
+ *  saveOffLeaseApprovalActionFast just above (whose header-column-resolution
+ *  setup this mirrors line for line): this was the one Off-Lease approval-
+ *  desk action still doing a synchronous live Sheets write, so it failed
+ *  outright instead of queuing whenever the shared Sheets quota circuit
+ *  breaker was already tripped. Writes the same columns
+ *  saveOffLeaseSendBackFromApproval does, straight to the Mongo mirror, then
+ *  queues the real function above to replay onto the live Sheet. */
+export async function saveOffLeaseSendBackFromApprovalFast(containerNo, userEmail, remarks = '', knownRow) {
+  await checkActionPermission('offleaseapproval', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+
+  const { headers } = await getSheetDataFromMongo(OL_SHEET);
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
+  const curStatus = found.row[stage1StatusCol];
+  if (!curStatus || String(curStatus).trim() === '') {
+    throw new AppError('Stage 1 is not completed yet — nothing pending approval to send back.');
+  }
+
+  const rmk = safeStr(remarks).trim() || `Sent back to Stage 1 on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
+  const patch = { [`row.${stage1StatusCol}`]: '', 'row.14': rmk };
+
+  const apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
+  const apTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
+  const apUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
+  const apRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+  const apStamp = dmyTime(new Date());
+  if (apStatusCol >= 0) patch[`row.${apStatusCol}`] = 'Sent Back';
+  if (apTimestampCol >= 0) patch[`row.${apTimestampCol}`] = apStamp;
+  if (apUserCol >= 0) patch[`row.${apUserCol}`] = userEmail || '';
+  if (apRemarkCol >= 0) patch[`row.${apRemarkCol}`] = rmk;
+
+  await getCollection(OL_SHEET).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeaseSendBackFromApproval', [containerNo, userEmail, remarks, resolvedRow], { actor: userEmail });
+
+  return 'OK';
 }
 
 /**
