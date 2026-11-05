@@ -105,6 +105,11 @@
   background: none;
   font-family: inherit;
 }
+/* Groups a phase's chips into one visible cluster — View 2's table only
+   (ChipStrip); View 1's own strip (built straight from buildChips, no
+   ChipStrip involved) is untouched. */
+.chipGroup { display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px; border-radius: var(--r-sm); background: var(--surface-2); }
+
 .done { background: var(--accent); color: #fff; }
 .current { background: var(--warn-bg, #fdf0d0); color: var(--warn, #8a6100); }
 .future { background: var(--surface-2); color: var(--text-3); }

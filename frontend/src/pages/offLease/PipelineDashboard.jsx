@@ -56,10 +56,16 @@ const TAT_BUDGETS_MS = {
    average completed TAT (entry into the first stage to actual completion of
    the last one actually reached, per offLeaseTatTracking.service.js's own
    per-stage entryAt/actualAt). */
+/* tint: explicit follow-up 2026-11-05 ("different color") — the 3 cards all
+   read as one indistinguishable blue block otherwise; one distinct, non-
+   status tint per group (StatCard.module.css's own palette — navy/amber/
+   approval are the three already used elsewhere for plain categorization,
+   not success/warn/error, which carry a done/bad meaning these groups don't
+   have). */
 const STAGE_GROUPS = {
-  1: { label: 'Stage 1 · Intimation to Transportation', icon: 'inbox', keys: [1, 'approval', 6], tatKeys: ['1', '1A', '2'] },
-  2: { label: 'Stage 2 · Inspection to Billing', icon: 'list', keys: [7, 3, 5], tatKeys: ['3', '4', '5'] },
-  3: { label: 'Stage 3 · SD Refunds', icon: 'check-circle', keys: [11, 'hod', 'accounts', 'ceo'], tatKeys: ['6', '6A', '6B', '6C'] }
+  1: { label: 'Stage 1 · Intimation to Transportation', icon: 'inbox', keys: [1, 'approval', 6], tatKeys: ['1', '1A', '2'], tint: 'navy' },
+  2: { label: 'Stage 2 · Inspection to Billing', icon: 'list', keys: [7, 3, 5], tatKeys: ['3', '4', '5'], tint: 'amber' },
+  3: { label: 'Stage 3 · SD Refunds', icon: 'check-circle', keys: [11, 'hod', 'accounts', 'ceo'], tatKeys: ['6', '6A', '6B', '6C'], tint: 'approval' }
 };
 
 /**
@@ -146,10 +152,15 @@ export function PipelineDashboard({ onOpenTab }) {
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
   // Opens the record's full stage history on its own page (not a modal).
-  const openRecord = (rec) => {
+  // `viewMode` ('phases') is passed ONLY from View 2's row click below — View
+  // 1's own cards (onOpenRecord={openRecord}, one arg) leave it undefined, so
+  // they keep landing on the original Overview layout, unchanged. See
+  // ContainerDetailPage.jsx's PHASES doc comment for the other half of this.
+  const openRecord = (rec, viewMode) => {
     const q = new URLSearchParams({ container: rec.container });
     if (rec.leaseId) q.set('leaseId', rec.leaseId);
     if (rec._rowNum) q.set('row', String(rec._rowNum));
+    if (viewMode) q.set('view', viewMode);
     navigate(`${ROUTES.OFF_LEASE_RECORD}?${q}`);
   };
   /* null = no filter; an internal stage number, 'approval' or 'done'. */
@@ -413,7 +424,7 @@ export function PipelineDashboard({ onOpenTab }) {
             <StatCard size="xs" key={gk}
               icon={group.icon} label={group.label} value={groupTotals[gk] ?? '—'} loading={loading}
               footnote={`TAT Budget ${formatDurationMs(gt.totalMs)} = ${breakdown}`}
-              tint="info" active={groupFilter === Number(gk)} onClick={() => toggleGroupFilter(Number(gk))}
+              tint={group.tint} active={groupFilter === Number(gk)} onClick={() => toggleGroupFilter(Number(gk))}
             />
           );
         })}
@@ -620,20 +631,27 @@ export function PipelineDashboard({ onOpenTab }) {
                 {filtered.map((it, i) => {
                   const { refundEntry, tatRecord } = fmsMatch.get(it) || {};
                   return (
-                  <tr key={`${it.leaseId || i}-${it.container}`}>
+                  /* Row itself opens the full record page (same destination
+                     View 1's cards already use, openRecord) — explicit
+                     request 2026-11-05 ("click the row then open view 2"),
+                     scoped to View 2 only. The Open/Approve button keeps its
+                     own job (jump straight to that stage's tab) — its click
+                     stops propagation so it doesn't also fire the row's
+                     navigate-to-record-page. */
+                  <tr key={`${it.leaseId || i}-${it.container}`} className={styles.clickableRow} onClick={() => openRecord(it, 'phases')}>
                     <td className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={debouncedSearch} /></td>
                     <td className={styles.container}><Highlight text={it.container} query={debouncedSearch} /></td>
                     <td><Highlight text={it.clientName || '—'} query={debouncedSearch} /></td>
                     <td><ChipStrip item={it} refundEntry={refundEntry} tatRecord={tatRecord} /></td>
                     <td className={styles.actionCell}>
                       {it.stageClass === 'approval' ? (
-                        <Button size="sm" variant="primary" onClick={() => onOpenTab?.('approval')}>Approve</Button>
+                        <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); onOpenTab?.('approval'); }}>Approve</Button>
                       ) : it.stageClass === 'done' ? (
                         <span className={styles.doneTag}>Released</span>
                       ) : it.stageClass === 'rejected' ? (
                         <span className={styles.rejectedTag}>Rejected</span>
                       ) : (
-                        <Button size="sm" variant="secondary" onClick={() => onOpenTab?.(`stage${it.currentStageNum}`)}>Open</Button>
+                        <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); onOpenTab?.(`stage${it.currentStageNum}`); }}>Open</Button>
                       )}
                     </td>
                   </tr>
