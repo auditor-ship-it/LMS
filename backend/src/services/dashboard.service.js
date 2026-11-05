@@ -12,6 +12,7 @@ import { safeStr, parseDate } from '../utils/format.js';
 import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap, _resolveRenewalColumns } from './expiry.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
+import { getPoAgreementHistoryByContainer } from './poAgreementHistory.service.js';
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -380,7 +381,11 @@ export async function getOffLeasedWithFinalBillingDue(monthLabel) {
  * Agreement date exists, a single tick otherwise.
  */
 export async function getPoAgreementTrackerData() {
-  const [{ data }, agrStartMap] = await Promise.all([getExpiryDataByFilter('pending', null), _agreementStartDateMap()]);
+  const [{ data }, agrStartMap, historyByContainer] = await Promise.all([
+    getExpiryDataByFilter('pending', null),
+    _agreementStartDateMap(),
+    getPoAgreementHistoryByContainer()
+  ]);
   return {
     containers: data.map((item) => {
       // Explicit pasted spec 2026-10-16: "if I renew again in May with a
@@ -400,6 +405,12 @@ export async function getPoAgreementTrackerData() {
       return {
         container: safeStr(item.row[0]),
         clientName: safeStr(item.row[2]),
+        // Explicit request 2026-11-05 ("add the product code and location",
+        // then "product code remove size and type" — Product Code is blank
+        // on every live row, swapped for Size/Type instead).
+        location: item.location || '',
+        size: item.size || '',
+        type: item.type || '',
         deployedDate: item.deployedDate || null,
         agreementStartDate,
         agreementDate,
@@ -424,7 +435,16 @@ export async function getPoAgreementTrackerData() {
         // NOT just because trustStaged happened to be true (which is also
         // true for any long-since-approved container, where AA/AB already
         // equal H/X anyway and there's nothing provisional left to flag).
-        provisional: trustStaged && String(item.actionStatus || '').trim().toLowerCase() === 'documents pending'
+        provisional: trustStaged && String(item.actionStatus || '').trim().toLowerCase() === 'documents pending',
+        // Backfilled historical PO/Agreement periods (poAgreementHistory
+        // .service.js) — every period BEFORE the current one, which this
+        // function's own agreementDate/poDate fields above have no way to
+        // represent at all. Split by type here so the frontend's coverage
+        // computation can iterate PO periods and Agreement periods
+        // separately, same split the "Agreement wise"/"PO wise" toggle
+        // already uses for the current-period fields.
+        poHistory: (historyByContainer.get(safeStr(item.row[0]).trim().toUpperCase()) || []).filter((h) => h.type === 'PO'),
+        agreementHistory: (historyByContainer.get(safeStr(item.row[0]).trim().toUpperCase()) || []).filter((h) => h.type === 'Agreement')
       };
     })
   };

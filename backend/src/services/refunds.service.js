@@ -19,7 +19,7 @@
  * authenticated caller recorded here for audit.
  */
 import { appendRow, insertSheetIfMissing, batchUpdateValues, getSheetData, updateRange, colLetter, ensureColumnCount } from './googleSheets.service.js';
-import { getSheetDataFromMongo, appendMongoMirrorRow, patchMongoMirrorRow } from './mongoSheetData.service.js';
+import { getSheetDataFromMongo, appendMongoMirrorRow, patchMongoMirrorRow, getMongoRowsWithKeys } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { AppError, notFound, accessDenied } from '../utils/AppError.js';
@@ -570,15 +570,25 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
  * path above (same write-path convention: fresh read, not the Mongo mirror,
  * since a decision may follow immediately after).
  */
+/** Mongo-first — explicit report 2026-11-05 (live, on the no-login review
+ *  page: "Google Sheets API rate limit was hit"): this used to read the live
+ *  sheet (getSheetData) on every single open of a review link, hitting the
+ *  same shared Sheets quota every other live read in this app already
+ *  avoids. Reads the Mongo mirror instead, matching it by the row's own
+ *  `row_N` key (getMongoRowsWithKeys) rather than positional array index —
+ *  getSheetDataFromMongo's own plain array is NOT safe for this (see that
+ *  function's header comment: Mongo's find() order isn't guaranteed to match
+ *  sheet position), and rowNum here comes from the signed link token, so it
+ *  must resolve the exact same row every time. */
 export async function getRefundEntryForReview(rowNum, stage, token) {
   const cfg = STAGES[stage];
   if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
   _verifyRefundReviewToken(token, rowNum, stage);
 
-  const { rows } = await getSheetData(REFUNDS_SHEET);
-  const row = rows[rowNum - 2];
-  if (!row) throw notFound(`Refund entry row ${rowNum} not found`);
-  return _mapRow(row, rowNum);
+  const wantKey = `row_${rowNum - 2}`;
+  const found = (await getMongoRowsWithKeys(REFUNDS_SHEET)).find((r) => r.key === wantKey);
+  if (!found) throw notFound(`Refund entry row ${rowNum} not found`);
+  return _mapRow(found.row, rowNum);
 }
 
 /**

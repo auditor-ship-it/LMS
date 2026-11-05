@@ -352,8 +352,27 @@ export function ContainerDetailPage({ isActive }) {
                         <span className={styles.columnCount}>{done}/{colStages.length} done</span>
                       </div>
                       {colStages.flatMap((s) => {
-                        const card = <OverviewCard key={s.stage} stage={s} isCurrent={s.stage === currentNum} onOpen={openStage} />;
+                        const isCurrent = s.stage === currentNum;
+                        /* Explicit request 2026-11-05 ("currentkly this its
+                           stage 6 fir iske aage ke stage dikh ne bhi nhai
+                           chhaiye hai" — once at Stage 6, stages AFTER it
+                           shouldn't show at all), confirmed broader the same
+                           day with a container still at Stage 1 showing
+                           every later stage as an empty "Pending" card too
+                           ("this stage in process stage 1 this is showing"):
+                           a stage that hasn't been reached yet — not done,
+                           not the current one — is left off the board
+                           entirely now, for every stage, not shown as a
+                           grayed placeholder. Only completed stages and the
+                           single current one ever render. */
+                        if (!s.done && !isCurrent) return [];
+                        const card = <OverviewCard key={s.stage} stage={s} isCurrent={isCurrent} onOpen={openStage} />;
                         if (s.stage !== SD_REFUNDS_INTERNAL) return [card];
+                        // Same reasoning — 6A/6B/6C have nothing to approve
+                        // until Stage 6 is actually done, so they stay off
+                        // the board entirely until then rather than showing
+                        // "No SD refund submitted yet."
+                        if (!s.done) return [card];
                         // REWORKED 2026-10-07: HOD -> Accounts -> CEO. Stage
                         // 6C stays on the board even when this bill's amount
                         // doesn't call for CEO — explicit request: "stage
@@ -381,7 +400,16 @@ export function ContainerDetailPage({ isActive }) {
                           <ApprovalCard key="6c" onOpen={() => openRefund('ceo')} current={approvalCurrent === '6c'} id="stage-card-6c" label="Stage 6C" title="CEO approval" status={ceoStatus} by={refund?.ceoApprover} on={refund?.ceoDate} remarks={ceoRemarks} submitted={!!refund} waiting={!ceoDone && refund && refund.accountsStatus !== 'Approved' ? 'Waiting for Accounts approval first.' : null} />
                         ];
                       })}
-                      {col.key === 'intimation' && (
+                      {/* Same "hide until reached" rule as every other stage
+                          card above — explicit follow-up 2026-11-05 ("this
+                          is not show pls", pointing at the Gate card showing
+                          while Stage 1 itself was still open): the gate only
+                          becomes relevant once Stage 1 is actually done
+                          (gatePending), or stays visible once it's been
+                          decided either way (approvalLower). Hidden the rest
+                          of the time instead of sitting there as a premature
+                          "Pending" placeholder. */}
+                      {col.key === 'intimation' && (gatePending || approvalLower === 'approved' || approvalLower === 'rejected') && (
                         <div id="gate-card" className={styles.cardLink} role="button" tabIndex={0} onClick={openGate} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openGate(); } }}><GateCard status={approvalLower} date={data.approvalDate} user={data.approvalUser} /></div>
                       )}
                     </div>

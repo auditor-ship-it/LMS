@@ -6,6 +6,7 @@ import {
 import { useAsync } from '../../hooks/useAsync.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
 import { getRenewalLog as fetchRenewalLog, getNewLeaseReport as fetchNewLease } from '../../api/expiry.api.js';
+import { fetchExpiryList } from '../../services/expiry.service.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './ReportsPage.module.css';
 
@@ -77,6 +78,14 @@ export function ReportsPage() {
   const offlease = useAsync(fetchOffLeaseDashboard, []);
   const renewals = useAsync(fetchRenewalLog, []);
   const newLease = useAsync(fetchNewLease, []);
+  /* Sale Person — Contract Expiry Summary: explicit request 2026-11-04, with
+     an example table image (Client Count, Contract Expired >30 Days, >90
+     Days per Sale Person). Independent of this page's year/month/Sale
+     Person filters above — it IS the Sale-Person breakdown, filtering it by
+     one Sale Person would leave a single-row table. Same source Lease
+     Expiry's own page reads (GET /expiry?filter=pending), not a new
+     endpoint, so this never disagrees with that page's own Overdue counts. */
+  const leaseExpiry = useAsync(fetchExpiryList, []);
 
   /* Opens on the CURRENT month — a report is nearly always read for "now", and
      defaulting to everything meant scrolling months of history to reach it.
@@ -169,7 +178,55 @@ export function ReportsPage() {
   }, [renewalRows]);
 
   const loading = offlease.loading || renewals.loading || newLease.loading;
-  const reloadAll = () => { offlease.reload(); renewals.reload(); newLease.reload(); };
+  const reloadAll = () => { offlease.reload(); renewals.reload(); newLease.reload(); leaseExpiry.reload(); };
+
+  /* Lease Expiry's own headers are found by name, not a fixed position —
+     "Sale Person" is a CRM-resolved column expiry.service.js adds, same
+     reasoning as LeaseExpiryPage.jsx's own salePersonColIdx/customerColIdx. */
+  const expiryHeaders = leaseExpiry.data?.headers || [];
+  const expirySalePersonColIdx = useMemo(
+    () => expiryHeaders.findIndex((h) => /^sale person$/i.test(String(h || '').trim())),
+    [expiryHeaders]
+  );
+  const expiryCustomerColIdx = useMemo(
+    () => expiryHeaders.findIndex((h) => /^(customer name|client name)$/i.test(String(h || '').trim())),
+    [expiryHeaders]
+  );
+
+  /** Per Sale Person, among OVERDUE containers only (band === 'overdue' —
+   *  same classification LeaseExpiryPage.jsx's own scorecards use):
+   *  distinct client count, and how many are overdue by more than 30 / 90
+   *  days (magnitude = -daysLeft, same formula overdueMagnitudeBucket uses
+   *  on that page). Sorted worst-first (most >90-day breaches) so the
+   *  salesperson needing the most attention is always at the top — except
+   *  "Unassigned" (explicit request 2026-11-04, "unassig add the counts":
+   *  a container the Sales CRM has no owner for was silently dropped from
+   *  this table entirely instead of counted), which is always pinned LAST
+   *  regardless of its own counts — it isn't a person to rank against the
+   *  real salespeople, it's a gap to flag separately. */
+  const salePersonExpirySummary = useMemo(() => {
+    const items = leaseExpiry.data?.data || [];
+    const map = new Map();
+    for (const item of items) {
+      if (item.band !== 'overdue') continue;
+      const rawName = expirySalePersonColIdx >= 0 ? String((item.row || [])[expirySalePersonColIdx] || '').trim() : '';
+      const name = rawName || 'Unassigned';
+      if (!map.has(name)) map.set(name, { clients: new Set(), over30: 0, over90: 0 });
+      const entry = map.get(name);
+      const client = expiryCustomerColIdx >= 0 ? String((item.row || [])[expiryCustomerColIdx] || '').trim() : '';
+      if (client) entry.clients.add(client);
+      const magnitude = -item.daysLeft;
+      if (magnitude > 30) entry.over30 += 1;
+      if (magnitude > 90) entry.over90 += 1;
+    }
+    return [...map.entries()]
+      .map(([name, v]) => ({ name, clientCount: v.clients.size, over30: v.over30, over90: v.over90 }))
+      .sort((a, b) => {
+        if (a.name === 'Unassigned') return 1;
+        if (b.name === 'Unassigned') return -1;
+        return b.over90 - a.over90 || b.over30 - a.over30 || a.name.localeCompare(b.name);
+      });
+  }, [leaseExpiry.data, expirySalePersonColIdx, expiryCustomerColIdx]);
 
   /* Exports exactly what is on screen — the same rows, under the same filter.
      A download that quietly contained everything would contradict the page it
@@ -250,6 +307,25 @@ export function ReportsPage() {
           Export to Excel
         </Button>
       </div>
+
+      <Card title="Sale Person — Contract Expiry Summary">
+        {!leaseExpiry.loading && leaseExpiry.error && <ErrorState message={leaseExpiry.error} onRetry={leaseExpiry.reload} />}
+        {(leaseExpiry.loading || !leaseExpiry.error) && (
+          <DataGrid
+            headers={['Sale Person', 'Client Count', 'Contract Expired >30 Days', 'Contract Expired >90 Days']}
+            rows={salePersonExpirySummary}
+            loading={leaseExpiry.loading}
+            rowKey={(r) => r.name}
+            emptyMessage="No overdue leases"
+            renderRow={(_v, r) => [
+              <td key="n"><strong>{r.name}</strong></td>,
+              <td key="c">{r.clientCount}</td>,
+              <td key="30">{r.over30}</td>,
+              <td key="90">{r.over90}</td>
+            ]}
+          />
+        )}
+      </Card>
 
       <Card title="Off-Lease Report">
         {!offlease.loading && offlease.error && <ErrorState message={offlease.error} onRetry={offlease.reload} />}

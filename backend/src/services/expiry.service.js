@@ -55,6 +55,7 @@ import { normKey as _normKey, splitContainers as _splitContainers } from '../uti
 import { salePersonScopeFor, matchesSalePersonScope, canonicalSalePersonName, emailForSalePerson } from './salePersonAccess.service.js';
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { sendMail } from './email.service.js';
+import { addPoAgreementHistoryEntry } from './poAgreementHistory.service.js';
 
 /* =============================================
    getExpiryDataByFilter — LMS.js 1358-1406
@@ -75,6 +76,15 @@ function padRow(row, len) {
 function _toLocalIsoDate(date) {
   const y = date.getFullYear(), m = String(date.getMonth() + 1).padStart(2, '0'), d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+/** Sheet cell (DD-MM-YYYY, a Sheets serial, or similar — whatever parseDate
+ *  accepts) -> "YYYY-MM-DD", or null. poAgreementHistory.service.js (and the
+ *  frontend reading it) expect plain ISO date strings, same shape the Add
+ *  Period form's own <input type="date"> sends. */
+function _cellToIso(v) {
+  const d = parseDate(v);
+  return d ? _toLocalIsoDate(d) : null;
 }
 
 /** First column whose header exactly matches one of `names` (case/space
@@ -600,6 +610,14 @@ export async function getExpiryDataByFilter(filterType, user) {
       // AD is the Remarks field from that same Documents form.
       item.renewalSubmittedDate = safeStr(row[RENEWAL_SUBMITTED_DATE_COL]);
       item.renewalRemarks = safeStr(row[29]);
+      // Explicit request 2026-11-05 ("add the product code and location"),
+      // immediate follow-up ("product code remove size and type" — col R
+      // "Product Code" is blank on every live row, confirmed by the user's
+      // own screenshot, all dashes): swapped for columns C ("Size") and D
+      // ("Type") instead, same Deployed sheet.
+      item.location = safeStr(row[4]);
+      item.size = safeStr(row[2]);
+      item.type = safeStr(row[3]);
     }
     if (filterType === 'documents' || filterType === 'approval') {
       item.poUrl = safeStr(row[24]);
@@ -1848,6 +1866,15 @@ export async function decideRenewalApproval(containerNo, decision, remarks, call
       poValue, agreementValue, billingCycle
     });
 
+    await _autoLogRenewalHistory({
+      containerNo, clientName, approverEmail: callerEmail,
+      renewedDateIso: _cellToIso(matchedRow[26]),
+      agreementEndIso: validTillDraft ? _cellToIso(validTillDraft) : null,
+      agreementUrl: signedCopyUrl,
+      poEndIso: poValidity ? _cellToIso(poValidity) : null,
+      poNo, poFileUrl
+    });
+
     return 'Approved — renewal applied';
   });
 }
@@ -1968,6 +1995,52 @@ export async function _logRenewal(info) {
     // once the append has actually succeeded.
     await _sendRenewalNotification(stamp, info);
   } catch (e) { console.error('[RENEWAL-LOG]', e.message); }
+}
+
+/**
+ * Explicit request 2026-11-05 ("renew approval automaticlly... agremnet and
+ * po wise"): every time a renewal is approved, record the period JUST
+ * approved into the same "Master Po and Agreement data" history
+ * (poAgreementHistory.service.js) the manual Add Period form writes to — the
+ * one feeding the Tracker's coverage grid and timeline chart. Without this,
+ * every renewal's PREVIOUS period would need a manual backfill to stay
+ * visible once this approval overwrites the current Agreement/PO fields;
+ * this makes that automatic going forward (Add Period remains for gaps that
+ * already happened before this existed).
+ *
+ * Logs the period as of THIS approval (start = renewedDate, the date entered
+ * on the Documents form; end = the new valid-till) rather than reconstructing
+ * the OLD, now-superseded period — there's no reliable OLD start date on
+ * file to use (same gap the whole feature exists to work around). This still
+ * fully captures history over time: the period approved today is "current"
+ * now and gets superseded (and thus needs its history row) only at the NEXT
+ * approval, which logs itself the same way then.
+ *
+ * PO has no start date field anywhere in this system (same note as
+ * PoAgreementTrackerPage.jsx's own resolveCoverageRange) — reuses
+ * renewedDate as PO's implicit start too, same heuristic the Tracker's own
+ * coverage grid already uses for the current period's PO range.
+ *
+ * Best-effort, same as _logRenewal above — never lets a history-logging
+ * failure fail the approval that already succeeded.
+ */
+async function _autoLogRenewalHistory({ containerNo, clientName, approverEmail, renewedDateIso, agreementEndIso, agreementUrl, poEndIso, poNo, poFileUrl }) {
+  try {
+    if (renewedDateIso && agreementEndIso) {
+      await addPoAgreementHistoryEntry({
+        containerNo, clientName, type: 'Agreement',
+        startDate: renewedDateIso, endDate: agreementEndIso, fileUrl: agreementUrl,
+        enteredBy: approverEmail || 'Auto — Renewal Approval'
+      });
+    }
+    if (renewedDateIso && poEndIso) {
+      await addPoAgreementHistoryEntry({
+        containerNo, clientName, type: 'PO',
+        startDate: renewedDateIso, endDate: poEndIso, fileUrl: poFileUrl, poNo,
+        enteredBy: approverEmail || 'Auto — Renewal Approval'
+      });
+    }
+  } catch (e) { console.error('[RENEWAL-HISTORY-AUTOLOG]', e.message); }
 }
 
 /** Vertical table, same convention as offlease.service.js's

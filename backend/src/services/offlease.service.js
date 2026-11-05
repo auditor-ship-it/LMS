@@ -83,7 +83,7 @@ import { sendMail } from './email.service.js';
 import { extractFileId, downloadFromDrive } from './googleDrive.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getCollection } from './mongo.service.js';
-import { getSheetDataFromMongo, getMongoRowsWithKeys } from './mongoSheetData.service.js';
+import { getSheetDataFromMongo, getMongoRowsWithKeys, appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { cacheRemove } from '../utils/memoryCache.js';
 import { enqueueSheetReplay } from './outbox.service.js';
 import { SLA_MS, parseStamp, humanize, budgetLabel } from './offleaseSla.service.js';
@@ -1691,6 +1691,120 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
      * saveOffLeaseStage's own notification block for the actual trigger. */
 
     return 'OK';
+  });
+}
+
+/**
+ * Mongo-first fast path for the Lease Expiry "Off-Lease" button — explicit
+ * report 2026-11-05 (live: submitting this exact form hit "Google Sheets API
+ * rate limit was hit", blocking the whole action): addToOffLeaseTracking
+ * above does its duplicate check AND both its writes live against Sheets
+ * before anything lands in Mongo, so a single quota hit loses the submission
+ * entirely. This mirrors the same Mongo-first-write-then-outbox-replay
+ * pattern already used everywhere else in this codebase (see outbox
+ * .service.js's own header comment) — succeeds the instant Mongo is updated,
+ * the real Sheets writes (both the new Off-Lease Tracking row AND the
+ * Deployed sheet's Off-Lease mark) replay in the background.
+ *
+ * Reads the DEPLOYED lookup from the Mongo mirror, sorted by each row's own
+ * `row_N` key (getMongoRowsWithKeys) rather than getSheetDataFromMongo's
+ * plain array — that array's order is NOT guaranteed to match live sheet
+ * position (see that function's own header comment), and
+ * _lookupDeployedForOffLease indexes into it positionally when a known
+ * targetRow is passed, so an unsorted array could resolve the WRONG
+ * container here.
+ *
+ * Duplicate check reads the OL_SHEET mirror instead of a live getRange.
+ *
+ * The new Off-Lease Tracking row is written to Mongo via
+ * appendMongoMirrorRow (its own synthetic row_N key, independent of
+ * whatever real row number the live sheet append eventually gets — same
+ * reasoning poAgreementHistory.service.js's addPoAgreementHistoryEntry
+ * already established: correct by the next 5-minute reconcile cycle either
+ * way, never double-inserted since the replay below never touches Mongo
+ * again for this row). The Deployed sheet's V/W/Email-ID cells, by
+ * contrast, target an ALREADY-KNOWN row (deployedTargetRow, resolved above)
+ * — patched directly by that row's own real key, safe to do immediately.
+ */
+export async function addToOffLeaseTrackingFast(containerNo, deployedRow, remarks = '', personName = '', userEmail = '') {
+  const [{ headers: dHeaders }, sortedDeployed, { rows: existingOl }] = await Promise.all([
+    getSheetDataFromMongo(SHEETS.DEPLOYED),
+    getMongoRowsWithKeys(SHEETS.DEPLOYED),
+    getSheetDataFromMongo(OL_SHEET)
+  ]);
+  const dRows = sortedDeployed.map((r) => r.row);
+  const { found, colMap, targetRow: deployedTargetRow } = await _lookupDeployedForOffLease(containerNo, { headers: dHeaders, rows: dRows }, deployedRow);
+  if (!found) throw new AppError(`Container not found: ${containerNo}`);
+
+  // Same duplicate rule as addToOffLeaseTracking above — only a match on
+  // BOTH container AND client counts (see that function's own doc comment).
+  const clientName = safeStr(found[colMap.clientName]);
+  for (const r of existingOl) {
+    if (String(r[0]) != containerNo) continue; // eslint-disable-line eqeqeq
+    if (clientMatches(safeStr(r[5]), clientName)) return 'ALREADY_EXISTS';
+  }
+
+  const newRow = new Array(10).fill('');
+  newRow[0] = found[colMap.container] || containerNo;
+  newRow[2] = safeStr(found[colMap.size]);
+  newRow[3] = safeStr(found[colMap.type]);
+  newRow[4] = safeStr(found[colMap.clientCode]);
+  newRow[5] = safeStr(found[colMap.clientName]);
+  newRow[6] = safeStr(found[colMap.location]);
+  newRow[7] = fmtCell(found[colMap.deployedDate]);
+  newRow[8] = fmtCell(found[colMap.validUpto]);
+  const rateVal = found[colMap.rate];
+  newRow[9] = typeof rateVal === 'number' ? rateVal : safeStr(rateVal);
+
+  const rmk = safeStr(remarks).trim();
+  const person = safeStr(personName).trim();
+  const mirrorRow = [...newRow];
+  mirrorRow[OL_TRACKING_REMARKS_COL] = rmk;
+  mirrorRow[OL_TRACKING_PERSON_NAME_COL] = person;
+  await appendMongoMirrorRow(OL_SHEET, mirrorRow);
+
+  const stamp = dmyTime(new Date());
+  await getCollection(SHEETS.DEPLOYED).updateOne(
+    { key: `row_${deployedTargetRow - 2}` },
+    { $set: { 'row.21': stamp, 'row.22': 'Off-Lease', [`row.${DEPLOYED_EMAIL_ID_COL}`]: userEmail || '' } }
+  );
+
+  await enqueueSheetReplay(
+    'offlease.addToOffLeaseTrackingSheetWrite',
+    [containerNo, newRow, rmk, person, deployedTargetRow, userEmail, stamp],
+    { actor: userEmail }
+  );
+
+  return 'OK';
+}
+
+/** The outbox replay target for addToOffLeaseTrackingFast above (registered
+ *  in jobs/outboxRegistry.js) — the real live-Sheets writes only, both
+ *  already-Mongo-saved: appends the new row to Off-Lease Tracking, writes
+ *  its Remarks/Person Name, then marks the Deployed sheet's own Off-Lease
+ *  cells at the row already known to be correct. Never touches Mongo itself
+ *  for the NEW Off-Lease Tracking row — appendMongoMirrorRow above already
+ *  did that under its own synthetic key; patching it again here with
+ *  whatever real rowNum this live append happens to land on would risk
+ *  guessing the wrong Mongo doc if the two have drifted apart (the next
+ *  scheduled reconcile cycle is what reliably corrects that, same as
+ *  poAgreementHistory.service.js's writeHistoryRowToSheet). */
+export async function addToOffLeaseTrackingSheetWrite(containerNo, newRow, remarks, personName, deployedTargetRow, userEmail, stamp) {
+  return withSheetLock(OL_SHEET, async () => {
+    await _ensureOffLeaseSheet();
+    const { rowNum } = await appendRow(OL_SHEET, newRow);
+    if (rowNum) {
+      await batchUpdateValues([
+        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_REMARKS_COL)}${rowNum}`, values: [[remarks]] },
+        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_PERSON_NAME_COL)}${rowNum}`, values: [[personName]] }
+      ]);
+    }
+    await _ensureDeployedEmailIdHeader();
+    await batchUpdateValues([
+      { range: `'${SHEETS.DEPLOYED}'!V${deployedTargetRow}`, values: [[stamp]] },
+      { range: `'${SHEETS.DEPLOYED}'!W${deployedTargetRow}`, values: [['Off-Lease']] },
+      { range: `'${SHEETS.DEPLOYED}'!${colLetter(DEPLOYED_EMAIL_ID_COL)}${deployedTargetRow}`, values: [[userEmail || '']] }
+    ]);
   });
 }
 
@@ -3727,14 +3841,14 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail,
  *  never-cleared audit trail is a separate append-only sheet — see
  *  offleaseMoveHistory.service.js — so Send Back losing the live columns
  *  never loses the history. */
-const OL_MOVE_REASON_COL = 290;
+export const OL_MOVE_REASON_COL = 290;
 const OL_MOVE_NEW_CLIENT_COL = 291;
 const OL_MOVE_REMARKS_COL = 292;
-const OL_MOVE_BY_COL = 293;
-const OL_MOVE_TIMESTAMP_COL = 294;
+export const OL_MOVE_BY_COL = 293;
+export const OL_MOVE_TIMESTAMP_COL = 294;
 const OL_MOVE_COMMENT_TYPE_COL = 295;
-const OL_MOVE_DATE_COL = 296;
-const OL_MOVE_JUMP_TARGET_COL = 297;
+export const OL_MOVE_DATE_COL = 296;
+export const OL_MOVE_JUMP_TARGET_COL = 297;
 const OL_MOVE_CLIENT_SCOPE_COL = 298;
 const OL_MOVE_ARRIVAL_DATE_COL = 299;
 /* Reason = "Purchased" only — explicit request 2026-10-30 ("one profe to
@@ -5551,6 +5665,49 @@ export async function getOffLeaseDashboardData(user) {
       if (hasDamage) kpis.outstandingWithDamageCount++;
     }
   }
+
+  /* Explicit request 2026-11-05 ("add the tab sale and one pop sale person
+     i am click the show unke offlease data"): each item's Sale Person,
+     resolved the SAME way every other "who owns this client" read in this
+     codebase does (Sales CRM's assignedTo, keyed by Client Name — read-only;
+     see getSalePersonResolver's own doc comment, and
+     _sendOffLeaseNotification's identical one-liner above). Lets the
+     frontend group the dashboard's own items by salesperson without a
+     second endpoint/fetch. Blank (no CRM match) groups as "Unassigned" on
+     the frontend, same convention the Reports page's own Sale Person
+     summary table already uses. */
+  const resolveSalePerson = await getSalePersonResolver();
+  for (const it of items) it.salePerson = resolveSalePerson(it.clientName) || '';
+
+  /* Explicit request 2026-11-05 ("transporation stage 8 9 10 fetch... show
+     the do create stage 9 in transit"), confirmed as display-only — show
+     the FMS DO Number / transit status on a Stage 2 (Transportation) card,
+     without changing what actually marks the stage done (still only
+     STAGE-10 delivery or a manual move — see the OL_STAGE2_INTERNAL bypass
+     above). Scoped to just the containers currently AT Stage 2 (not all
+     ~400 dashboard rows) — getMatchedFmsForContainer's own STAGE-8/9/10
+     reads are cached (stage8.service.js's cachedFmsRead), so this costs one
+     cache-warm read of each tab plus a cheap in-memory match per container,
+     not N live reads. Best-effort per container: a lookup failure just
+     leaves that one card without the extra line, never breaks the
+     dashboard. */
+  await Promise.all(items
+    .filter((it) => it.currentStageNum === OL_STAGE2_INTERNAL)
+    .map(async (it) => {
+      try {
+        const fms = await getMatchedFmsForContainer(it.container, it.clientName);
+        const doNo = fms?.movement?.deliveryOrderNo || fms?.movement?.bookingOrderNo || fms?.transport?.doNumber || '';
+        if (!doNo && !fms?.transport) return;
+        it.transportFms = {
+          doNumber: doNo || null,
+          // STAGE-10 matched but Stage 2 is still showing here only in the
+          // instant between delivery landing and the next dashboard
+          // refresh re-classifying it — "Delivered" still beats "In Transit"
+          // if somehow both are true at once.
+          status: fms?.delivery ? 'Delivered' : fms?.transport ? 'In Transit' : doNo ? 'DO Created' : null
+        };
+      } catch (e) { /* best-effort — leave this one card without the extra line */ }
+    }));
 
   return { kpis, items, ...(_stale ? { _stale, _staleSince } : {}) };
 }

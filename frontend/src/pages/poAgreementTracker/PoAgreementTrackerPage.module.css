@@ -130,6 +130,84 @@
 }
 .hintText { color: var(--text-3); font-style: italic; }
 
+.historySection {
+  margin-bottom: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.historyTitle {
+  margin: 0 0 10px;
+  font-family: var(--f-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.historyChart {
+  margin-bottom: 14px;
+}
+.historyChartLegend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.historyChartLegendItem { display: inline-flex; align-items: center; gap: 5px; }
+.historyChartSwatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.historyChartSvg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.historyChartBaseline { stroke: var(--line); stroke-width: 1; }
+.historyChartAxisLine { stroke: var(--line); stroke-width: 1; }
+.historyChartAxisLabel {
+  font-size: 8.5px;
+  fill: var(--text-3);
+}
+.historyChartSegLabel {
+  font-size: 9px;
+  font-weight: 600;
+  fill: var(--text-2);
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.historyRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.historyRow a { color: var(--accent); font-weight: 600; }
+.historyType {
+  font-weight: 700;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+}
+.historyDates { font-weight: 600; }
+.historyPoNo { color: var(--text-2); }
+.historyMeta { margin-left: auto; color: var(--text-3); font-size: 11px; }
+
 .detailActions {
   display: flex;
   gap: 10px;
@@ -209,6 +287,12 @@ thead .colContainer, thead .colClient { background: var(--surface-2); }
    tightened further, 95px -> 80px — still comfortably fits the fixed
    "DD-MM-YYYY" format (10 chars) with no overflow risk. */
 .colDate { min-width: 80px; max-width: 80px; font-weight: 600; }
+
+/* Explicit request 2026-11-05 ("add the product code and location one
+   view not scrolling") — kept narrow and ellipsis-truncated like
+   .colContainer/.colClient above, so these two extra columns add as little
+   to the table's overall scroll width as possible. */
+.colCompact { min-width: 76px; max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .dayCell { min-width: 22px; max-width: 22px; position: relative; }
 .todayCol { background: color-mix(in srgb, var(--accent) 7%, transparent); }

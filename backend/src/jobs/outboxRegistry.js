@@ -10,9 +10,10 @@
 import {
   saveOffLeaseStage, saveOffLeaseApprovalAction, saveOffLeaseMoveToStage, saveOffLeaseSendBack,
   saveOffLeaseHold, saveOffLeaseSendBackToStage1, saveOffLeaseSendRejectedToStage1, saveOffLeaseVoucherRaised,
-  saveOffLeaseSendBackFromApproval
+  saveOffLeaseSendBackFromApproval, addToOffLeaseTrackingSheetWrite
 } from '../services/offlease.service.js';
 import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending, saveRenewalDraft, completeDocStage, decideRenewalApproval } from '../services/expiry.service.js';
+import { writeHistoryRowToSheet } from '../services/poAgreementHistory.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
@@ -24,13 +25,15 @@ export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseSendRejectedToStage1': saveOffLeaseSendRejectedToStage1,
   'offlease.saveOffLeaseVoucherRaised': saveOffLeaseVoucherRaised,
   'offlease.saveOffLeaseSendBackFromApproval': saveOffLeaseSendBackFromApproval,
+  'offlease.addToOffLeaseTrackingSheetWrite': addToOffLeaseTrackingSheetWrite,
   'expiry.saveExpiryAction': saveExpiryAction,
   'expiry.completeDocumentStage': completeDocumentStage,
   'expiry.saveExpiryRemark': saveExpiryRemark,
   'expiry.sendExpiryToPending': sendExpiryToPending,
   'expiry.saveRenewalDraft': saveRenewalDraft,
   'expiry.completeDocStage': completeDocStage,
-  'expiry.decideRenewalApproval': decideRenewalApproval
+  'expiry.decideRenewalApproval': decideRenewalApproval,
+  'poAgreementHistory.writeRowToSheet': writeHistoryRowToSheet
 };
 
 export function resolveReplay(kind) {
