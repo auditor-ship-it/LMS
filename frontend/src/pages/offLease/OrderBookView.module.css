@@ -164,7 +164,7 @@
 .remarkAdd:hover { filter: brightness(0.95); }
 .remarkAddIcon { width: 11px; height: 11px; flex: none; }
 
-/* ---- history rail: one tick per stored remark, thread on hover ---- */
+/* ---- history rail: one tick per stored remark, thread on click ---- */
 .rail {
   position: relative;
   display: inline-flex;
@@ -195,10 +195,10 @@
   display: none;
   flex-direction: column;
   gap: 8px;
-  width: 290px;
-  max-height: 260px;
+  width: 380px;
+  max-height: 400px;
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface);
@@ -206,8 +206,17 @@
   cursor: default;
   text-align: left;
 }
-.rail:hover .railPop, .rail:focus-within .railPop { display: flex; }
+/* Visibility is now driven by React state (`expanded`), not :hover — the
+   span is only rendered in the DOM at all once expanded, so this class just
+   needs to win over the base `display: none` above when it IS rendered. */
+.railPopOpen { display: flex; }
 
+.railPopHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .railPopHead {
   font-size: 9.5px;
   font-weight: 800;
@@ -215,14 +224,30 @@
   letter-spacing: 0.6px;
   color: var(--text-3);
 }
+.railClose {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-3);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.railClose:hover { background: var(--surface-2); color: var(--text); }
 .railItem { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .railItem:last-child { padding-bottom: 0; border-bottom: none; }
-.railItemBody { font-size: 12px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.railItemBody { font-size: 13.5px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
 .railItemBody ul, .railItemBody ol { margin: 0; padding-left: 18px; }
 .railItemBody ul { list-style: disc; }
 .railItemBody ol { list-style: decimal; }
 .railItemBody b, .railItemBody strong { font-weight: 800; }
-.railPopMeta { font-size: 10.5px; color: var(--text-3); }
+.railPopMeta { font-size: 11.5px; color: var(--text-3); }
 
 .railItemFoot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .railAction {

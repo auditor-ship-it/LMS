@@ -14,5 +14,6 @@ router.get('/deployed-summary/export', asyncHandler(dashboardController.getDeplo
 router.get('/deployed-summary/export-month-categories', asyncHandler(dashboardController.getDeployedSummaryExportMonthCategories));
 router.get('/deployed-detail', asyncHandler(dashboardController.getDeployedDetail));
 router.get('/po-agreement-tracker', asyncHandler(dashboardController.getPoAgreementTracker));
+router.post('/po-agreement-tracker/history', asyncHandler(dashboardController.addPoAgreementHistory));
 
 export default router;

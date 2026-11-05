@@ -27,8 +27,21 @@
   margin: -6px -6px 10px;
 }
 .kpiStages > * { flex: 1 1 0; min-width: 0; }
+/* Explicit request 2026-11-05 ("NEW SCORCRAD FOR DIFFIEND STAGE... ") — three
+   rolled-up group cards (Intimation->Transportation / Inspection->Billing /
+   SD Refunds), each a sum across several of the granular .kpiStages cards
+   below. Same 3-column grid as .kpiPrimary, tighter spacing to match the
+   compact .sizeSm cards it holds. */
+.kpiGroups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  margin: -6px -6px 10px;
+}
 @media (max-width: 760px) {
   .kpiPrimary { grid-template-columns: minmax(0, 1fr); }
+  .kpiGroups { grid-template-columns: minmax(0, 1fr); }
 }
 
 .toolbar {

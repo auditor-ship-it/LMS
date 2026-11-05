@@ -46,14 +46,31 @@ const META_ID = '__meta__';
  * fullRefresh sheets (keyed upserts don't wipe-and-rebuild) — and in
  * practice only SHEETS.DEPLOYED and SHEETS.OFF_LEASE_TRACKING, the two
  * sheets every currently-registered Fast-path kind targets.
- */
+ *
+ * 2026-11-05: same bug hit a THIRD sheet — poAgreementHistory.service.js's
+ * addPoAgreementHistoryEntry (added 2026-11-04) is Mongo-first too, but this
+ * map was never extended for it. Confirmed live: a real backfilled period
+ * wrote to Mongo, got wiped by this job's full-refresh before the outbox
+ * replay landed it on the live sheet, and stayed wiped (sheet had it, Mongo
+ * didn't) until the next cycle happened to read the now-correct sheet.
+ * Added here so this exact race can't silently drop a future entry again.
+ *
+ * Same day, same sheet reason: addToOffLeaseTrackingFast (Lease Expiry's
+ * "Off-Lease" button, "Google Sheets API rate limit was hit" blocking the
+ * whole submission) is Mongo-first too, and its own outbox replay
+ * (offlease.addToOffLeaseTrackingSheetWrite) writes to BOTH
+ * SHEETS.OFF_LEASE_TRACKING (a new row) and SHEETS.DEPLOYED (marking it
+ * off-leased) in the same action — the one 'offlease.' kind now needs to
+ * protect two sheets, not one, so each prefix maps to a LIST of sheets
+ * instead of a single sheet name. */
 const OUTBOX_KIND_SHEET_PREFIX = {
-  'offlease.': SHEETS.OFF_LEASE_TRACKING,
-  'expiry.': SHEETS.DEPLOYED
+  'offlease.': [SHEETS.OFF_LEASE_TRACKING, SHEETS.DEPLOYED],
+  'expiry.': [SHEETS.DEPLOYED],
+  'poAgreementHistory.': [SHEETS.PO_AGREEMENT_HISTORY]
 };
 
 async function _hasPendingOutboxForSheet(sheetName) {
-  const prefixes = Object.keys(OUTBOX_KIND_SHEET_PREFIX).filter((p) => OUTBOX_KIND_SHEET_PREFIX[p] === sheetName);
+  const prefixes = Object.keys(OUTBOX_KIND_SHEET_PREFIX).filter((p) => OUTBOX_KIND_SHEET_PREFIX[p].includes(sheetName));
   if (!prefixes.length) return false;
   const regex = new RegExp(`^(${prefixes.map((p) => p.replace('.', '\\.')).join('|')})`);
   const count = await getCollection(OUTBOX_COLLECTION).countDocuments({

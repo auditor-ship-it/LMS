@@ -56,6 +56,11 @@
   --skel-a: #E7EAF1; --skel-b: #F3F5F9;
   --scrim: rgba(5,35,121,.34);
   --focus: #052379;
+  /* Chart categorical slots 1/2 (dataviz skill's validated default palette —
+     blue/orange order, passes adjacent-pair CVD + normal-vision gates in
+     both modes) — used by the PO & Agreement Tracker's history timeline. */
+  --series-po: #2a78d6;
+  --series-agreement: #eb6834;
 }
 [data-theme="dark"] {
   --bg: #0B1330; --surface: #131B3E; --surface-2: #1B2450; --surface-3: #232D63;
@@ -75,6 +80,9 @@
   --skel-a: #1E2748; --skel-b: #2A3563;
   --scrim: rgba(2,6,20,.62);
   --focus: #8DA2E8;
+  /* See light theme's own comment — same validated default palette, dark-mode steps. */
+  --series-po: #3987e5;
+  --series-agreement: #d95926;
 }
 
 /* index.html sets data-theme on <html> before first paint (see useTheme.js for the toggle). */

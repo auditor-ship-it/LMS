@@ -129,6 +129,14 @@ export const MONGO_SHEET_MAPPING = {
    * appendMongoMirrorRow patches this instantly). */
   [SHEETS.REFUNDS]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
 
+  /* PO & Agreement Tracker's historical-period backfill — added 2026-11-04.
+   * Add-only by design (poAgreementHistory.service.js's own header
+   * comment), same shape as REFUNDS above: writes go straight to Sheets,
+   * then appendMongoMirrorRow patches this mirror instantly; this
+   * registration is what lets the periodic reconcile cron also pick up
+   * anything entered directly into the live sheet by hand. */
+  [SHEETS.PO_AGREEMENT_HISTORY]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
+
   /* Stage 1 sales order-intake form — added 2026-09-30 (explicit request).
    * Google Form-linked; no column's uniqueness has been verified against
    * live data (Quotation No/Order Received Number look like candidates but

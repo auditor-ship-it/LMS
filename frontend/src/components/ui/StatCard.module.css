@@ -129,11 +129,14 @@ button.hitArea { cursor: pointer; }
 .segBtn:hover { border-color: var(--line-strong); }
 .segBtnActive { background: var(--text); color: var(--text-inv); border-color: var(--text); }
 
-/* Headline cards — roomy, large number. */
-.sizeLg { padding: 13px 16px; }
-.sizeLg .klabel { font-size: 11.5px; gap: 7px; }
-.sizeLg .kval { font-size: 24px; margin: 6px 0 2px; }
-.sizeLg .kfoot { font-size: 11px; }
+/* Headline cards — explicit request 2026-11-05 ("THIS IS SCORCRAD SIZR ITS
+   DECRESE"): shrunk from the original roomy 13px/24px headline treatment —
+   the only three cards using this size (PipelineDashboard.jsx's top KPI row)
+   read oversized next to the compact .sizeSm stage cards right below them. */
+.sizeLg { padding: 10px 12px; }
+.sizeLg .klabel { font-size: 10.5px; gap: 6px; }
+.sizeLg .kval { font-size: 18px; margin: 4px 0 2px; }
+.sizeLg .kfoot { font-size: 10px; }
 
 /* Compact cards — a whole row of them. Fixed two-line head (kicker + name) so
    the numbers sit at the same height on every card. */
@@ -183,3 +186,20 @@ button.hitArea { cursor: pointer; }
 .sizeSm.active .sPoc,
 .sizeSm.active .sStage,
 .sizeSm.active .sName { border-top-color: color-mix(in srgb, var(--text) 30%, transparent); }
+
+/* 'xs' — a step smaller than .sizeSm, same stacked shape (see StatCard.jsx's
+   own comment: PipelineDashboard.jsx's 3 rolled-up STAGE_GROUPS cards only).
+   Overrides .sCount/.sPoc/.sStage/.sName's own sizing above via specificity
+   rather than duplicating the whole stacked layout. */
+.sizeXs { padding: 6px 7px 5px; border-radius: var(--r-md); }
+.sizeXs .sCount { font-size: 15px; padding-bottom: 3px; }
+.sizeXs .sPoc { font-size: 9px; min-height: 1.1em; padding: 3px 0; }
+.sizeXs .sStage { font-size: 8px; padding: 3px 0; gap: 3px; }
+.sizeXs .sStage svg { width: 9px; height: 9px; }
+.sizeXs .sName { font-size: 9.5px; min-height: 2.1em; padding: 3px 0 0; }
+.sizeXs.hoverable:hover { transform: translateY(-2px); }
+.sizeXs.active { box-shadow: none; }
+.sizeXs.active.tint-info { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+.sizeXs.active .sPoc,
+.sizeXs.active .sStage,
+.sizeXs.active .sName { border-top-color: color-mix(in srgb, var(--text) 30%, transparent); }

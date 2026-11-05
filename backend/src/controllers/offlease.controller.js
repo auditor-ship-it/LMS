@@ -473,7 +473,28 @@ export async function getContainerDetail(req, res) {
           const internalToTatKey = { 1: '1', 6: '2', 7: '3', 3: '4', 5: '5', 11: '6', 8: '7' };
           for (const s of detail.stages || []) {
             const tatKey = internalToTatKey[s.stage];
-            if (tatKey && tatByKey.has(tatKey)) s.tatV2 = tatByKey.get(tatKey);
+            if (!tatKey || !tatByKey.has(tatKey)) continue;
+            let tatV2 = tatByKey.get(tatKey);
+            /* BUG FOUND AND FIXED 2026-11-04 (live screenshot, "this is move
+               the stage this is erly show"): a container moved forward via
+               "Move To Stage" (or Transportation's own delivered/movedOut
+               bypass) is genuinely done per `s.done` — this.stages' own
+               authoritative field, built by _classifyOffLeaseStages'
+               bypassDone/impliedDone cascade — but has no real completion
+               timestamp of its own for offLeaseTatTracking.service.js to
+               find (no FMS match, no Gate-In form row, no filled status
+               column — that's WHY it needed a manual move in the first
+               place). Without this, the stage showed status "Completed"
+               (from s.done, correct) right next to "63d 5h Delay (ongoing)"
+               (from tatV2, treating it as still unresolved/in-progress) —
+               a direct contradiction on screen. If it's genuinely done,
+               never claim an ONGOING delay; show Completed with no delay
+               claim instead of fabricating one from data that was never
+               going to exist for a jumped stage. */
+            if (s.done && tatV2 && !tatV2.actualAt) {
+              tatV2 = { ...tatV2, status: 'Completed', delayMs: null, delayLabel: '' };
+            }
+            s.tatV2 = tatV2;
           }
           detail.gateTatV2 = tatByKey.get('1A') || null;
           detail.refundTatV2 = { '6A': tatByKey.get('6A') || null, '6B': tatByKey.get('6B') || null, '6C': tatByKey.get('6C') || null };
@@ -633,7 +654,10 @@ export async function deleteRemark(req, res) {
 
 export async function addToTracking(req, res) {
   const { containerNo, deployedRow, remarks, personName } = req.body;
-  const message = await offLeaseService.addToOffLeaseTracking(containerNo, deployedRow, remarks, personName, req.user?.email);
+  // Mongo-first — explicit report 2026-11-05 ("Google Sheets API rate limit
+  // was hit" blocking this exact submission). See
+  // addToOffLeaseTrackingFast's own doc comment in offlease.service.js.
+  const message = await offLeaseService.addToOffLeaseTrackingFast(containerNo, deployedRow, remarks, personName, req.user?.email);
   res.json({ message });
 }
 

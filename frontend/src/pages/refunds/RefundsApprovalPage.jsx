@@ -54,7 +54,7 @@ function Link({ url }) {
 const BASE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
   'Payment Due Date', 'SD Calculation',
-  'Quarterly Ledger', 'Department', 'Ledger Head',
+  'Quatre Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];
@@ -172,7 +172,7 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>Ledger Head</span><span>{reviewRow.ledgerHead || '—'}</span></div>
                       <div className={styles.field}><span className={styles.label}>Department</span><span>{reviewRow.department}</span></div>
                       <div className={styles.field}><span className={styles.label}>SD Calculation</span><Link url={reviewRow.invoiceFileUrl} /></div>
-                      <div className={styles.field}><span className={styles.label}>Quarterly Ledger</span><Link url={reviewRow.piFileUrl} /></div>
+                      <div className={styles.field}><span className={styles.label}>Quatre Ledger</span><Link url={reviewRow.piFileUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Cancelled Cheque</span><Link url={reviewRow.cancelledChequeUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Client Email Confirmation</span><Link url={reviewRow.clientEmailConfirmationUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Client Ledger</span><Link url={reviewRow.clientLedgerUrl} /></div>

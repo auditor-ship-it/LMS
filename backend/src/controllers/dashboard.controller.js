@@ -1,5 +1,6 @@
 import * as dashboardService from '../services/dashboard.service.js';
 import { buildDeployedSummaryExcel, buildMonthAllCategoriesExcel } from '../services/deployedSummaryExcel.service.js';
+import { addPoAgreementHistoryEntry } from '../services/poAgreementHistory.service.js';
 
 export async function getDeployedSummary(req, res) {
   res.json(await dashboardService.getDeployedSummaryData());
@@ -39,4 +40,18 @@ export async function getDeployedDetail(req, res) {
 
 export async function getPoAgreementTracker(req, res) {
   res.json(await dashboardService.getPoAgreementTrackerData());
+}
+
+/** POST /dashboard/po-agreement-tracker/history — explicit request
+ *  2026-11-04 (backfill form, see poAgreementHistory.service.js's own
+ *  header comment). req.user.email is the "entered by" — never trusted
+ *  from the request body, same convention every other save in this app
+ *  uses for its own actor field. */
+export async function addPoAgreementHistory(req, res) {
+  const { containerNo, leaseId, clientName, type, startDate, endDate, fileUrl, poNo } = req.body;
+  const entry = await addPoAgreementHistoryEntry({
+    containerNo, leaseId, clientName, type, startDate, endDate, fileUrl, poNo,
+    enteredBy: req.user?.email || ''
+  });
+  res.json({ message: 'SAVED', entry });
 }
