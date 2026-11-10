@@ -14,7 +14,7 @@ export async function getDeployedSummary(req, res) {
  *  comment). This returns the exact same server-built, already-highlighted
  *  file the scheduled digest email sends, as a download. */
 export async function getDeployedSummaryExport(req, res) {
-  const { buffer, filename } = await buildDeployedSummaryExcel({});
+  const { buffer, filename } = await buildDeployedSummaryExcel({ user: req.user });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(Buffer.from(buffer));
@@ -27,7 +27,7 @@ export async function getDeployedSummaryExport(req, res) {
  *  getDeployedSummaryExport above. */
 export async function getDeployedSummaryExportMonthCategories(req, res) {
   const { month, type, size } = req.query;
-  const { buffer, filename } = await buildMonthAllCategoriesExcel(month, { typeVal: type, sizeVal: size });
+  const { buffer, filename } = await buildMonthAllCategoriesExcel(month, { typeVal: type, sizeVal: size, user: req.user });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(Buffer.from(buffer));
@@ -35,7 +35,7 @@ export async function getDeployedSummaryExportMonthCategories(req, res) {
 
 export async function getDeployedDetail(req, res) {
   const { month, category, type, size } = req.query;
-  res.json(await dashboardService.getDeployedDetailData(month, category, type, size));
+  res.json(await dashboardService.getDeployedDetailData(month, category, type, size, req.user));
 }
 
 export async function getPoAgreementTracker(req, res) {

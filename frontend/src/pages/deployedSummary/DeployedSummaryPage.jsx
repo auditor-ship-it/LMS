@@ -313,6 +313,20 @@ function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, o
   const [kpiMonthIdx, setKpiMonthIdx] = useState(0);
   const currentRow = rows[kpiMonthIdx] || rows[0]; // months[] is newest-first
 
+  /* Final Billing Due — explicit request 2026-11-10 ("final billing is
+     month ka hai tho woh bhi aajaye... add kar na"): the same off-leased-
+     with-Final-Billing-Date-due containers the Excel export already red-
+     highlights, surfaced here too as a 5th KPI card with the same
+     click-through detail panel every other card already has (DeployedDetailPanel,
+     via the 'finalBilling' category — see getDeployedDetailData's own doc
+     comment). Fetched separately (not part of the summary payload) since
+     it isn't one of the month-wise movement categories. */
+  const { data: finalBillingData } = useAsync(
+    () => fetchDeployedDetail(currentRow.month, 'finalBilling', typeVal, sizeVal),
+    [currentRow.month, typeVal, sizeVal]
+  );
+  const finalBillingCount = finalBillingData?.containers?.length ?? '—';
+
   const typeOptions = types.map((t) => ({ value: t, label: t }));
   const sizeSelectOptions = sizeOptions.map((s) => ({ value: s, label: s }));
   const monthOptions = months.map((m, i) => ({ value: String(i), label: m }));
@@ -339,6 +353,10 @@ function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, o
         <StatCard icon="chev-up" tint="success" label={`${currentRow.month} Addition`} value={getVal(currentRow, 'addition', typeVal, sizeVal, types)} />
         <StatCard icon="chev-down" tint="error" label={`${currentRow.month} Deletion`} value={getVal(currentRow, 'deletion', typeVal, sizeVal, types)} />
         <StatCard icon="refresh" tint="neutral" label={`${currentRow.month} Net`} value={getVal(currentRow, 'net', typeVal, sizeVal, types)} />
+        <StatCard
+          icon="clock" tint="warn" label="Final Billing Due" value={finalBillingCount}
+          onClick={() => onSelect({ category: 'finalBilling', monthLabel: currentRow.month, typeVal, sizeVal })}
+        />
       </div>
 
       <div className={styles.filters}>
@@ -395,6 +413,18 @@ function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, o
                 {months.map((m, mIdx) => {
                   const val = getVal(rows[mIdx], grp.key, typeVal, sizeVal, types);
                   const isSelected = selection && selection.monthIdx === mIdx && selection.category === grp.key;
+                  /* Month-over-month % — explicit request 2026-11-10 ("add
+                     the %, yah month itne the tho agl mai itna bada and yah
+                     bhot itne kam hua"): only on the two "stock total" rows
+                     (Opening/Closing Deployed) — Addition/Deletion/Net are
+                     flow counts that can be zero or swing in sign, where a %
+                     of the previous value is often meaningless or undefined
+                     (divide-by-zero), unlike a running total. months[] is
+                     newest-first (see this component's own comment above),
+                     so the "previous" month is the NEXT array index. */
+                  const showPct = grp.key === 'opening' || grp.key === 'closing';
+                  const prevVal = showPct && mIdx + 1 < rows.length ? getVal(rows[mIdx + 1], grp.key, typeVal, sizeVal, types) : null;
+                  const pct = (prevVal != null && prevVal !== 0) ? ((val - prevVal) / prevVal) * 100 : null;
                   return (
                     <td key={m} className={isSelected ? styles.highlight : ''}>
                       <button
@@ -402,7 +432,12 @@ function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, o
                         className={`${styles.cellBtn} ${cellTone(grp.key, val)}`}
                         onClick={() => onSelect({ monthIdx: mIdx, category: grp.key, monthLabel: months[mIdx], typeVal, sizeVal })}
                       >
-                        {val}
+                        <span>{val}</span>
+                        {pct != null && (
+                          <span className={`${styles.pctChange} ${pct > 0 ? styles.pctUp : pct < 0 ? styles.pctDown : styles.pctFlat}`}>
+                            {pct > 0 ? '▲' : pct < 0 ? '▼' : '–'} {Math.abs(pct).toFixed(1)}%
+                          </span>
+                        )}
                       </button>
                     </td>
                   );
@@ -422,12 +457,25 @@ function DeployedDetailPanel({ selection, onClose }) {
     [selection.monthLabel, selection.category, selection.typeVal, selection.sizeVal]
   );
   const containers = data?.containers || [];
-  const catLabel = selection.category.charAt(0).toUpperCase() + selection.category.slice(1);
+  const catLabel = selection.category === 'finalBilling'
+    ? 'Final Billing Due'
+    : selection.category.charAt(0).toUpperCase() + selection.category.slice(1);
   const filterLabel = selection.typeVal ? (selection.sizeVal ? `${selection.typeVal} — ${selection.sizeVal}` : selection.typeVal) : (selection.sizeVal ? `Size: ${selection.sizeVal}` : 'All Types');
 
   const rows = containers.map((c) => ({
     row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
-    _rowNum: c.container
+    _rowNum: c.container,
+    /* Explicit follow-up 2026-11-10 ("only for example 2469156 PO No change
+       tho wahi green hoga haa and excel pe bhi green hoga"): CELL-level, not
+       row-level — getDeployedDetailData now diffs the live sheet against the
+       last saved monthly snapshot (deployedSheetSnapshot.service.js) and
+       returns changedFields, the exact lowercased column-header set that
+       actually differs for this container, same source the server-built
+       Excel export (fetchDeployedSummaryExport, Download Excel button above)
+       already highlights with. Kept off `row` itself (not a visible column)
+       and matched against DETAIL_HEADERS by index in renderRow below. */
+    changedFields: new Set(c.changedFields || []),
+    lastUpdated: c.lastUpdated
   }));
 
   const fileStamp = `${selection.monthLabel.replace(' ', '-')}-${selection.category}`;
@@ -481,7 +529,14 @@ function DeployedDetailPanel({ selection, onClose }) {
           rows={rows}
           loading={loading}
           rowKey={(r) => r._rowNum}
-          renderRow={(values) => values.map((v, i) => <td key={i}>{renderCellValue(v)}</td>)}
+          renderRow={(values, r) => values.map((v, i) => {
+            const changed = r.changedFields.has(DETAIL_HEADERS[i]?.toLowerCase());
+            return (
+              <td key={i} className={changed ? styles.recentCell : ''} title={changed ? `Changed — last updated ${r.lastUpdated}` : undefined}>
+                {renderCellValue(v)}
+              </td>
+            );
+          })}
         />
       )}
     </Card>
