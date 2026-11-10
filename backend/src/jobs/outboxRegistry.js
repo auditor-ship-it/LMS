@@ -14,6 +14,7 @@ import {
 } from '../services/offlease.service.js';
 import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending, saveRenewalDraft, completeDocStage, decideRenewalApproval } from '../services/expiry.service.js';
 import { writeHistoryRowToSheet } from '../services/poAgreementHistory.service.js';
+import { addOffLeaseRemarkSheetWrite } from '../services/offleaseRemarks.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
@@ -33,7 +34,8 @@ export const OUTBOX_REGISTRY = {
   'expiry.saveRenewalDraft': saveRenewalDraft,
   'expiry.completeDocStage': completeDocStage,
   'expiry.decideRenewalApproval': decideRenewalApproval,
-  'poAgreementHistory.writeRowToSheet': writeHistoryRowToSheet
+  'poAgreementHistory.writeRowToSheet': writeHistoryRowToSheet,
+  'offleaseRemarks.addOffLeaseRemarkSheetWrite': addOffLeaseRemarkSheetWrite
 };
 
 export function resolveReplay(kind) {
