@@ -15,6 +15,7 @@
  */
 import { getSheetData, appendRow, insertSheetIfMissing, updateRange, deleteRows } from './googleSheets.service.js';
 import { getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
+import { enqueueSheetReplay } from './outbox.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { AppError, accessDenied } from '../utils/AppError.js';
@@ -220,6 +221,19 @@ function newRemarkId() {
   return `R${Date.now().toString(36)}${remarkSeq.toString(36)}${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
 }
 
+/* MONGO-FIRST — explicit report 2026-11-10 ("this issue I am facing again
+   and again... the user should not be able to see this error, they can
+   submit and move ahead"): a remark save used to append straight to live
+   Sheets and surface a raw "Google Sheets API rate limit was hit" error the
+   instant that quota was exhausted — the exact Mongo-first + outbox-replay
+   pattern offlease.service.js's addToOffLeaseTrackingFast already uses
+   elsewhere in this same file's domain, just not yet applied here. Appends
+   to the Mongo mirror (what every reader already reads from — see
+   readAllFromMirror's own doc comment) and returns at once; the real
+   live-Sheets append is queued for the outbox worker (jobs/outboxWorker.js,
+   ~7s poll) to replay once quota allows, via addOffLeaseRemarkSheetWrite
+   below (registered in jobs/outboxRegistry.js) — same "replay the ORIGINAL
+   function" design outbox.service.js's own header comment describes. */
 export async function addOffLeaseRemark({ containerNo, leaseId, html, stage }, userEmail) {
   await assertCanRemark(userEmail);
 
@@ -231,10 +245,25 @@ export async function addOffLeaseRemark({ containerNo, leaseId, html, stage }, u
   const stageVal = stage === undefined || stage === null ? '' : safeStr(stage).trim();
   const row = [id, container, safeStr(leaseId).trim(), clean, text, dmyTime(new Date()), userEmail || '', '', stageVal];
 
+  await appendMongoMirrorRow(R_SHEET, row);
+  invalidateIndex();
+  await enqueueSheetReplay('offleaseRemarks.addOffLeaseRemarkSheetWrite', [row], { actor: userEmail });
+
+  return {
+    message: 'SAVED',
+    remark: { id, containerNo: container, leaseId: row[2], html: clean, text, timestamp: row[5], enteredBy: row[6], stage: stageVal }
+  };
+}
+
+/** The outbox replay target for addOffLeaseRemark above (registered in
+ *  jobs/outboxRegistry.js) — the real live-Sheets append only; the Mongo
+ *  mirror is already saved above via appendMongoMirrorRow, so this never
+ *  touches Mongo itself (same reasoning addToOffLeaseTrackingSheetWrite's
+ *  own doc comment gives — the next scheduled reconcile is what corrects
+ *  any drift between the Mongo row's synthetic key and wherever this append
+ *  actually lands in the live sheet). */
+export async function addOffLeaseRemarkSheetWrite(row) {
   return withSheetLock(R_SHEET, async () => {
-    /* Append first, create only on failure — creating eagerly costs a full
-       spreadsheets.get per save, and this project already exhausts the
-       per-minute read quota. */
     try {
       await appendRow(R_SHEET, row);
     } catch (e) {
@@ -242,12 +271,6 @@ export async function addOffLeaseRemark({ containerNo, leaseId, html, stage }, u
       await insertSheetIfMissing(R_SHEET, R_HEADERS);
       await appendRow(R_SHEET, row);
     }
-    await appendMongoMirrorRow(R_SHEET, row);
-    invalidateIndex();
-    return {
-      message: 'SAVED',
-      remark: { id, containerNo: container, leaseId: row[2], html: clean, text, timestamp: row[5], enteredBy: row[6], stage: stageVal }
-    };
   });
 }
 

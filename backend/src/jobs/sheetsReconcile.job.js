@@ -66,7 +66,8 @@ const META_ID = '__meta__';
 const OUTBOX_KIND_SHEET_PREFIX = {
   'offlease.': [SHEETS.OFF_LEASE_TRACKING, SHEETS.DEPLOYED],
   'expiry.': [SHEETS.DEPLOYED],
-  'poAgreementHistory.': [SHEETS.PO_AGREEMENT_HISTORY]
+  'poAgreementHistory.': [SHEETS.PO_AGREEMENT_HISTORY],
+  'offleaseRemarks.': [SHEETS.OFF_LEASE_REMARKS]
 };
 
 async function _hasPendingOutboxForSheet(sheetName) {
