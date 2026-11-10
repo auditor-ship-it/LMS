@@ -167,13 +167,23 @@ async function readAllCached() {
  * { "CONTAINER::LEASE": { latest, count } } for the dashboard, which needs one
  * lookup per record and must not read the sheet once per row.
  *
- * Dashboard-wide remarks only (blank Stage) — a remark added from a stage's
- * own detail modal belongs to that stage, not to this record-wide thread, and
- * must not silently become "the latest remark" shown on the dashboard cell.
- */
+ * BUG FOUND AND FIXED 2026-11-10 (live report — a remark saved and showed
+ * correctly in the full thread, but the dashboard's own row-level preview
+ * cell kept reading "—" even after a refresh; confirmed via the outbox log
+ * that every new remark was landing with a real Stage value, not blank):
+ * this used to count only Stage-blank rows as "dashboard-wide" — correct
+ * back when every dashboard-posted remark WAS blank-stage, but
+ * OrderBookView.jsx's own save() was changed 2026-11-05 to tag every new
+ * remark with the container's current stage at write time (explicit
+ * request, "stage difind which stage"), so a dashboard remark has carried a
+ * real stage value ever since — this filter was silently excluding every
+ * remark posted from here, forever, not just until the next refresh. Latest
+ * follow-up confirmed the actual want: "latest remarks show kar na chhaiye
+ * hai yaha pe" — the newest remark for the record, whichever stage (or
+ * none) it's tagged with, same as the full thread already shows. */
 export async function getRemarkIndex() {
   const index = {};
-  for (const r of (await readAllCached()).filter((r) => !r.stage.trim())) {
+  for (const r of await readAllCached()) {
     const k = key(r.containerNo, r.leaseId);
     const cur = index[k];
     // Append-only, so the last row for a key is the newest.

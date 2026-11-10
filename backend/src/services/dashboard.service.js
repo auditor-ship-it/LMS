@@ -13,6 +13,27 @@ import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataBy
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { getPoAgreementHistoryByContainer } from './poAgreementHistory.service.js';
+import { diffLiveAgainstSnapshot, monthKeyOf, previousMonthKey } from './deployedSheetSnapshot.service.js';
+
+/* Explicit request 2026-11-10 ("deployed sheet rate tha only show this
+   emails login only"): Rate is pricing data — isRateOrAmountHeader hides it
+   system-wide by default, with Deployed Summary's own Rate column already a
+   deliberate, EARLIER exception to that (see getDeployedDetailData's own
+   Rate comment, and deployedSummaryExcel.service.js's identical exception).
+   This narrows that exception further, to only these three logins — every
+   consumer of getDeployedDetailData/getOffLeasedWithFinalBillingDue (the
+   live web table, this page's own quick Excel/PDF export, AND both
+   server-built Excel downloads, which call these same two functions — see
+   deployedSummaryExcel.service.js) is protected from this one check, since
+   none of them have their own separate copy of the Rate value. */
+const RATE_VISIBLE_EMAILS = new Set([
+  'mansi.agarwal@crystalgroup.in',
+  'shivani.dhall@crystalgroup.in',
+  'dmo@crystalgroup.in'
+]);
+function canSeeRate(user) {
+  return RATE_VISIBLE_EMAILS.has(String(user?.email || '').trim().toLowerCase());
+}
 
 export function normalizeContainerType(rawType) {
   if (!rawType) return 'Other';
@@ -151,7 +172,27 @@ export async function getDeployedSummaryData() {
   };
 }
 
-export async function getDeployedDetailData(monthLabel, category, typeFilter, sizeFilter) {
+export async function getDeployedDetailData(monthLabel, category, typeFilter, sizeFilter, user) {
+  const rateAllowed = canSeeRate(user);
+  /* 'finalBilling' — explicit request 2026-11-10 ("final billing is month
+     ka hai tho woh bhi aajaye... add kar na"): surfaces the SAME off-leased-
+     with-Final-Billing-Date-due-this-month-or-later containers the Excel
+     export already red-highlights (getOffLeasedWithFinalBillingDue), now
+     reachable from the web page too via this same detail endpoint/panel —
+     deliberately NOT folded into 'closing' or any arithmetic category (see
+     that function's own doc comment for why: its count must never disagree
+     with getDeployedSummaryData's independently-computed KPIs). Delegates
+     entirely rather than duplicating its row-scan; Type/Size filters are
+     applied after, same as every other category below. */
+  if (category === 'finalBilling') {
+    const { containers: fb } = await getOffLeasedWithFinalBillingDue(monthLabel, user);
+    const cleanType = typeFilter ? normalizeContainerType(typeFilter).toLowerCase() : '';
+    const cleanSize = sizeFilter ? sizeFilter.toLowerCase().trim() : '';
+    const filtered = fb.filter((c) =>
+      (!cleanType || normalizeContainerType(c.type).toLowerCase() === cleanType) &&
+      (!cleanSize || String(c.size).toLowerCase().trim() === cleanSize));
+    return { containers: filtered };
+  }
   const parts = monthLabel.trim().split(' ');
   const monthStr = parts[0], year = parseInt(parts[1], 10);
   const monthOrder = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
@@ -175,20 +216,30 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   // Resolved by header (same helper getExpiryDataByFilter/completeDocStage
   // use), not a hardcoded index — this sheet's columns have shifted before.
   const { poCol, poValidityCol, cycleCol } = _resolveRenewalColumns(values[0] || []);
-  // "Last Updated" / recently-changed flag — explicit request 2026-10-27
-  // ("jo bhi edit hua hai usko highlight kar do... mai 10 din tak update
-  // kiya uske baad download kiya tho woh highlight hona chahiye"): this
-  // sheet has no true per-cell "last edited" metadata (the Sheets API
-  // doesn't expose one, and a manual edit made directly in the spreadsheet
-  // — outside this app — leaves no trace at all), so this is a PROXY: the
-  // most recent of the three timestamps this app itself actually stamps on
-  // a row (Renewal Submitted Date — every Save/Submit; Action Timestamp —
-  // every Off-Lease action; Approval Date — Pushpa's Approve/Reject). A row
-  // whose real sheet cell was hand-edited outside the app, with none of
-  // these three touched, will NOT be caught by this — the digest email
-  // says so explicitly (see deployedSummaryDigest.service.js).
-  const RECENT_DAYS = 30;
-  const recentCutoff = Date.now() - RECENT_DAYS * 86400000;
+  /* Per-container, per-FIELD "what actually changed" — explicit follow-up
+     2026-11-10 ("konse konse update hua hai 25 oct se... us col ka data ko
+     [green kar do]... PO No chnage tho wahi green hoga... excel pe bhi
+     green hoga"): replaces the old row-level date-proxy below with the SAME
+     real snapshot diff the Excel export already highlights with (see
+     deployedSummaryExcel.service.js's own changedFieldsByContainer) — only
+     the specific cell(s) that actually differ light up, on the web table
+     exactly like the Excel file, not a whole-row guess. Diffed against the
+     most recent saved monthly snapshot before the current one (see
+     deployedSheetSnapshot.service.js's diffLiveAgainstSnapshot doc comment
+     for why there's no snapshot dated exactly "25 Oct" but the real one is
+     close). Best-effort — no snapshot yet (or a read failure) degrades to
+     no highlighting at all, never a wrong one. */
+  const changedFieldsByContainer = new Map();
+  try {
+    const diff = await diffLiveAgainstSnapshot(previousMonthKey(monthKeyOf(new Date())));
+    if (diff.ok) {
+      for (const { container, fieldChanges } of diff.changed) {
+        if (!changedFieldsByContainer.has(container)) changedFieldsByContainer.set(container, new Set());
+        const set = changedFieldsByContainer.get(container);
+        for (const fc of fieldChanges) set.add(String(fc.header || '').trim().toLowerCase());
+      }
+    }
+  } catch (e) { /* additive — a diff failure must not break the detail table itself */ }
 
   const cleanType = typeFilter ? normalizeContainerType(typeFilter).toLowerCase() : '';
   const cleanSize = sizeFilter ? sizeFilter.toLowerCase().trim() : '';
@@ -235,7 +286,7 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
       location: safeStr(row[4]),     // E = Location
       deployedDate: safeStr(row[6]), // G = Deployed Date
       validUpto: safeStr(row[7]),    // H = Valid Upto
-      rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate
+      rate: rateAllowed ? (typeof row[13] === 'number' ? row[13] : 0) : '', // N = Rate — see canSeeRate
       billingType: safeStr(row[16]), // Q = Billing Type
       billingCycle: safeStr(row[cycleCol]),
       agreementUrl: safeStr(row[8]), // I = Agreement PDF
@@ -245,7 +296,11 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
       movement,
       offLeaseDate: movement === 'Deletion' ? safeStr(row[21]) : '', // V = Action TS
       lastUpdated: lastUpdatedDate ? safeStr(lastUpdatedDate) : '',
-      recentlyUpdated: !!(lastUpdatedDate && lastUpdatedDate.getTime() >= recentCutoff)
+      // Lowercased header names that actually differ from the last saved
+      // snapshot (see changedFieldsByContainer above) — [] when nothing
+      // changed or no snapshot/diff was available.
+      changedFields: [...(changedFieldsByContainer.get(safeStr(row[0])) || [])],
+      recentlyUpdated: changedFieldsByContainer.has(safeStr(row[0]))
     });
   }
 
@@ -277,7 +332,8 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
  * fills these rows' whole row BACKGROUND — explicit request 2026-10-27
  * "data shoe ho par background row red dikhe" — not the text/font color).
  */
-export async function getOffLeasedWithFinalBillingDue(monthLabel) {
+export async function getOffLeasedWithFinalBillingDue(monthLabel, user) {
+  const rateAllowed = canSeeRate(user);
   const parts = monthLabel.trim().split(' ');
   const monthStr = parts[0], year = parseInt(parts[1], 10);
   const monthOrder = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
@@ -337,7 +393,7 @@ export async function getOffLeasedWithFinalBillingDue(monthLabel) {
       location: safeStr(row[4]),     // E = Location
       deployedDate: safeStr(row[6]), // G = Deployed Date
       validUpto: safeStr(row[7]),    // H = Valid Upto
-      rate: typeof row[13] === 'number' ? row[13] : 0, // N = Rate (Deployed sheet's own col 13 — unrelated to Off-Lease Tracking's own col 13 used above)
+      rate: rateAllowed ? (typeof row[13] === 'number' ? row[13] : 0) : '', // N = Rate (Deployed sheet's own col 13 — unrelated to Off-Lease Tracking's own col 13 used above) — see canSeeRate
       billingType: safeStr(row[16]), // Q = Billing Type
       billingCycle: safeStr(row[cycleCol]),
       agreementUrl: safeStr(row[8]), // I = Agreement PDF
