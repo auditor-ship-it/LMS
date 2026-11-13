@@ -165,14 +165,20 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      for the container) completely unscoped, so OF0048/Kirloskar — which
      has never even reached Stage 6 — showed OF0090/Zenfold's real pending
      refund as its own. Scoped here once, reused everywhere below instead of
-     the raw `sdRefunds`. Falls back to the unscoped list only when there's
-     exactly ONE entry for the whole container (legacy data submitted
-     before offLeaseId was captured) — same fallback rule used in today's
-     other two fixes. */
+     the raw `sdRefunds`.
+     SECOND BUG FOUND AND FIXED 2026-11-10 (explicit report, same
+     TRIU6617353/OF0048, reached via ContainerDetailPage.jsx's inline Stage
+     6 — see ContainerDetailPage.jsx's own `refund` doc comment for the
+     identical mistake found there first): the "exactly one entry for the
+     whole container" fallback fired even when that one entry carried an
+     EXPLICIT, non-matching offLeaseId (Zenfold's own OF0090) — it was meant
+     only for genuinely ambiguous legacy data (no offLeaseId captured at
+     all). An entry tagged for a different, real lease can never belong to
+     this one, so it must not be borrowed either. */
   const scopedSdRefunds = sdRefunds == null ? sdRefunds : (() => {
     const exact = sdRefunds.filter((r) => r.offLeaseId && data?.col_1 && r.offLeaseId === data.col_1);
     if (exact.length) return exact;
-    return sdRefunds.length === 1 ? sdRefunds : [];
+    return (sdRefunds.length === 1 && !sdRefunds[0].offLeaseId) ? sdRefunds : [];
   })();
 
   /* Stage 7 (Payment Status)'s "Voucher Raised" — explicit request
@@ -639,13 +645,18 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
               )}
 
               {stageNumber === BILLING_STAGE && (
-                <>
-                  <CostReferencePanel inspectionCost={data?._inspectionCost} />
+                <CollapsibleSection title="Reference Data (Stage 1-4)">
+                  <CostReferencePanel
+                    inspectionCost={data?._inspectionCost}
+                    inspectionPoints={data?._inspectionPoints}
+                    machinePoints={data?._machinePoints}
+                    technician={data?._technician}
+                  />
                   <TransportInvoiceNote invoice={data?._transportInvoice} />
                   <InspectionReferenceTable title="Container Inspection Checklist" points={data?._inspectionPoints} />
                   <InspectionReferenceTable title="Machine Check" points={data?._machinePoints} />
                   <Stage1DataNote data={data?._stage1Data} />
-                </>
+                </CollapsibleSection>
               )}
 
               {/* Stage 7 (Payment Status, internal 8) — explicit request
@@ -883,7 +894,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>
                   {readOnly ? 'Close' : 'Cancel'}
                 </Button>
-                {!readOnly && stageNumber === BILLING_STAGE && !data?._skipped && canAct('offlease5') && (
+                {/* REWORKED AGAIN 2026-11-13 (explicit, repeated request:
+                    "form nahi bhi fill kiya na tho bhi dikh na chahiye hai
+                    Send Back to Stage 1" — show it even when Stage 5 was
+                    never filled in/saved at all). Always offered now,
+                    whatever Stage 5's own completion state is; the backend
+                    (saveOffLeaseSendBackFromBilling) was relaxed to match —
+                    it no longer requires Stage 5 to already have a status,
+                    see that function's own doc comment. */}
+                {stageNumber === BILLING_STAGE && !data?._skipped && canAct('offlease5') && (
                   <Button type="button" variant="secondary" disabled={busy} onClick={() => setSendBackOpen(true)}>
                     Send Back to Stage 1
                   </Button>
@@ -960,6 +979,12 @@ const REPORT_STAGES = [3, 5];
 /** Final Billing (internally stage 5, shown as Stage 5) — the person
  *  reconciling needs the container's actual invoices in front of them. */
 const BILLING_STAGE = 5;
+
+/** Stage 5's own status cell — matches OL_STAGE_INFO[5].statusCol (44) on
+ *  the backend exactly, and is always present on `data` since it's inside
+ *  that stage's startCol..endCol range (getOffLeaseStageDetail's generic
+ *  per-stage loop). */
+const BILLING_STATUS_COL = 'col_44';
 
 /** Payment Status (internally stage 8, shown as Stage 7 since SD Refunds was
  *  inserted before it 2026-10-01 — see constants/stages.js's WORKFLOW).
@@ -1249,9 +1274,71 @@ function OutstandingPanel({ data, loading }) {
  * has to Stage 1's intimation decision. Transport Cost (Stage 9 Freight)
  * removed from here 2026-09-18 (explicit request).
  */
-function CostReferencePanel({ inspectionCost }) {
+/**
+ * Collapsed by default — explicit request 2026-11-13 ("data hai na stage
+ * wise dikho and hide karo and ^ yah click kiya tho for data dikhe nahi tho
+ * nahi", pointing at this exact Stage 5 reference block): the Cost
+ * Reference / Transportation Invoice / Inspection Checklist / Machine Check
+ * / Stage 1 Data cards together are a long wall of read-only reference
+ * data on a page whose actual job is filling in Stage 5's own form — shown
+ * only on a click now, same boxed-chevron accordion affordance
+ * FmsGroupCard above already uses, just collapsed-by-default instead of
+ * open-by-default (FmsGroupCard's own doc comment explains why IT opens by
+ * default — this is the opposite case: hiding data behind a click the
+ * FIRST time you look is exactly what's wanted here).
+ */
+function CollapsibleSection({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className={styles.fmsGroup} style={{ marginBottom: 16 }}>
+      <button type="button" className={styles.fmsGroupTitle} aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className={`${styles.fmsChevron} ${open ? styles.fmsChevronOpen : ''}`} aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 9.5l6 6 6-6" />
+          </svg>
+        </span>
+        {title}
+      </button>
+      {open && <div className={styles.fmsFields}>{children}</div>}
+    </section>
+  );
+}
+
+/** Same shape/filter as lookupModel.js's own buildEstimateTotals (every
+ *  point with an ESTIMATE > 0, regardless of status, plus technician
+ *  labour) — explicit request 2026-11-13 ("yah table bhi show karega",
+ *  pointing at this card's single-figure total and asking for the SAME
+ *  itemised "Repair Estimate Summary" breakdown the Off-Lease Lookup
+ *  report already shows for this exact row). Kept local rather than
+ *  importing lookupModel.js's version — that one reads a different shape
+ *  (result.stages[].inspection/machine/technician from the Lookup API),
+ *  this one reads StageDetailModal's own _inspectionPoints/_machinePoints/
+ *  _technician fields. */
+function buildCostReferenceLines(inspectionPoints, machinePoints, technician) {
+  const lines = [];
+  for (const [points, section] of [[inspectionPoints, 'Inspection'], [machinePoints, 'Machine Check']]) {
+    for (const p of points || []) {
+      const amount = parseCostFigure(p.estimate) || 0;
+      if (amount > 0) lines.push({ section, item: p.item, status: p.status, remark: p.remark, amount });
+    }
+  }
+  const techCost = technician ? (parseCostFigure(technician.cost) || 0) : 0;
+  const techHours = technician ? (parseCostFigure(technician.hours) || 0) : 0;
+  if (technician && (techCost > 0 || techHours > 0)) {
+    lines.push({
+      section: 'Labour',
+      item: `Technician (${technician.hours || 0} hr @ ${Number(technician.rate || 0).toLocaleString('en-IN')}/hr)`,
+      status: '', remark: '', amount: techCost
+    });
+  }
+  if (!lines.length) return null;
+  return { lines, total: lines.reduce((sum, l) => sum + l.amount, 0) };
+}
+
+function CostReferencePanel({ inspectionCost, inspectionPoints, machinePoints, technician }) {
   const i = parseCostFigure(inspectionCost);
   const inr = (n) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  const summary = buildCostReferenceLines(inspectionPoints, machinePoints, technician);
 
   return (
     <>
@@ -1262,7 +1349,7 @@ function CostReferencePanel({ inspectionCost }) {
         reference while reconciling, not saved anywhere on this form.
       </p>
       <div className={styles.outstandingRow}>
-        <div className={styles.outstandingCard}>
+        <div className={`${styles.outstandingCard} ${styles.outstandingCardSm}`}>
           <span className={styles.outstandingLabel}>Inspection / Repair Estimate</span>
           {/* No usable figure (blank cell, "NA", or no checklist/Gate-In data
               at all) reads as "no repair cost", not "unknown" — shown as ₹0,
@@ -1270,6 +1357,34 @@ function CostReferencePanel({ inspectionCost }) {
           <span className={styles.outstandingValue}>{inr(i ?? 0)}</span>
         </div>
       </div>
+      {summary && (
+        <div className={styles.inspWrap}>
+          <p className={styles.sectionHint}>Repair Estimate Summary</p>
+          <table className={styles.inspTable}>
+            <thead>
+              <tr>
+                <th>Section</th><th>Item</th><th>Condition</th><th>Remarks</th><th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.lines.map((l, idx) => (
+                <tr key={idx}>
+                  <td>{l.section}</td>
+                  <td>{l.item}</td>
+                  <td>{l.status || '—'}</td>
+                  <td>{l.remark || '—'}</td>
+                  <td>{inr(l.amount)}</td>
+                </tr>
+              ))}
+              <tr>
+                <td><strong>Total Estimate</strong></td>
+                <td /><td /><td />
+                <td><strong>{inr(summary.total)}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }

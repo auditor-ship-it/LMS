@@ -122,6 +122,29 @@
 .pctDown { color: var(--error); }
 .pctFlat { color: var(--text-3); }
 
+/* View 1 / View 2 toggle — same pattern the Off-Lease Pipeline Dashboard
+   already uses for its own two presentations. */
+.sectionHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.sectionHeadRow .sectionTitle { margin: 0; }
+.viewToggle { display: flex; gap: 4px; }
+.viewBtn {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.viewBtnActive { background: var(--accent); border-color: var(--accent); color: var(--text-inv); }
+
+
 /* Recently-updated row (last 30 days — see DeployedDetailPanel's own
    comment) — green, explicit request 2026-11-10. */
 .recentCell { background: var(--success-bg); }

@@ -209,3 +209,30 @@
   font-weight: 600;
   margin: 0 0 12px;
 }
+
+/* Bulk SD Refund selection — explicit request 2026-11-10 ("MULTIPLE SELCT
+   KAR KE EK HI FROM FIR KAR NA HAI"): a checkbox column (shown only while
+   filtered to SD Refunds) and the bar that appears once at least one row is
+   checked. */
+.selectCol { width: 28px; }
+.bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+}
+.bulkBarCount { font-weight: 700; color: var(--accent); }
+
+.bulkEntryList ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.bulkEntryList li { padding: 2px 0; }

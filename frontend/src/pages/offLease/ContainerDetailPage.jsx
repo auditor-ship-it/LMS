@@ -127,10 +127,16 @@ export function ContainerDetailPage({ isActive }) {
      on TRIU6617353): the old `!e.offLeaseId || e.offLeaseId === leaseId`
      fallback matched the first entry with a BLANK offLeaseId regardless of
      which lease it actually belonged to, so OF0048/Kirloskar showed
-     OF0090/Zenfold's real pending refund as its own. Falls back to the
-     unscoped list only when there's exactly ONE entry for the whole
-     container (legacy data submitted before offLeaseId was captured) —
-     same fallback rule used in today's other fixes. */
+     OF0090/Zenfold's real pending refund as its own.
+     SECOND BUG FOUND AND FIXED 2026-11-10 (explicit report, same
+     TRIU6617353/OF0048): the "exactly one entry" fallback above was ALSO
+     wrong — it fired whenever the container had just one refund row at
+     all, even when that one row carried an explicit, non-matching
+     offLeaseId (here, Zenfold's own OF0090 entry — Kirloskar's OF0048 has
+     never had a refund raised). A single entry is only genuinely ambiguous
+     "legacy data" when it has NO offLeaseId tag at all; one with a real,
+     different lease ID can only belong to that OTHER lease, never this
+     one, so this record should show no refund instead of borrowing it. */
   const { data: refundEntries, reload: reloadRefund } = useAsync(
     () => (container ? getSdRefundsForContainer(container) : Promise.resolve([])),
     [container]
@@ -139,7 +145,7 @@ export function ContainerDetailPage({ isActive }) {
     if (!refundEntries) return null;
     const exact = leaseId ? refundEntries.filter((e) => e.offLeaseId && e.offLeaseId === leaseId) : [];
     if (exact.length) return exact[0];
-    return refundEntries.length === 1 ? refundEntries[0] : null;
+    return (refundEntries.length === 1 && !refundEntries[0].offLeaseId) ? refundEntries[0] : null;
   })();
 
   /* Agreement/PO PDF links — explicit request 2026-11-05 ("show all
@@ -237,8 +243,13 @@ export function ContainerDetailPage({ isActive }) {
      refunds.service.js's _isCeoRequired) — before Payment Status (7) can
      start. A rejection stops the chain, so none of them is "current" then. */
   const sdDone = stages.find((x) => x.stage === SD_REFUNDS_INTERNAL)?.done;
+  /* 'Sent Back' (explicit request 2026-11-13, RefundDecisionPanel.jsx's own
+     Send Back button) is terminal for THIS refund entry, same as 'Rejected'
+     — see refunds.service.js's _mapRow isTerminal for the matching backend
+     logic this must stay in step with. */
+  const isRefundTerminal = (s) => s === 'Rejected' || s === 'Sent Back';
   const approvalCurrent = !(sdDone && refund) ? null
-    : (refund.hodStatus === 'Rejected' || refund.accountsStatus === 'Rejected' || (refund.ceoRequired && refund.ceoStatus === 'Rejected')) ? null
+    : (isRefundTerminal(refund.hodStatus) || isRefundTerminal(refund.accountsStatus) || (refund.ceoRequired && isRefundTerminal(refund.ceoStatus))) ? null
       : refund.hodStatus !== 'Approved' ? '6a'
         : refund.accountsStatus !== 'Approved' ? '6b'
           : (refund.ceoRequired && refund.ceoStatus !== 'Approved') ? '6c' : null;
@@ -302,7 +313,7 @@ export function ContainerDetailPage({ isActive }) {
       const status = key === 'hod' ? refund?.hodStatus : key === 'accounts' ? refund?.accountsStatus : refund?.ceoStatus;
       const date = key === 'hod' ? refund?.hodDate : key === 'accounts' ? refund?.accountsDate : refund?.ceoDate;
       const curKey = key === 'hod' ? '6a' : key === 'accounts' ? '6b' : '6c';
-      const tone = status === 'Approved' ? 'done' : status === 'Rejected' ? 'rejected' : approvalCurrent === curKey ? 'current' : 'future';
+      const tone = status === 'Approved' ? 'done' : (status === 'Rejected' || status === 'Sent Back') ? 'rejected' : approvalCurrent === curKey ? 'current' : 'future';
       const caption = tone === 'done' || tone === 'rejected' ? status : tone === 'current' ? 'Awaiting decision' : 'Pending';
       return { short, name, tone, caption, date: tone === 'done' || tone === 'rejected' ? date : null };
     }
@@ -691,7 +702,7 @@ export function ContainerDetailPage({ isActive }) {
                     key={label}
                     type="button"
                     title={`Stage ${label} (${who}) — ${status || 'Pending'}`}
-                    className={`${styles.railDot} ${status === 'Approved' || status === 'Skipped' ? styles.railDone : status === 'Rejected' ? styles.railRejected : approvalCurrent === label.toLowerCase() ? styles.railCurrent : ''}`}
+                    className={`${styles.railDot} ${status === 'Approved' || status === 'Skipped' ? styles.railDone : status === 'Rejected' || status === 'Sent Back' ? styles.railRejected : approvalCurrent === label.toLowerCase() ? styles.railCurrent : ''}`}
                     onClick={() => openRefund(which)}
                   >
                     {label}
@@ -794,8 +805,8 @@ function OverviewCard({ stage: s, isCurrent, onOpen }) {
 /** Stage 6A (HOD) / 6B (CEO): the approval decisions on this record's SD Refund.
  *  Read-only here — the deciding happens on the Off-Lease 6A / 6B tabs. */
 function ApprovalCard({ id, label, title, status, by, on, remarks, submitted, waiting, current, onOpen }) {
-  const state = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : status === 'Skipped' ? 'Skipped' : 'Pending';
-  const tone = state === 'Approved' || state === 'Skipped' ? styles.cDone : state === 'Rejected' ? styles.cRejected : current ? styles.cCurrent : styles.cLocked;
+  const state = status === 'Approved' ? 'Approved' : status === 'Rejected' ? 'Rejected' : status === 'Sent Back' ? 'Sent Back' : status === 'Skipped' ? 'Skipped' : 'Pending';
+  const tone = state === 'Approved' || state === 'Skipped' ? styles.cDone : state === 'Rejected' || state === 'Sent Back' ? styles.cRejected : current ? styles.cCurrent : styles.cLocked;
   return (
     <div
       id={id}

@@ -21,6 +21,7 @@ import ssoRoutes from './routes/sso.routes.js';
 import refundsRoutes from './routes/refunds.routes.js';
 import refundReviewRoutes from './routes/refundReview.routes.js';
 import renewalReminderLinkRoutes from './routes/renewalReminderLink.routes.js';
+import whatsappReportRoutes from './routes/whatsappReport.routes.js';
 
 /**
  * Lease Management's own, standalone backend — a narrower copy of the
@@ -103,6 +104,10 @@ export function createApp() {
   // No-login, signed-link renewal reminder action (Renew/Off-Lease) — same
   // posture as /api/refund-review above. See renewalReminderLink.routes.js.
   app.use('/api/renewal-reminder-link', renewalReminderLinkRoutes);
+  // Daily WhatsApp Report admin API (QR link, settings, preview, send now) —
+  // admin-only via requirePermission('whatsappReportAdmin') inside the
+  // router itself, same pattern as dashboardRoutes. See routes/whatsappReport.routes.js.
+  app.use('/api/whatsapp-report', whatsappReportRoutes);
   // Public, read-only, key-gated — no LMS session/login involved. See
   // publicApiAuth.middleware.js + routes/public.routes.js for the auth model.
   app.use('/api/public/v1', publicRoutes);

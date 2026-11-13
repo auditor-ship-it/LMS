@@ -76,6 +76,7 @@ import { saveDeployedSheetSnapshotIfNeeded } from '../services/deployedSheetSnap
 import { sendRenewalReminderDigest } from '../services/renewalReminderDigest.service.js';
 import { expireOldHolds } from '../services/offlease.service.js';
 import { sendOffLeaseStageDigest } from '../services/offLeaseStageDigest.service.js';
+import { schedulerTick } from '../services/dailyWhatsappReportService.js';
 import { logger } from '../utils/logger.js';
 
 function safeRun(name, fn) {
@@ -219,4 +220,23 @@ export function registerSheetsSync() {
   logger.info('[SYNC] Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
   logger.info('[SYNC] STAGE-8/9/10 application cache warm registered (every 5 min, offset :04)');
   logger.info('[SYNC] Transportation "Client to Client" pending-DO check registered (every 5 min, offset :05)');
+}
+
+/**
+ * Daily WhatsApp Report scheduler — gated behind its OWN env.enableWhatsappReport
+ * flag (default OFF), independent of ENABLE_CRON/ENABLE_SHEETS_SYNC above:
+ * this feature is opt-in per the task's explicit instruction ("nothing
+ * auto-sends until the user explicitly enables it"), not folded into the
+ * existing automation gates.
+ *
+ * A plain every-minute node-cron tick, simpler than the wa-kit reference's
+ * own setTimeout-based bootstrap — schedulerTick() itself only actually
+ * sends once an IST HH:MM send-time slot (settings.sendTimes) is due and
+ * settings.enabled is true (see dailyWhatsappReportService.js), so running
+ * the check every minute costs nothing beyond one cheap Mongo read on a
+ * minute it isn't due.
+ */
+export function registerWhatsappReportScheduler() {
+  cron.schedule('* * * * *', safeRun('dailyWhatsappReportScheduler', schedulerTick));
+  logger.info('[WHATSAPP-REPORT] Daily WhatsApp Report scheduler registered (checks every minute for a due IST send time)');
 }
