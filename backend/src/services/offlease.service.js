@@ -80,7 +80,6 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { checkActionPermission, userHasAction } from './permissions.service.js';
 import { sendMail } from './email.service.js';
-import { extractFileId, downloadFromDrive } from './googleDrive.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getCollection } from './mongo.service.js';
 import { getSheetDataFromMongo, getMongoRowsWithKeys, appendMongoMirrorRow } from './mongoSheetData.service.js';
@@ -308,6 +307,19 @@ function _olIsFaultStatus(status) {
  * Gate-In form's free-text budget guess unless this returns null — this is
  * the app's own structured, numeric-typed data and takes priority over a
  * hand-typed note that is "NA" for the overwhelming majority of containers.
+ *
+ * BUG FOUND AND FIXED 2026-11-13 (explicit report, "ismein technician
+ * charge nahi add hua hai" — Stage 5's own Cost Reference card undercounting):
+ * this never added Technician Cost (OL_TECHNICIAN_COST_COL) into the total,
+ * even though frontend/src/pages/offLease/lookupModel.js's own
+ * buildEstimateTotals — the SAME "Repair Estimate" figure shown on the
+ * Off-Lease Lookup report/PDF/Excel for this exact row — always has. The two
+ * totals disagreed by however much technician labour cost for any container
+ * with hours entered. Technician cost counts here on its own (hours > 0 OR
+ * cost > 0), independent of whether any checklist POINT was faulted — a
+ * container can have real technician labour logged with every point marked
+ * Good, same as buildEstimateTotals' own `tech && (techAmount > 0 ||
+ * amountOf(tech.hours) > 0)` condition.
  */
 function _olInspectionEstimateTotal(row) {
   let total = 0;
@@ -319,6 +331,14 @@ function _olInspectionEstimateTotal(row) {
     const n = Number(raw.replace(/,/g, ''));
     if (Number.isFinite(n)) { total += n; has = true; }
   }
+  const hoursRaw = safeStr(row[OL_TECHNICIAN_HOURS_COL]).trim();
+  const costRaw = safeStr(row[OL_TECHNICIAN_COST_COL]).trim().replace(/,/g, '');
+  const hours = Number(hoursRaw);
+  const cost = Number(costRaw);
+  if ((Number.isFinite(hours) && hours > 0) || (Number.isFinite(cost) && cost > 0)) {
+    if (Number.isFinite(cost)) total += cost;
+    has = true;
+  }
   return has ? total : null;
 }
 
@@ -327,43 +347,6 @@ function _olInspectionEstimateTotal(row) {
 function _olMoney(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : safeStr(v);
-}
-
-/**
- * The "Repair Estimate Summary" breakdown — same shape and same filter as
- * frontend/src/pages/offLease/lookupModel.js's buildEstimateTotals (every
- * point with an ESTIMATE > 0, regardless of status, plus technician labour),
- * so the Stage 4 submission email shows the identical summary the Off-Lease
- * Lookup report/PDF/Excel export already build from this same row. Kept
- * separate from _olInspectionEstimateTotal just above, which filters by FAULT
- * STATUS instead — the two totals can legitimately differ (a stray estimate
- * on a non-fault row, or a fault with no figure entered yet) and this
- * function must match the on-screen report exactly, not that older total.
- */
-function _olEstimateSummaryLines(row) {
-  const lines = [];
-  for (const [points, section] of [[OL_INSPECTION_POINTS, 'Inspection'], [OL_MACHINE_POINTS, 'Machine Check']]) {
-    for (const p of points) {
-      const amount = Number(safeStr(row[p.estimate]).replace(/,/g, '').trim());
-      if (Number.isFinite(amount) && amount > 0) {
-        lines.push({ section, item: p.item, status: safeStr(row[p.status]), remark: safeStr(row[p.remark]), amount });
-      }
-    }
-  }
-
-  const hours = safeStr(row[OL_TECHNICIAN_HOURS_COL]);
-  const techCost = Number(safeStr(row[OL_TECHNICIAN_COST_COL]).replace(/,/g, '').trim());
-  if ((Number.isFinite(techCost) && techCost > 0) || (Number(hours) > 0)) {
-    lines.push({
-      section: 'Labour',
-      item: `Technician (${hours || 0} hr @ ${_olMoney(OL_TECHNICIAN_RATE_PER_HOUR)}/hr)`,
-      status: '', remark: '',
-      amount: Number.isFinite(techCost) ? techCost : 0
-    });
-  }
-
-  if (!lines.length) return null;
-  return { lines, total: lines.reduce((sum, l) => sum + l.amount, 0) };
 }
 
 /**
@@ -414,8 +397,21 @@ const OL_INSPECTION_COL_SET = new Set([
   ...OL_STAGE3_INSPECTION_COLS, ...OL_STAGE3_MACHINE_COLS, ...OL_STAGE3_CABIN_COLS
 ]);
 
+/** Stage 3's (Inspection Checklist, UI "Stage 4") "Email ID" — explicit
+ *  request 2026-11-13: a compulsory field on the form, the submission's
+ *  notification email goes TO this address (see
+ *  _sendOffLeaseInspectionEmail's own doc comment for the simplified
+ *  Container No / Client Name / Total Billing content that request also
+ *  asked for). Outside Stage 3's own startCol..endCol range (24-28), same
+ *  reasoning as every other *_COL constant above — folded into
+ *  OL_STAGE3_EXTRA_COLS below so it reads/merges automatically alongside
+ *  every other Stage 3 field, no separate wiring needed (see
+ *  OL_BILLING_LEDGER_COL's own doc comment for why that's enough). */
+const OL_STAGE3_EMAIL_COL = 358;
+
 const OL_STAGE3_EXTRA_COLS = [
   136, 137, 138, 139, 140, 141,
+  OL_STAGE3_EMAIL_COL,
   ...OL_STAGE3_INSPECTION_COLS,
   ...OL_STAGE3_MACHINE_COLS,
   ...OL_STAGE3_CABIN_COLS
@@ -3015,6 +3011,23 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
 
       result._inspectionEstimateTotal = _olInspectionEstimateTotal(row);
 
+      /* Technician labour (hours/rate/cost), outside Stage 5's own
+       * startCol..endCol range (29-44) — explicit follow-up 2026-11-13
+       * ("yah table bhi show karega", pointing at the Cost Reference card's
+       * single-figure total and asking for the FULL itemised breakdown
+       * table, same "Repair Estimate Summary" shape the Off-Lease Lookup
+       * report already builds via lookupModel.js's buildEstimateTotals).
+       * Same shape that function reads (`stage3.technician`) and the one
+       * getOffLeaseContainerDetail already exposes at line ~6221 below for
+       * its own report view — reused here so CostReferencePanel.jsx can
+       * build the identical table without a second backend shape to keep in
+       * sync. */
+      result._technician = {
+        hours: fmtNumCell(row[OL_TECHNICIAN_HOURS_COL]),
+        rate: OL_TECHNICIAN_RATE_PER_HOUR,
+        cost: fmtNumCell(row[OL_TECHNICIAN_COST_COL])
+      };
+
       /* Full Stage 4 Inspection Checklist + Machine Check, read-only, for
          Billing Reconciliation — explicit request 2026-09-18: the estimate
          total above wasn't enough, the reconciler wants to see every point.
@@ -3524,6 +3537,71 @@ export async function markOffLeaseSdRefundApproved(containerNo, note, offLeaseId
     // retried (re-approving isn't possible once CEO-approved, so this would
     // need a manual sheet fix if it ever genuinely fails).
     console.error('[OL-SD-REFUND] Could not mark stage 11 complete for', containerNo, ':', e?.message || e);
+  }
+}
+
+/**
+ * Resets Stage 6 (SD Refunds, internal 11) back to BLANK for this container
+ * — explicit request 2026-11-13 ("reject and send back karenge na tho na
+ * stage 6 pe pending dikhe", confirmed live on TRIU6681671/OF0038: HOD
+ * rejected the SD Refund, but the Off-Lease Tracking row's own Stage 6
+ * status stayed 'Submitted' forever, so the container never came back into
+ * Stage 6's own pending queue (getOffLeaseData(11, ...) only lists blank-
+ * status rows — see that function's own stage-11 branch) for a corrected
+ * bill to be resubmitted. Called from refunds.service.js's
+ * decideRefundApproval the moment a linked SD Refund entry is REJECTED at
+ * any stage (HOD/Accounts/CEO), mirroring markOffLeaseSdRefundApproved's own
+ * call site and offLeaseId-scoping logic exactly.
+ *
+ * ALSO called from decideRefundSendBack (explicit request 2026-11-13,
+ * "Send Back" — a separate action from Reject, see that function's own doc
+ * comment) — Reject deliberately does NOT reset Stage 6 (a rejected bill
+ * stays closed, no resubmission), Send Back does. Despite the name, this
+ * function's own job is just "release Stage 6 back to pending because this
+ * bill is done and won't be revisited" — both callers want exactly that.
+ *
+ * Only resets a row sitting at 'Submitted' — never 'Completed' (an already
+ * fully-approved refund can't later be "rejected"; nothing in the decision
+ * chain allows that) and never blank (nothing to reset). Best-effort, same
+ * reasoning as the two functions above: a failure here must never fail the
+ * rejection itself.
+ */
+export async function markOffLeaseSdRefundRejected(containerNo, offLeaseId) {
+  const info = OL_STAGE_INFO[11];
+  try {
+    await withSheetLock(OL_SHEET, async () => {
+      const { rows } = await getSheetData(OL_SHEET);
+      const want = normKey(containerNo);
+      const updates = [];
+      const mirrorOps = [];
+      // Same Lease ID scoping fix as markOffLeaseSdRefundSubmitted/Approved
+      // above — see markOffLeaseSdRefundSubmitted's own doc comment.
+      const matchingRowCount = rows.filter((r) => normKey(r[0]) === want).length;
+      const wantLease = offLeaseId ? normKey(offLeaseId) : '';
+      rows.forEach((row, i) => {
+        if (normKey(row[0]) !== want) return;
+        if (wantLease && matchingRowCount > 1 && normKey(row[1]) !== wantLease) return;
+        if (safeStr(row[info.statusCol]).trim() !== 'Submitted') return; // blank (nothing to reset) or Completed (never reject after approved)
+        const rn = i + 2;
+        updates.push(
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 2)}${rn}`, values: [['']] },
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol - 1)}${rn}`, values: [['']] },
+          { range: `'${OL_SHEET}'!${colLetter(info.statusCol)}${rn}`, values: [['']] }
+        );
+        mirrorOps.push({ key: `row_${i}`, patch: { [`row.${info.statusCol - 2}`]: '', [`row.${info.statusCol - 1}`]: '', [`row.${info.statusCol}`]: '' } });
+      });
+      if (!updates.length) return;
+      await batchUpdateValues(updates);
+      for (const op of mirrorOps) {
+        await getCollection(OL_SHEET).updateOne({ key: op.key }, { $set: { ...op.patch, updatedAt: new Date() } }).catch((e) => {
+          console.error('[OL-SD-REFUND] mirror patch failed (reconcile will correct):', e?.message || e);
+        });
+      }
+      // Same cache-bust gap as markOffLeaseSdRefundSubmitted/Approved above.
+      cacheRemove(`mongo_raw_v1:${OL_SHEET}`);
+    });
+  } catch (e) {
+    console.error('[OL-SD-REFUND] Could not reset stage 11 after rejection for', containerNo, ':', e?.message || e);
   }
 }
 
@@ -5022,168 +5100,71 @@ async function _sendOffLeaseQuotationEmail(rn, data, row) {
 }
 
 /**
- * Stage 4 (Inspection Checklist, internal stage 3) submission notification —
- * explicit request 2026-09-29: send Pushpa Shetty and Shivani Dhall every
- * checklist answer, the per-point repair estimates, the photo for each
- * faulted point, and the total estimated repair cost, the moment this form
- * is saved. `row` = the pre-save row (identity columns never change in a
- * Stage 3 save); `mergedRow` = that same row with this submission's own
- * payload overlaid on top of the Stage 3 column range, so the email reflects
+ * Stage 4 (Inspection Checklist, internal stage 3) submission notification.
+ *
+ * REWORKED 2026-11-13 (explicit request: "add the emails id type
+ * complusory this emails type and submitted the from and only stage 4
+ * continer no client name and insepectio n reprt total billing yah send
+ * hoga emails pe and na cc mai pushpa shivani and crm and mansi hogi") —
+ * replaces the original 2026-09-29 version (full checklist + per-point
+ * photos + technician cost, to Pushpa/Shivani only). Now:
+ *   - TO is the inspector's own "Email ID" (col_358, OL_STAGE3_EMAIL_COL —
+ *     a new compulsory field on this stage's form, see stageFields.js).
+ *   - CC is Pushpa, Shivani, CRM and Mansi (same 4 desks the other Off-Lease
+ *     digests already copy — see e.g. deployedSummaryDigest.service.js's own
+ *     REPORT_RECIPIENTS).
+ *   - Content is ONLY Container No, Client Name and the Inspection Report's
+ *     Total Estimated Repair Cost — not the full point-by-point checklist or
+ *     photos any more (those stay fully visible in-app, on this same stage's
+ *     own record page; this is now a short notification, not a report).
+ *
+ * `row` = the pre-save row (identity columns never change in a Stage 3
+ * save); `mergedRow` = that same row with this submission's own payload
+ * overlaid on top of the Stage 3 column range, so the email reflects
  * exactly what was just saved rather than the stale pre-save snapshot — same
  * overlay technique the Stage 1 notification block above already uses.
  *
  * `toOverride` (test use only — see scripts that call this directly) sends to
- * a different address instead of Pushpa/Shivani, so the real HTML/image
- * rendering can be checked without notifying them.
- *
- * CHANGED 2026-10-06 (explicit request: "send all data with image mail"):
- * faulted-point photos now EMBED as inline images (downloaded from Drive via
- * googleDrive.service.js's downloadFromDrive, attached with a `cid` nodemailer
- * resolves against an `<img src="cid:...">` in the HTML) instead of only a
- * clickable link. A link remains the fallback for any photo that fails to
- * download (wrong permissions, since-deleted file, transient error) — a
- * notification must still go out with whatever it has, not block on one bad
- * photo. Every other email in this file still uses link-only; this is the
- * one the request named.
+ * a different address instead of the submitted Email ID, so the real
+ * content can be checked without notifying a real inspector.
  */
-async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
+const OL_STAGE3_EMAIL_CC = [
+  'pushpa.shetty@crystalgroup.in', 'shivani.dhall@crystalgroup.in',
+  'crm@crystalgroup.in', 'mansi.agarwal@crystalgroup.in'
+];
+
+export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
   const containerNo = safeStr(row[0]);
-  const isUrl = (s) => /^https?:\/\//i.test(safeStr(s));
-
-  /* Every faulted-point photo URL, downloaded ONCE up front (in parallel) so
-     the HTML builder below can stay synchronous. cidByUrl maps a photo's URL
-     to the attachment cid nodemailer will resolve — absent (download failed,
-     or the cell wasn't a URL at all) means "fall back to a link". */
-  const allPoints = [...OL_INSPECTION_POINTS, ...OL_MACHINE_POINTS];
-  const photoUrls = [...new Set(
-    allPoints
-      .filter((p) => _olIsFaultStatus(safeStr(mergedRow[p.status])))
-      .map((p) => safeStr(mergedRow[p.photo]))
-      .filter(isUrl)
-  )];
-  const attachments = [];
-  const cidByUrl = new Map();
-  await Promise.all(photoUrls.map(async (url, i) => {
-    const fileId = extractFileId(url);
-    const content = fileId ? await downloadFromDrive(fileId) : null;
-    if (!content) return; // left unmapped -> link fallback
-    const cid = `inspection-photo-${i}@lease`;
-    attachments.push({ filename: `photo-${i + 1}.jpg`, content, cid });
-    cidByUrl.set(url, cid);
-  }));
-
-  const th = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:12.5px;white-space:nowrap;">${s}</td>`;
-  const td = (s, opts = {}) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;${opts.nowrap ? 'white-space:nowrap;' : ''}">${
-    s ? (isUrl(s) ? _olPhotoCell(s, cidByUrl) : s) : '-'
-  }</td>`;
-
-  const identityFields = [
-    ['Container No', containerNo],
-    ['Lease ID', safeStr(mergedRow[1])],
-    ['Size', safeStr(mergedRow[2])],
-    ['Type', safeStr(mergedRow[3])],
-    ['Client Name', safeStr(mergedRow[5])],
-    ['Location', safeStr(mergedRow[6])],
-    ['Container Received Date', safeStr(mergedRow[24])]
-  ];
-
-  const checklistRows = (points) => points
-    .filter((p) => !p.reeferOnly || String(mergedRow[3] || '').toLowerCase().indexOf('dry') === -1)
-    .map((p) => {
-      const status = safeStr(mergedRow[p.status]);
-      const faulted = _olIsFaultStatus(status);
-      return `<tr>
-        ${th(`${p.n}. ${p.item}`)}
-        ${td(status)}
-        ${td(faulted ? safeStr(mergedRow[p.estimate]) : '-')}
-        ${td(faulted ? safeStr(mergedRow[p.remark]) : '-')}
-        ${td(faulted ? safeStr(mergedRow[p.photo]) : '')}
-      </tr>`;
-    }).join('');
-
-  const checklistHead = `<tr>${th('Point')}${th('Status')}${th('Estimate')}${th('Remark')}${th('Photo')}</tr>`;
-
-  const technicianHours = safeStr(mergedRow[OL_TECHNICIAN_HOURS_COL]);
-  const technicianCost = safeStr(mergedRow[OL_TECHNICIAN_COST_COL]);
+  const clientName = safeStr(mergedRow[5]);
   const estimateTotal = _olInspectionEstimateTotal(mergedRow);
-  const summary = _olEstimateSummaryLines(mergedRow);
+  const totalBilling = estimateTotal != null ? `₹${_olMoney(estimateTotal)}` : '-';
+
+  const to = toOverride || safeStr(mergedRow[OL_STAGE3_EMAIL_COL]).trim();
+  if (!to) {
+    console.error(`[OL-STAGE3-INSPECTION-EMAIL] no Email ID on the submission for ${containerNo} — nothing sent`);
+    return;
+  }
 
   const subject = `Inspection Checklist Submitted – ${containerNo}`;
-
   const body = [
-    ...identityFields.map(([label, val]) => `${label}: ${val || '-'}`),
-    '',
-    `Technician Hours: ${technicianHours || '-'}`,
-    `Technician Cost: ${technicianCost || '-'}`,
-    `Total Estimated Repair Cost: ${estimateTotal != null ? estimateTotal : '-'}`,
-    '',
-    summary ? [
-      'Repair Estimate Summary:',
-      ...summary.lines.map((l) => `  ${l.section} — ${l.item}${l.status ? ` (${l.status})` : ''}: ₹${_olMoney(l.amount)}${l.remark ? ` — ${l.remark}` : ''}`),
-      `  Total Estimate: ₹${_olMoney(summary.total)}`
-    ].join('\n') : '',
-    '',
-    'Full checklist (with photos for faulted points) is in the HTML version of this email.'
-  ].filter(Boolean).join('\n');
+    `Container No: ${containerNo}`,
+    `Client Name: ${clientName || '-'}`,
+    `Inspection Report Total Billing: ${totalBilling}`
+  ].join('\n');
 
-  /* Repair Estimate Summary — explicit request 2026-10-06: the SAME
-     consolidated table lookupModel.js's buildEstimateTotals builds for the
-     on-screen/PDF/Excel Off-Lease Lookup report (only chargeable lines —
-     estimate > 0 — plus technician labour, with a running total), now also
-     in this email rather than only the full point-by-point checklist below
-     it. Kept alongside the full checklist, not instead of it — the summary
-     answers "what's it going to cost", the checklist still answers "what was
-     actually inspected". */
-  const summaryHtml = summary ? `
-    <p style="font-family:Arial,sans-serif;font-weight:bold;">Repair Estimate Summary</p>
-    <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
-      <tr>${th('Section')}${th('Item')}${th('Condition')}${th('Remark')}${th('Amount')}</tr>
-      ${summary.lines.map((l) => `<tr>
-        ${th(l.section)}
-        ${td(l.item)}
-        ${td(l.status || '-')}
-        ${td(l.remark || '-')}
-        ${td(`₹${_olMoney(l.amount)}`)}
-      </tr>`).join('')}
-      <tr>${th('Total Estimate')}<td colspan="3"></td>${th(`₹${_olMoney(summary.total)}`)}</tr>
-    </table>
-  ` : '';
-
+  const th = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
+  const td = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:13px;">${s || '-'}</td>`;
   const html = `
     <p>The Inspection Checklist for <strong>${containerNo}</strong> has just been submitted.</p>
-    <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
-      ${identityFields.map(([label, val]) => `<tr>${th(label)}${td(val)}</tr>`).join('')}
-      <tr>${th('Technician Hours')}${td(technicianHours)}</tr>
-      <tr>${th('Technician Cost')}${td(technicianCost)}</tr>
-      <tr>${th('Total Estimated Repair Cost')}${td(estimateTotal != null ? String(estimateTotal) : '')}</tr>
-    </table>
-    ${summaryHtml}
-    <p style="font-family:Arial,sans-serif;font-weight:bold;">Container Inspection Checklist</p>
-    <table style="border-collapse:collapse;font-family:Arial,sans-serif;margin-bottom:16px;">
-      ${checklistHead}
-      ${checklistRows(OL_INSPECTION_POINTS)}
-    </table>
-    <p style="font-family:Arial,sans-serif;font-weight:bold;">Machine Check</p>
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
-      ${checklistHead}
-      ${checklistRows(OL_MACHINE_POINTS)}
+      <tr>${th('Container No')}${td(containerNo)}</tr>
+      <tr>${th('Client Name')}${td(clientName)}</tr>
+      <tr>${th('Inspection Report Total Billing')}${td(totalBilling)}</tr>
     </table>
   `;
 
-  await sendMail({
-    to: toOverride || 'pushpa.shetty@crystalgroup.in, shivani.dhall@crystalgroup.in',
-    subject, body, html, attachments
-  });
-  console.log(`[OL-STAGE3-INSPECTION-EMAIL] sent for ${containerNo}`);
-}
-
-/** A faulted point's photo cell: an embedded image if its Drive file
- *  downloaded successfully (cidByUrl has it), otherwise the plain link —
- *  see _sendOffLeaseInspectionEmail's own doc comment for why both exist. */
-function _olPhotoCell(url, cidByUrl) {
-  const cid = cidByUrl.get(url);
-  if (cid) return `<a href="${url}"><img src="cid:${cid}" alt="Photo" style="max-width:160px;max-height:160px;display:block;border-radius:4px;"></a>`;
-  return `<a href="${url}">Photo</a>`;
+  await sendMail({ to, cc: OL_STAGE3_EMAIL_CC.join(','), subject, body, html });
+  console.log(`[OL-STAGE3-INSPECTION-EMAIL] sent to ${to} for ${containerNo}`);
 }
 
 /* =============================================
@@ -5612,6 +5593,20 @@ export async function getOffLeaseDashboardData(user) {
     );
 
     items.push({
+      /* BUG FOUND AND FIXED 2026-11-13: this item never carried its own sheet
+       * row number, so every caller that opens a specific record from this
+       * list (PipelineDashboard.jsx's openRecord/openStageChip) fell back to
+       * "find by container number alone" — harmless for a container with one
+       * Off-Lease Tracking row, but _resolveOlRow/_resolveOlMongoDoc
+       * correctly REFUSE to guess once a container has more than one (see
+       * their own 2026-08-31 hardening), throwing "has N Off-Lease Tracking
+       * records — open it from its own list row" even though the click DID
+       * come from this list's own row — confirmed live on TRIU6617353
+       * (OF0048 + OF0090). Named `_rowNum`, matching getOffLeaseData/
+       * getOffLeaseApprovalData's own field name every other list-row-click
+       * caller already expects.
+       */
+      _rowNum: rowNum,
       container,
       leaseId: safeStr(row[1]),
       clientName: safeStr(row[5]),
@@ -7074,6 +7069,18 @@ export async function saveOffLeaseSendBackFromApprovalFast(containerNo, userEmai
  * field that's actually rendered means the note is genuinely visible to
  * whoever reopens Stage 5, not buried in a column nothing displays.
  */
+/**
+ * REWORKED 2026-11-13 (explicit, repeated request across many different
+ * records: "form nahi bhi fill kiya na tho bhi dikh na chahiye hai Send
+ * Back to Stage 1" — the button, and this action, must work even when
+ * Stage 5 was never filled in/saved). Previously required Stage 5 to
+ * already carry a real status (added 2026-11-12 after a report that
+ * clicking it on an UNSAVED Stage 5 errored) — that guard is now removed:
+ * this always clears Stage 1 AND Stage 5 back to blank, whatever Stage 5's
+ * own status currently is (clearing an already-blank column is simply a
+ * no-op on that one cell). The container goes back to Stage 1 either way,
+ * which is the actual, explicitly-requested behavior.
+ */
 export async function saveOffLeaseSendBackFromBilling(containerNo, userEmail, remarks = '', knownRow) {
   await checkActionPermission('offlease5', userEmail);
 
@@ -7087,10 +7094,6 @@ export async function saveOffLeaseSendBackFromBilling(containerNo, userEmail, re
     const stage1StatusCol = OL_STAGE_INFO[1].statusCol;
     const stage5StatusCol = OL_STAGE_INFO[5].statusCol;
     const stage5RemarkCol = OL_STAGE5_EXTRA_COLS[11]; // col_316 — Stage 5's own "Remark" form field
-    const row = rows[rn - 2] || [];
-    if (!safeStr(row[stage5StatusCol]).trim()) {
-      throw new AppError('Stage 5 is not completed yet — nothing pending review to send back.');
-    }
 
     const rmk = safeStr(remarks).trim() || `Sent back to Stage 1 on ${fmtDMYHM(new Date())} by ${userEmail || 'unknown'}`;
     const cellUpdates = [

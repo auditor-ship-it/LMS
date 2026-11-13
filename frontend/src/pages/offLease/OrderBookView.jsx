@@ -163,7 +163,28 @@ export function buildChips(item, refundEntry, tatRecord) {
  *  container alone is not unique). */
 export function matchRefundAndTat(items, refundRows, tatRecords) {
   const refundByComposite = new Map();
-  const refundByContainerSingle = new Map();
+  /* BUG FOUND AND FIXED 2026-11-13 (live, on TRIU6617353/OF0048 — explicit
+   * report "6 6a 6b 6c sab blue dikh raha hai", HOD/Accounts/CEO chips
+   * showing Approved-tone blue on a record with no SD Refund ever filed):
+   * the fallback used to key off `itemsByContainerCount` — how many rows
+   * for this container are in the CURRENTLY DISPLAYED `items` list — not
+   * how many Off-Lease Tracking rows genuinely exist for this container.
+   * TRIU6617353 has two (OF0048 row 39, OF0090 row 92), but only OF0048 was
+   * showing in this particular filtered/active list at the time, so the
+   * count read as 1 and the fallback wrongly attached OF0090's own real,
+   * CEO-approved refund entry (a different lease, different client) onto
+   * OF0048's chips — the exact same cross-lease-contamination bug class
+   * already fixed in ContainerDetailPage.jsx's `refund` and
+   * StageDetailModal.jsx's `scopedSdRefunds` (see both their own doc
+   * comments), now closed here too, a third place it was independently
+   * reimplemented.
+   *
+   * Fixed the same way those two were: the single-entry fallback may only
+   * ever stand in for a genuinely blank-offLeaseId LEGACY entry (nothing to
+   * disambiguate with), checked against every refund row for this
+   * container — never against how many rows happen to be on screen right
+   * now, and never an entry carrying an explicit, non-matching lease ID. */
+  const refundsByContainer = new Map();
   const isBetterRefund = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
   for (const r of refundRows || []) {
     const container = String(r.containerNo || '').trim().toUpperCase();
@@ -173,7 +194,14 @@ export function matchRefundAndTat(items, refundRows, tatRecords) {
       const key = `${container}|${leaseId}`;
       if (isBetterRefund(refundByComposite.get(key))) refundByComposite.set(key, r);
     }
-    if (isBetterRefund(refundByContainerSingle.get(container))) refundByContainerSingle.set(container, r);
+    if (!refundsByContainer.has(container)) refundsByContainer.set(container, []);
+    refundsByContainer.get(container).push(r);
+  }
+  const refundByContainerSingle = new Map();
+  for (const [container, rowsForContainer] of refundsByContainer) {
+    if (rowsForContainer.length === 1 && !String(rowsForContainer[0].offLeaseId || '').trim()) {
+      refundByContainerSingle.set(container, rowsForContainer[0]);
+    }
   }
   const tatByComposite = new Map();
   const tatByContainerSingle = new Map();
@@ -184,6 +212,10 @@ export function matchRefundAndTat(items, refundRows, tatRecords) {
     if (leaseId) tatByComposite.set(`${container}|${leaseId}`, r);
     if (!tatByContainerSingle.has(container)) tatByContainerSingle.set(container, r);
   }
+  // tatRecords carry no offLeaseId field to disambiguate by (see
+  // getOffLeaseTatReport) — this one fallback is kept on its original,
+  // narrower "only one row showing right now" condition; only the refund
+  // fallback above (which DOES have offLeaseId to check) needed the fix.
   const itemsByContainerCount = new Map();
   for (const it of items) {
     const c = String(it.container || '').trim().toUpperCase();
@@ -194,7 +226,7 @@ export function matchRefundAndTat(items, refundRows, tatRecords) {
     const container = String(it.container || '').trim().toUpperCase();
     const leaseId = String(it.leaseId || '').trim().toUpperCase();
     let refundEntry = leaseId ? refundByComposite.get(`${container}|${leaseId}`) : undefined;
-    if (!refundEntry && itemsByContainerCount.get(container) === 1) refundEntry = refundByContainerSingle.get(container);
+    if (!refundEntry) refundEntry = refundByContainerSingle.get(container);
     let tatRecord = leaseId ? tatByComposite.get(`${container}|${leaseId}`) : undefined;
     if (!tatRecord && itemsByContainerCount.get(container) === 1) tatRecord = tatByContainerSingle.get(container);
     result.set(it, { refundEntry, tatRecord });
@@ -571,7 +603,7 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows, tatRecords }) {
+export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows, tatRecords, showSelectCol, selectedKeys, onToggleSelected }) {
   const { canAct } = usePermission();
   /* Which record+stage's own form is open, or null. Distinct from
      onOpenRecord (the read-only all-stage history modal) -- this is the
@@ -604,19 +636,29 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
      even though Kirloskar never reached Stage 6 at all. Same bug class as
      offlease.service.js's _lookupStage9OrderNos requireClientMatch fix —
      a container number alone is never a safe join key in this app.
-     Falls back to the OLD container-only match ONLY when this container has
-     exactly ONE Off-Lease Tracking row to begin with (legacy refund entries
-     submitted before offLeaseId was captured have nowhere to leak onto —
-     there's only one row they could possibly belong to). Checking the
-     REFUND row count instead was tried first and is WRONG: live-verified on
-     TRIU6617353, which has exactly one refund row (so that condition says
-     "safe to fall back") but TWO Off-Lease Tracking rows — the fallback
-     would still have leaked OF0090's refund onto OF0048. It's the number of
-     ITEMS sharing a container that determines whether a container-only
-     match can ever be ambiguous, not the number of refund rows. */
+     BUG FOUND AND FIXED AGAIN 2026-11-13 (live report "6 6a 6b 6c sab blue
+     dikh raha hai" on this exact OF0048/TRIU6617353 pair): the "exactly ONE
+     Off-Lease Tracking row" guard this comment used to describe was itself
+     checked against `itemsByContainerCount` — how many rows share this
+     container in the CURRENTLY DISPLAYED `items` list, not the true total on
+     the sheet. The moment OF0090 (still active) wasn't both in view at the
+     same time as OF0048 in whatever filtered/active list this component was
+     given, the count read 1 and the fallback leaked OF0090's own real,
+     CEO-approved refund onto OF0048 anyway — the exact bug this block's
+     original fix already claimed to have closed.
+     Replaced with the same guard ContainerDetailPage.jsx's `refund` and
+     StageDetailModal.jsx's `scopedSdRefunds` already use for this identical
+     bug class: the single-entry fallback may only ever stand in for a
+     genuinely blank-offLeaseId LEGACY refund row (nothing to disambiguate
+     with — there's no lease id on it to be wrong about), checked against
+     the refund row's OWN identity field, never against how many rows of
+     either sheet happen to be visible or exist right now. This sidesteps
+     the whole fragile "how many X are there" counting problem the two
+     previous attempts (item count, then refund-row count — see git history)
+     both still got wrong in their own way. */
   const refundByContainer = useMemo(() => {
     const byComposite = new Map();
-    const byContainerSingle = new Map();
+    const byContainerAll = new Map(); // container -> every refund row for it
     const isBetter = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
     for (const r of refundRows || []) {
       const container = String(r.containerNo || '').trim().toUpperCase();
@@ -626,7 +668,14 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
         const key = `${container}|${leaseId}`;
         if (isBetter(byComposite.get(key))) byComposite.set(key, r);
       }
-      if (isBetter(byContainerSingle.get(container))) byContainerSingle.set(container, r);
+      if (!byContainerAll.has(container)) byContainerAll.set(container, []);
+      byContainerAll.get(container).push(r);
+    }
+    const byContainerSingle = new Map();
+    for (const [container, rowsForContainer] of byContainerAll) {
+      if (rowsForContainer.length === 1 && !String(rowsForContainer[0].offLeaseId || '').trim()) {
+        byContainerSingle.set(container, rowsForContainer[0]);
+      }
     }
     return { byComposite, byContainerSingle };
   }, [refundRows]);
@@ -663,9 +712,7 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     const container = String(it.container || '').trim().toUpperCase();
     const leaseId = String(it.leaseId || '').trim().toUpperCase();
     let refundEntry = leaseId ? refundByContainer.byComposite.get(`${container}|${leaseId}`) : undefined;
-    if (!refundEntry && itemsByContainerCount.get(container) === 1) {
-      refundEntry = refundByContainer.byContainerSingle.get(container);
-    }
+    if (!refundEntry) refundEntry = refundByContainer.byContainerSingle.get(container);
     let tatRecord = leaseId ? tatByContainer.byComposite.get(`${container}|${leaseId}`) : undefined;
     if (!tatRecord && itemsByContainerCount.get(container) === 1) {
       tatRecord = tatByContainer.byContainerSingle.get(container);
@@ -801,6 +848,26 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
           <RemarkCell item={it} onSaved={onRemarkSaved} />
 
           <div className={styles.sideCol}>
+            {/* Bulk SD Refund selection — explicit request 2026-11-10 ("stage
+                6 mai jaise hi rk do click kiya na tho upar ek SD Refunds ka
+                from dedo"): shown only while the SD Refunds stage filter is
+                active (PipelineDashboard.jsx's own showSelectCol), same
+                checkbox View 2's table offers, so either presentation can
+                drive the bulk form. */}
+            {showSelectCol && (
+              <label
+                className={styles.selectRow}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedKeys?.has(`${it.leaseId || ''}-${it.container}`)}
+                  onChange={() => onToggleSelected?.(`${it.leaseId || ''}-${it.container}`)}
+                  aria-label={`Select ${it.container} for bulk SD Refund`}
+                />
+                <span>Select</span>
+              </label>
+            )}
             <div className={styles.sideLabel}>Container</div>
             <div className={styles.containerNo}>
               <Icon name="container" className={styles.containerIcon} />

@@ -124,6 +124,13 @@ export const env = {
   mongoDbName: process.env.MONGO_DB_NAME,
   enableSheetsSync: String(process.env.ENABLE_SHEETS_SYNC || '').toLowerCase() === 'true',
 
+  /* Daily WhatsApp Report (Sale Person — Contract Expiry Summary) scheduler —
+     same "default OFF, explicit opt-in" gating convention as enableCron/
+     enableSheetsSync above. Defaults OFF so nothing auto-sends over WhatsApp
+     until the user explicitly enables it; the admin UI (QR link, manual
+     Preview/Send now) works regardless of this flag. */
+  enableWhatsappReport: String(process.env.ENABLE_WHATSAPP_REPORT || '').toLowerCase() === 'true',
+
   // Kill switch for the public read-only API (/api/public/v1) — flip to
   // 'false' in the env file to take it offline instantly (no code change,
   // no redeploy) if a key leaks or the endpoint needs to come down in a

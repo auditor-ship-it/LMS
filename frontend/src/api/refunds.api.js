@@ -17,6 +17,13 @@ export const createRefund = (payload) => apiClient.post('/refunds', payload).the
 export const decideRefundApproval = ({ rowNum, stage, decision, remarks }) =>
   apiClient.post('/refunds/decide-approval', { rowNum, stage, decision, remarks }).then((r) => r.data.result);
 
+/** POST /api/refunds/send-back — explicit request 2026-11-13, separate from
+ *  decide-approval's 'rejected': closes this bill as 'Sent Back' AND resets
+ *  the Off-Lease container's Stage 6 (SD Refunds) back to pending so a
+ *  corrected bill can be resubmitted through it. */
+export const sendBackRefundApproval = ({ rowNum, stage, remarks }) =>
+  apiClient.post('/refunds/send-back', { rowNum, stage, remarks }).then((r) => r.data.result);
+
 /* -- No-login review link (explicit request 2026-10-01) ------------------
    Reached only via the signed ?rowNum=&stage=&token= link written into the
    sheet's HOD/CEO/Accounts "Review Link" columns — apiClient sends no

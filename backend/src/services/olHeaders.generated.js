@@ -248,4 +248,11 @@ export const OL_HEADERS = [
      OL_FINAL_PAYABLE_AMOUNT_COL in offlease.service.js). Keep this entry
      if this file is ever regenerated from the live header row. */
   "Final Payable Amount",
+  /* Index 358 — same deliberate, hand-added exception as above: added
+     2026-11-13 for Stage 3's (Inspection Checklist, UI "Stage 4") own
+     compulsory "Email ID" field (col_358, OL_STAGE3_EMAIL_COL in
+     offlease.service.js) — the submission notification email goes TO this
+     address. Keep this entry if this file is ever regenerated from the
+     live header row. */
+  "Stage 4 Email ID",
 ];

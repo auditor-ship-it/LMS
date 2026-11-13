@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatCard, Card, Button, SearchBar, FilterBar, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
@@ -16,7 +16,13 @@ import { ROUTES } from '../../constants/routes.js';
 import { toDate } from '../../utils/formatDateTime.js';
 import { Highlight } from './Highlight.jsx';
 import { OrderBookView, ChipStrip, matchRefundAndTat } from './OrderBookView.jsx';
+import { BulkRefundModal } from './BulkRefundModal.jsx';
 import styles from './PipelineDashboard.module.css';
+
+/** Internal stage number driving the "SD Refunds" KPI card/filter — same key
+ *  STAGE_GROUPS' own group 3 uses. Bulk-select only makes sense scoped to
+ *  this stage's own form (see BulkRefundModal). */
+const SD_REFUNDS_STAGE_KEY = 11;
 
 const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
 
@@ -163,7 +169,10 @@ export function PipelineDashboard({ onOpenTab }) {
     if (viewMode) q.set('view', viewMode);
     navigate(`${ROUTES.OFF_LEASE_RECORD}?${q}`);
   };
-  /* null = no filter; an internal stage number, 'approval' or 'done'. */
+  /* null = no filter; otherwise one internal stage number, 'approval' or
+     'done' — single-select. Was briefly multi-select (explicit request
+     2026-11-10), REVERTED 2026-11-13 (explicit request, "filter multiple
+     select nahi hona chahiye hai" — back to one filter at a time). */
   const [stageFilter, setStageFilter] = useState(null);
   /* null, or a STAGE_GROUPS key (1/2/3) — mutually exclusive with stageFilter
      (see toggleFilter/toggleGroupFilter, both clear the other). */
@@ -182,6 +191,14 @@ export function PipelineDashboard({ onOpenTab }) {
   // '' = everyone; a real salesperson name, or the literal 'Unassigned'.
   const [salePersonFilter, setSalePersonFilter] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
+  /* Rows checked for the bulk SD Refund form — keyed the same way the table
+     rows are (`${leaseId||i}-${container}`). Cleared on a successful submit
+     and whenever the SD Refunds filter is turned off, since the checkbox
+     column itself only shows while that filter is active. */
+  const [selectedKeys, setSelectedKeys] = useState(new Set());
+  const [bulkRefundOpen, setBulkRefundOpen] = useState(false);
+  const showSelectCol = stageFilter === SD_REFUNDS_STAGE_KEY;
+  useEffect(() => { if (!showSelectCol) setSelectedKeys(new Set()); }, [showSelectCol]);
 
   const kpis = data?.kpis || {};
   const items = data?.items || [];
@@ -353,25 +370,37 @@ export function PipelineDashboard({ onOpenTab }) {
      the filter removes it, so there is no hunting for a reset. Group and
      single-stage filters are mutually exclusive — picking one clears the
      other, so there's only ever one active filter to reason about/clear. */
-  const toggleFilter = (key) => { setGroupFilter(null); setStageFilter((cur) => (cur === key ? null : key)); };
+  const toggleFilter = (key) => {
+    setGroupFilter(null);
+    setStageFilter((cur) => (cur === key ? null : key));
+  };
   const toggleGroupFilter = (key) => { setStageFilter(null); setGroupFilter((cur) => (cur === key ? null : key)); };
+  const toggleRowSelected = (key) => {
+    setSelectedKeys((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  /* Same row-key shape OrderBookView.jsx's own row `key` already uses
+     (`${leaseId||''}-${container}`) — shared so a container checked in View
+     1 stays checked after switching to View 2 and back. */
+  const selectedEntries = filtered
+    .map((it) => ({ key: `${it.leaseId || ''}-${it.container}`, it }))
+    .filter(({ key }) => selectedKeys.has(key))
+    .map(({ it }) => ({ container: it.container, clientName: it.clientName, leaseId: it.leaseId }));
+  const stageKeyLabel = (key) => (
+    key === 'approval' ? 'Pending approval'
+      : key === 'done' ? 'Completed'
+        : key === 'hold' ? 'On hold'
+          : key === 'hod' ? 'Stage 6A · HOD approval pending'
+            : key === 'accounts' ? 'Stage 6B · Accounts approval pending'
+              : key === 'ceo' ? 'Stage 6C · CEO approval pending'
+                : (STAGES.find((s) => s.number === key)?.label || `Stage ${key}`)
+  );
   const filterLabel = groupFilter != null
     ? STAGE_GROUPS[groupFilter].label
-    : stageFilter === 'approval'
-      ? 'Pending approval'
-      : stageFilter === 'done'
-        ? 'Completed'
-        : stageFilter === 'hold'
-          ? 'On hold'
-          : stageFilter === 'hod'
-            ? 'Stage 6A · HOD approval pending'
-            : stageFilter === 'accounts'
-              ? 'Stage 6B · Accounts approval pending'
-              : stageFilter === 'ceo'
-                ? 'Stage 6C · CEO approval pending'
-                : stageFilter != null
-            ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
-            : '';
+    : stageFilter != null ? stageKeyLabel(stageFilter) : '';
 
   return (
     <>
@@ -583,6 +612,21 @@ export function PipelineDashboard({ onOpenTab }) {
           <span className={styles.count}>{filtered.length} record{filtered.length === 1 ? '' : 's'}</span>
         </div>
 
+        {/* Bulk SD Refund selection bar — shown above EITHER view, explicit
+            follow-up 2026-11-10 ("stage 6 mai jaise hi rk do click kiya na
+            tho upar ek SD Refunds ka from dedo"): the checkbox lives beside
+            each record (View 1's own Container column, View 2's own new
+            column) and this bar is the one shared trigger for filling the
+            form against everything currently checked, in whichever view the
+            user happens to be looking at. */}
+        {!loading && !error && showSelectCol && selectedEntries.length > 0 && (
+          <div className={styles.bulkBar}>
+            <span><span className={styles.bulkBarCount}>{selectedEntries.length}</span> selected</span>
+            <Button size="sm" variant="primary" onClick={() => setBulkRefundOpen(true)}>Fill one SD Refund form for all</Button>
+            <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear selection</Button>
+          </div>
+        )}
+
         {view === 'book' && (
           <OrderBookView
             highlight={debouncedSearch}
@@ -602,6 +646,9 @@ export function PipelineDashboard({ onOpenTab }) {
                Refetching all 35 records to reflect one comment is what made
                Save and Delete sit spinning. */
             onOpenRecord={openRecord}
+            showSelectCol={showSelectCol}
+            selectedKeys={selectedKeys}
+            onToggleSelected={toggleRowSelected}
           />
         )}
 
@@ -616,6 +663,7 @@ export function PipelineDashboard({ onOpenTab }) {
             <table className={styles.table}>
               <thead>
                 <tr>
+                  {showSelectCol && <th className={styles.selectCol} />}
                   <th>Lease ID</th>
                   <th>Container</th>
                   <th>Client</th>
@@ -630,6 +678,8 @@ export function PipelineDashboard({ onOpenTab }) {
                     row. The lease is what distinguishes the records. */}
                 {filtered.map((it, i) => {
                   const { refundEntry, tatRecord } = fmsMatch.get(it) || {};
+                  const rowKey = `${it.leaseId || i}-${it.container}`;
+                  const selectKey = `${it.leaseId || ''}-${it.container}`;
                   return (
                   /* Row itself opens the full record page (same destination
                      View 1's cards already use, openRecord) — explicit
@@ -637,8 +687,19 @@ export function PipelineDashboard({ onOpenTab }) {
                      scoped to View 2 only. The Open/Approve button keeps its
                      own job (jump straight to that stage's tab) — its click
                      stops propagation so it doesn't also fire the row's
-                     navigate-to-record-page. */
-                  <tr key={`${it.leaseId || i}-${it.container}`} className={styles.clickableRow} onClick={() => openRecord(it, 'phases')}>
+                     navigate-to-record-page. Same for the selection checkbox,
+                     explicit request 2026-11-10 (bulk SD Refund form). */
+                  <tr key={rowKey} className={styles.clickableRow} onClick={() => openRecord(it, 'phases')}>
+                    {showSelectCol && (
+                      <td className={styles.selectCol} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(selectKey)}
+                          onChange={() => toggleRowSelected(selectKey)}
+                          aria-label={`Select ${it.container} for bulk SD Refund`}
+                        />
+                      </td>
+                    )}
                     <td className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={debouncedSearch} /></td>
                     <td className={styles.container}><Highlight text={it.container} query={debouncedSearch} /></td>
                     <td><Highlight text={it.clientName || '—'} query={debouncedSearch} /></td>
@@ -662,6 +723,14 @@ export function PipelineDashboard({ onOpenTab }) {
           </div>
         )}
       </Card>
+
+      {bulkRefundOpen && selectedEntries.length > 0 && (
+        <BulkRefundModal
+          entries={selectedEntries}
+          onClose={() => setBulkRefundOpen(false)}
+          onSubmitted={() => { setSelectedKeys(new Set()); setBulkRefundOpen(false); reload(); }}
+        />
+      )}
 
     </>
   );

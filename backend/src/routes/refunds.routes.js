@@ -17,5 +17,8 @@ router.post('/', requirePermission('refunds'), asyncHandler(refundsController.cr
    (checkActionPermission('refundsApproval<Stage>', ...)) — no requirePermission(...)
    here, same pattern expiry.routes.js uses for its own decide-approval route. */
 router.post('/decide-approval', asyncHandler(refundsController.decideApproval));
+/* Same no-requirePermission reasoning as decide-approval above — enforced
+   inside decideRefundSendBack. */
+router.post('/send-back', asyncHandler(refundsController.sendBack));
 
 export default router;

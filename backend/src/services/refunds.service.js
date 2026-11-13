@@ -28,7 +28,7 @@ import { checkActionPermission } from './permissions.service.js';
 import { sendMail } from './email.service.js';
 import { signJwt, verifyJwt } from '../utils/jwtLite.js';
 import { env } from '../config/env.js';
-import { markOffLeaseSdRefundApproved, markOffLeaseSdRefundSubmitted } from './offlease.service.js';
+import { markOffLeaseSdRefundApproved, markOffLeaseSdRefundRejected, markOffLeaseSdRefundSubmitted } from './offlease.service.js';
 
 const REFUNDS_SHEET = SHEETS.REFUNDS;
 
@@ -205,8 +205,14 @@ function _mapRow(r, rowNum) {
    * is 'done' the moment Accounts approves — decideRefundApproval writes
    * 'Skipped' into CEO's own status/remarks right then (see its own comment),
    * so ceoStatus for such a row reads 'Skipped', never blank/'Pending'. */
+  /* 'Sent Back' (added 2026-11-13, see decideRefundSendBack's own doc
+   * comment) is terminal for THIS bill, same as 'Rejected' — the difference
+   * is only in what it means for the Off-Lease container (Rejected: stays
+   * closed; Sent Back: Stage 6 resets to pending for a corrected
+   * resubmission), not in whether this particular entry has more steps. */
+  const isTerminal = (s) => s === 'Rejected' || s === 'Sent Back';
   let currentStage = 'done';
-  if (hodStatus === 'Rejected' || accountsStatus === 'Rejected' || (ceoRequired && ceoStatus === 'Rejected')) currentStage = 'rejected';
+  if (isTerminal(hodStatus) || isTerminal(accountsStatus) || (ceoRequired && isTerminal(ceoStatus))) currentStage = 'rejected';
   else if (hodStatus !== 'Approved') currentStage = 'hod';
   else if (accountsStatus !== 'Approved') currentStage = 'accounts';
   else if (ceoRequired && ceoStatus !== 'Approved') currentStage = 'ceo';
@@ -452,6 +458,12 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
   const cfg = STAGES[stage];
   if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
   if (decision !== 'approved' && decision !== 'rejected') throw new AppError('decision must be "approved" or "rejected"');
+  // Explicit request 2026-11-13 ("remarks required for approval and reject
+  // and send back") — previously only a REJECT needed a reason; the
+  // frontend already enforces this (RefundDecisionPanel.jsx), this is the
+  // matching server-side guard so the no-login review-link path
+  // (decideRefundApprovalViaLink) can't bypass it either.
+  if (!safeStr(remarks).trim()) throw new AppError('Remarks are required.');
   if (!opts.skipPermissionCheck) await checkActionPermission(cfg.permission, callerEmail);
   await _ensureRefundsHeaderWidth();
 
@@ -559,6 +571,59 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
       // Off-Lease Tracking row.
       if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || cfg.label}`, safeStr(updatedRow[OFFLEASE_ID_COL]).trim());
     }
+
+    return 'OK';
+  });
+}
+
+/**
+ * "Send Back" — explicit request 2026-11-13, a separate action from Reject:
+ * Reject is final/closed (this bill stays rejected, no resubmission path).
+ * Send Back ends THIS bill the same way (status 'Sent Back', terminal — see
+ * _mapRow's own isTerminal), but ALSO resets the Off-Lease container's own
+ * Stage 6 (SD Refunds) status back to blank via markOffLeaseSdRefundRejected
+ * (same reset helper Reject deliberately does NOT call), so it reappears in
+ * Stage 6's pending queue for a corrected bill to be resubmitted — confirmed
+ * live on MYRU4519115/OF0020 ("add the send back button click the send back
+ * and move stage 6"). Remarks are required, same as Approve/Reject (see
+ * decideRefundApproval's own guard, same request).
+ */
+export async function decideRefundSendBack(rowNum, stage, remarks, callerEmail, opts = {}) {
+  const cfg = STAGES[stage];
+  if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
+  if (!safeStr(remarks).trim()) throw new AppError('Remarks are required.');
+  if (!opts.skipPermissionCheck) await checkActionPermission(cfg.permission, callerEmail);
+  await _ensureRefundsHeaderWidth();
+
+  return withSheetLock(REFUNDS_SHEET, async () => {
+    const { rows } = await getSheetData(REFUNDS_SHEET);
+    const row = rows[rowNum - 2];
+    if (!row) throw notFound(`Refund entry row ${rowNum} not found`);
+    if (_mapRow(row, rowNum).currentStage !== stage) return 'INVALID_STATE';
+
+    const stamp = dmyTime(new Date());
+    const status = 'Sent Back';
+    const updates = [
+      { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.statusCol)}${rowNum}`, values: [[status]] },
+      { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.remarksCol)}${rowNum}`, values: [[remarks]] },
+      { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.dateCol)}${rowNum}`, values: [[stamp]] },
+      { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.approverCol)}${rowNum}`, values: [[callerEmail || '']] }
+    ];
+    await batchUpdateValues(updates);
+    await patchMongoMirrorRow(REFUNDS_SHEET, rowNum, updates);
+
+    const updatedRow = row.slice();
+    updatedRow[cfg.statusCol] = status;
+    updatedRow[cfg.remarksCol] = remarks;
+    updatedRow[cfg.dateCol] = stamp;
+    updatedRow[cfg.approverCol] = callerEmail || '';
+
+    try {
+      await _sendRefundStageEmail('sentback', stage, updatedRow, rowNum, { remarks });
+    } catch (e) { console.error('[REFUND-APPROVAL-EMAIL]', e.message); }
+
+    const containerNo = safeStr(updatedRow[CONTAINER_NO_COL]).trim();
+    if (containerNo) await markOffLeaseSdRefundRejected(containerNo, safeStr(updatedRow[OFFLEASE_ID_COL]).trim());
 
     return 'OK';
   });
@@ -697,6 +762,9 @@ async function _sendRefundStageEmail(kind, stage, row, rowNum, extra = {}) {
   } else if (kind === 'rejected') {
     subject = `Refund Rejected (${stageLabel}) – ${entry.invoiceNumber || 'Unknown Invoice'}`;
     intro = `${stageLabel} rejected this refund bill.${extra.remarks ? ` Remarks: ${extra.remarks}` : ''}`;
+  } else if (kind === 'sentback') {
+    subject = `Refund Sent Back (${stageLabel}) – ${entry.invoiceNumber || 'Unknown Invoice'}`;
+    intro = `${stageLabel} sent this refund bill back — Off-Lease Stage 6 (SD Refunds) is now pending again for a corrected resubmission.${extra.remarks ? ` Remarks: ${extra.remarks}` : ''}`;
   } else {
     subject = `Refund Fully Approved – ${entry.invoiceNumber || 'Unknown Invoice'}`;
     intro = `This refund bill has been approved at every required stage for its amount (${requiredStageLabels}).`;

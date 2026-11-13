@@ -1,6 +1,6 @@
 import { env } from './config/env.js';
 import { createApp } from './app.js';
-import { registerCronJobs, registerSheetsSync } from './jobs/index.js';
+import { registerCronJobs, registerSheetsSync, registerWhatsappReportScheduler } from './jobs/index.js';
 import { startOutboxWorker } from './jobs/outboxWorker.js';
 import { warmFmsCache } from './services/stage8.service.js';
 import { connectMongo } from './config/db.js';
@@ -16,11 +16,23 @@ logger.info('[SERVER] Starting Lease Management backend...');
  * would otherwise take the entire server down for every user until someone
  * manually restarts it. Log and keep serving instead.
  */
+// TEMP DEBUG 2026-11-12 — file mirror of these two handlers while root-causing
+// the WhatsApp "Send now" Network Error report; remove alongside the other
+// whatsapp-send-debug.log writes once that's fixed.
+async function debugLogToFile(label, val) {
+  try {
+    const fs = await import('node:fs');
+    fs.appendFileSync('C:/Users/crpll/LMS/backend/whatsapp-send-debug.log',
+      `${new Date().toISOString()} [${label}] ${val?.stack || val}\n`);
+  } catch {}
+}
 process.on('unhandledRejection', (reason) => {
   logger.error('[ERROR] Unhandled rejection:', reason);
+  void debugLogToFile('unhandledRejection', reason);
 });
 process.on('uncaughtException', (err) => {
   logger.error('[ERROR] Uncaught exception:', err);
+  void debugLogToFile('uncaughtException', err);
 });
 
 // Same Mongo database/connection string as the other two apps (shared by
@@ -59,6 +71,15 @@ app.listen(env.port, env.host, () => {
     warmFmsCache().catch((e) => logger.error('[SYNC] warmFmsCache (boot warm-up) failed:', e?.message || e));
   } else {
     logger.info('[SERVER] Sheets<->Mongo sync disabled (set ENABLE_SHEETS_SYNC=true in .env to enable it)');
+  }
+
+  // Daily WhatsApp Report scheduler — own independent gate (env.enableWhatsappReport,
+  // default OFF). See jobs/index.js's registerWhatsappReportScheduler doc comment.
+  if (env.enableWhatsappReport) {
+    registerWhatsappReportScheduler();
+    logger.info('[SERVER] Daily WhatsApp Report scheduler ENABLED (ENABLE_WHATSAPP_REPORT=true)');
+  } else {
+    logger.info('[SERVER] Daily WhatsApp Report scheduler disabled (set ENABLE_WHATSAPP_REPORT=true in .env to enable automatic sends)');
   }
 
   // Mongo-first writes (2026-08-26): drains _sync_outbox, replaying each
