@@ -52,7 +52,7 @@ const LEASE_TABS = [
   'Off-Lease Tracking', 'Dispute Approval', 'New Lease Other Order type', 'Approve billing for invoice',
   'Receivables other order Type', 'Transportion', 'Control', 'Client Db', 'New lease reff', 'Team Accounts',
   'Sidebar Access', 'Role Permissions', 'USER', 'Stage 9 Movement', 'Off-Lease Remarks', 'Off-Lease Move History',
-  'Renew Remarks', '__login_log', 'Login Time Log', ' Invoice PO', 'Offlease Bills', 'Stage 1', 'Stage 3 '
+  'Renew Remarks', '__login_log', 'Login Time Log', ' Invoice PO', 'Offlease Bills', 'Stage 1', 'Stage 3 ', 'Master Po and Agremnet data'
 ];
 const SPEC = [
   { wb: 'lease_workbook', tabs: LEASE_TABS, create: true },

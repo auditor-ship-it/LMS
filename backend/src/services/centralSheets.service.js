@@ -23,10 +23,16 @@
  * the same `lease` tables, one shape).
  */
 import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { logger } from '../utils/logger.js';
 import { EXTERNAL_SPREADSHEETS as X } from '../config/sheets.config.js';
 
-export const isCentral = () => String(process.env.DATA_SOURCE || '').toLowerCase() === 'central';
+const googleBypass = new AsyncLocalStorage();
+export const isCentral = () => !googleBypass.getStore() && String(process.env.DATA_SOURCE || '').toLowerCase() === 'central';
+/** Runs fn with the central switch off for this async call chain, so googleSheets.service talks to real Google (used only by the write-behind worker). */
+export const runAgainstGoogle = (fn) => googleBypass.run(true, fn);
+/** Write-behind to Sheets (CENTRAL_SHEETS_MIRROR=on): every central write is also queued in lease.sheet_outbox, in the same transaction. */
+export const mirrorToSheets = () => isCentral() && /^(on|true|1)$/i.test(String(process.env.CENTRAL_SHEETS_MIRROR || ''));
 
 const SCHEMA = 'lease';
 const LEASE_WB = 'lease_workbook';
@@ -121,7 +127,7 @@ const MIRROR_NAMES = new Set([
   'Receivables other order Type', 'Transportion', 'Control', 'Client Db', 'New lease reff', 'Team Accounts',
   'Sidebar Access', 'Role Permissions', 'USER', 'Stage 9 Movement', 'Off-Lease Remarks', 'Off-Lease Move History',
   'Renew Remarks', '__login_log', 'Login Time Log', ' Invoice PO', 'Offlease Bills', 'Stage 1', 'Stage 3 ',
-  'Master Sheet', 'container_master_logs',
+  'Master Sheet', 'container_master_logs', 'Master Po and Agremnet data',
   'STAGE-8', 'STAGE-9', 'STAGE-10', 'STAGE1', 'STAGE2', 'STAGE3', 'STAGE4', 'STAGE7', 'STAGE5.1', 'Consoldate Data'
 ]);
 export function isSheetMirrorName(name) { return MIRROR_NAMES.has(name) || tabByName.has(name); }
@@ -236,6 +242,13 @@ async function tx(fn) {
   try { await c.query('BEGIN'); const r = await fn(c); await c.query('COMMIT'); return r; } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
 }
 
+/** Queues a replay op for the Sheets mirror. The per-tab advisory lock is held until commit, so outbox ids follow commit order for a tab. */
+async function enqueue(c, e, op, payload) {
+  if (!mirrorToSheets()) return;
+  await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['lease.sheet_outbox:' + e.table]);
+  await c.query(`INSERT INTO ${SCHEMA}.sheet_outbox (workbook_key, tab, op, payload) VALUES ($1, $2, $3, $4::jsonb)`, [e.wb, e.tab, op, JSON.stringify(payload)]);
+}
+
 const markWritten = (c, e) => c.query(`UPDATE ${SCHEMA}.sheet_tab SET app_written_at = now() WHERE table_name = $1`, [e.table]);
 
 async function writeHeaderCells(c, e, startCol, vals) {
@@ -290,6 +303,7 @@ export async function centralWriteRange(tab, startRow, startCol, values2D, ssId,
       if (rowNum === 1) await writeHeaderCells(c, e, startCol, vals);
       else await writeRowCells(c, e, rowNum, startCol, vals);
     }
+    await enqueue(c, e, 'write', { startRow, startCol, values: values2D });
     await markWritten(c, e);
   };
   if (client) await run(client); else await tx(run);
@@ -330,6 +344,7 @@ export async function centralAppendRows(tab, rows2D, ssId) {
       if (start + i === 1) await writeHeaderCells(c, e, 0, rows2D[i] || []);
       else await writeRowCells(c, e, start + i, 0, rows2D[i] || []);
     }
+    await enqueue(c, e, 'append', { startRow: start, values: rows2D });
     await markWritten(c, e);
     return start;
   });
@@ -349,6 +364,7 @@ export async function centralDeleteRows(tab, rowNums, ssId) {
       await c.query(`UPDATE ${SCHEMA}.${q(e.table)} SET row_number = -(row_number - 1) WHERE row_number > $1`, [rn]);
       await c.query(`UPDATE ${SCHEMA}.${q(e.table)} SET row_number = -row_number WHERE row_number < 0`);
     }
+    await enqueue(c, e, 'delete', { rowNums: desc });
     await markWritten(c, e);
   });
   emitWrite(tab);
@@ -360,7 +376,7 @@ export async function centralEnsureHeader(tab, headerRow, ssId) {
   const e = entryFor(tab, ssId);
   if (!e) return;
   if (headerRow?.length && !e.headers.some((h) => h !== '' && h != null)) {
-    await tx(async (c) => { await writeHeaderCells(c, e, 0, headerRow); await markWritten(c, e); });
+    await tx(async (c) => { await writeHeaderCells(c, e, 0, headerRow); await enqueue(c, e, 'write', { startRow: 1, startCol: 0, values: [headerRow] }); await markWritten(c, e); });
     emitWrite(tab);
   }
 }
@@ -451,6 +467,11 @@ export function centralMirrorCollection(tab) {
 }
 
 /* The shim addresses tabs by their own workbook, not by an ssId. */
+export function ssIdForWorkbook(wb) {
+  if (wb === LEASE_WB) return undefined;
+  for (const [id, w] of WB_BY_ID) if (w === wb) return id;
+  return undefined;
+}
 function workbookSsId(e) {
   if (e.wb === LEASE_WB) return undefined;
   for (const [id, wb] of WB_BY_ID) if (wb === e.wb) return id;

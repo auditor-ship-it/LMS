@@ -52,7 +52,7 @@ the apps have written since its last load unless `--force`.
 Tabs loaded (31): New Lease, Deployed sheet, Operation sheet, Billing Sales, Receivables, Renewal
 Log, Off-Lease Tracking, Dispute Approval, New Lease Other Order type, Approve billing for invoice,
 Receivables other order Type, Transportion, Control, Client Db, New lease reff, Team Accounts,
-Sidebar Access, Role Permissions (empty), USER, Stage 9 Movement, Off-Lease Remarks, Off-Lease Move
+Sidebar Access, Role Permissions (empty), `Master Po and Agremnet data`, USER, Stage 9 Movement, Off-Lease Remarks, Off-Lease Move
 History, Renew Remarks, `__login_log`, Login Time Log, ` Invoice PO`, Offlease Bills, Stage 1,
 `Stage 3 ` + container_master `Master Sheet`, `container_master_logs`.
 Left out on purpose: `__api_keys/__api_usage/__api_admin_audit/__api_idempotency` (no code reads
@@ -127,6 +127,32 @@ differences** (the old sandbox had 1,271 on `/deployed-summary` alone — now MA
 Off-Lease Tracking), expiry remark (Deployed sheet cell), delete remark (row delete + shift up) —
 all 200, read back correctly by the next GET; GETs alone write nothing (`app_written_at` stays
 NULL). No Google call possible (no credentials, no internet) and none attempted.
+
+## Sheets as a one-way mirror after cutover (write-behind) — `CENTRAL_SHEETS_MIRROR=on`
+
+Plan: people hand-edit the Google Sheets **until the cutover date** (the app still runs on Sheets
+until then; re-run `load-lease.mjs` as often as needed, the apps have not written yet). On cutover
+day: freeze the Sheets, run the loader one last time (all tabs `loaded + verified`), switch to
+`DATA_SOURCE=central`. From then on central is the source of truth and the Sheets are only a mirror.
+
+With `CENTRAL_SHEETS_MIRROR=on` (default off) every write to a `lease.<tab>` table also inserts one
+row into `lease.sheet_outbox` **in the same transaction** (`db/central/0003_sheet_outbox.sql`, run once
+as admin). `jobs/sheetsWriteBehind.job.js` (started by `server.js`) replays them to the real Sheet in id
+order: `write` → `values.update`, `append` → `values.append`, `delete` → `deleteDimension`. It is the only
+code that calls Google in central mode (`runAgainstGoogle` switches the central path off for that call
+chain only); it needs the usual `GOOGLE_*` env. A failing op is retried with backoff (15 s doubling, 15 min
+cap, quota errors pause 5 min) and blocks only later ops of the *same tab*, because row numbers depend on
+order. The app's requests never wait for it; `SELECT * FROM lease.sheet_outbox WHERE done_at IS NULL` is the
+"still to be written to the sheet" backlog (`attempts`, `last_error`).
+
+Rules for the cutover: after the switch nobody edits the Sheets by hand (a hand edit is overwritten or
+misplaced — it is never read back); the central sync keeps copying Sheets → `landing_sheets` but nothing
+reads that for `lease.*` any more, and `load-lease.mjs` must not be re-run (it refuses tabs the apps
+have written unless `--force`). Known limit: a crash between a Google `deleteDimension` and marking the op
+done replays that delete once more (writes/appends at absolute positions are safe to repeat).
+Old Mongo mirror collections are not refreshed by this (central mode does not run `sheetsReconcile`);
+an old-mode instance kept running against the Sheets would refresh them as before.
+Tests: `node --test backend/test/sheetsWriteBehind.test.mjs` (fake Google client; no real Sheet is touched).
 
 ## Known data/behaviour notes (not changed here)
 

@@ -2,6 +2,7 @@ import { env } from './config/env.js';
 import { createApp } from './app.js';
 import { registerCronJobs, registerSheetsSync, registerWhatsappReportScheduler } from './jobs/index.js';
 import { startOutboxWorker } from './jobs/outboxWorker.js';
+import { startSheetsWriteBehind } from './jobs/sheetsWriteBehind.job.js';
 import { warmFmsCache } from './services/stage8.service.js';
 import { connectMongo } from './config/db.js';
 import { loadRuntimeSecretsFromMongo } from './config/runtimeSecrets.js';
@@ -90,7 +91,8 @@ app.listen(env.port, env.host, () => {
   // independent of ENABLE_CRON/ENABLE_SHEETS_SYNC — this is the write half
   // of the app's own data path, not a periodic housekeeping job.
   if (isCentral()) {
-    logger.info('[CENTRAL] outbox worker NOT started — central mode writes directly to the central tables, nothing is replayed to Google Sheets');
+    logger.info('[CENTRAL] outbox worker NOT started — central mode writes directly to the central tables; Google Sheets are only written by the write-behind mirror when CENTRAL_SHEETS_MIRROR=on');
+    startSheetsWriteBehind();
   } else {
     startOutboxWorker();
   }
