@@ -1,0 +1,91 @@
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger, #dc2626);
+  flex: 0 0 auto;
+}
+.dotOk { background: var(--success, #16a34a); }
+
+.section {
+  margin-bottom: 16px;
+}
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.qrWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md, 10px);
+}
+.qrImg {
+  width: 220px;
+  height: 220px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+.field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.field input {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 6px);
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.previewImg {
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.actionsRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.notice {
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm, 6px);
+  margin-bottom: 12px;
+}
+.noticeOk { background: rgba(22, 163, 74, 0.1); color: #15803d; border: 1px solid rgba(22, 163, 74, 0.25); }
+.noticeErr { background: rgba(220, 38, 38, 0.1); color: #b91c1c; border: 1px solid rgba(220, 38, 38, 0.25); }
+
+.muted {
+  font-size: 12px;
+  color: var(--text-2);
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatCard, Card, Button, SearchBar, FilterBar, ErrorState, EmptyState } from '../../components/ui/index.js';
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
@@ -15,10 +15,64 @@ import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
 import { toDate } from '../../utils/formatDateTime.js';
 import { Highlight } from './Highlight.jsx';
-import { OrderBookView } from './OrderBookView.jsx';
+import { OrderBookView, ChipStrip, matchRefundAndTat } from './OrderBookView.jsx';
+import { BulkRefundModal } from './BulkRefundModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
+/** Internal stage number driving the "SD Refunds" KPI card/filter — same key
+ *  STAGE_GROUPS' own group 3 uses. Bulk-select only makes sense scoped to
+ *  this stage's own form (see BulkRefundModal). */
+const SD_REFUNDS_STAGE_KEY = 11;
+
 const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
+
+/* The fixed per-stage TAT budget (target, not a computed average) — mirrors
+   offLeaseTatTracking.service.js's own TAT_BUDGETS_MS exactly (1 Day / 3
+   Hours / 7 Days / ... — see that file's own spec comment), shown on the
+   TAT Tracking page's own Stage/TAT reference table. Explicit follow-up
+   2026-11-05 ("not avg tat time... this add and dirct count", pointing at
+   that exact table): the group scorecards below should sum THESE fixed
+   targets, not an average computed from real completed records (which can
+   be sparse/noisy, or simply absent for a group nothing has finished yet).
+   A plain constant here, not fetched — these values don't change per
+   request, same reasoning TAT_KEY_BY_INTERNAL is duplicated in
+   OrderBookView.jsx rather than round-tripped from the backend. */
+const DAY = 24 * 60 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
+const TAT_BUDGETS_MS = {
+  '1': 1 * DAY, '1A': 3 * HOUR, '2': 7 * DAY,
+  '3': 2 * HOUR, '4': 3 * HOUR, '5': 3 * HOUR,
+  '6': 3 * DAY, '6A': 2 * HOUR, '6B': 2 * HOUR, '6C': 2 * HOUR,
+  '7': 4 * DAY
+};
+
+/* Explicit request 2026-11-05 ("NEW SCORCRAD FOR DIFFIEND STAGE 1 INTIMATION
+   TO TRANSPORT... STAGE 2 PICK UP INSEPCETION TO BILLING... STAGE THREE
+   STAGE SD REFUNDS"): three rolled-up summary cards on top of the existing
+   granular per-stage row below — each one groups several of those stages'
+   own `stageFilter` keys (see toggleFilter/matchesStageKey) under one
+   number and one click target, for a reader who wants the 3-phase shape of
+   the pipeline rather than reading all 11+ individual cards. The granular
+   row stays exactly as it was; this is additive, not a replacement. */
+/* tatKeys: this group's own TAT_KEY_BY_INTERNAL-equivalent sequence
+   (OrderBookView.jsx's own mapping — 1->'1', approval gate->'1A', 6
+   (Transportation)->'2', 7 (Gate In)->'3', 3 (Inspection)->'4', 5 (Final
+   Billing)->'5', 11 (SD Refunds)->'6', hod/accounts/ceo->'6A'/'6B'/'6C'),
+   in pipeline order first to last — used below to compute each group's own
+   average completed TAT (entry into the first stage to actual completion of
+   the last one actually reached, per offLeaseTatTracking.service.js's own
+   per-stage entryAt/actualAt). */
+/* tint: explicit follow-up 2026-11-05 ("different color") — the 3 cards all
+   read as one indistinguishable blue block otherwise; one distinct, non-
+   status tint per group (StatCard.module.css's own palette — navy/amber/
+   approval are the three already used elsewhere for plain categorization,
+   not success/warn/error, which carry a done/bad meaning these groups don't
+   have). */
+const STAGE_GROUPS = {
+  1: { label: 'Stage 1 · Intimation to Transportation', icon: 'inbox', keys: [1, 'approval', 6], tatKeys: ['1', '1A', '2'], tint: 'navy' },
+  2: { label: 'Stage 2 · Inspection to Billing', icon: 'list', keys: [7, 3, 5], tatKeys: ['3', '4', '5'], tint: 'amber' },
+  3: { label: 'Stage 3 · SD Refunds', icon: 'check-circle', keys: [11, 'hod', 'accounts', 'ceo'], tatKeys: ['6', '6A', '6B', '6C'], tint: 'approval' }
+};
 
 /**
  * Off-Lease pipeline overview — KPI counts + every active container's
@@ -36,6 +90,22 @@ const VIEWS = [
   { key: 'book', label: 'View 1' },
   { key: 'table', label: 'View 2' }
 ];
+
+/** ms -> "Xd Yh", same style this app's own delayLabel strings already use
+ *  (offLeaseTatTracking.service.js) — no existing frontend formatter for a
+ *  plain duration, so a small one-off here rather than reusing a backend
+ *  string built for a single record's delay. */
+function formatDurationMs(ms) {
+  const totalHours = Math.round(ms / 3600000);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  // Drops a zero unit (a single budget value is always clean days-only or
+  // hours-only — see TAT_BUDGETS_MS — so "0d 3h" would just be noise); a
+  // summed total that genuinely spans both keeps both.
+  if (days && hours) return `${days}d ${hours}h`;
+  if (days) return `${days}d`;
+  return `${hours}h`;
+}
 
 /* Record fields the dashboard search looks through. */
 const SEARCH_FIELDS = [
@@ -88,14 +158,25 @@ export function PipelineDashboard({ onOpenTab }) {
   const [search, setSearch] = useState('');
   const [view, setView] = useState('book');
   // Opens the record's full stage history on its own page (not a modal).
-  const openRecord = (rec) => {
+  // `viewMode` ('phases') is passed ONLY from View 2's row click below — View
+  // 1's own cards (onOpenRecord={openRecord}, one arg) leave it undefined, so
+  // they keep landing on the original Overview layout, unchanged. See
+  // ContainerDetailPage.jsx's PHASES doc comment for the other half of this.
+  const openRecord = (rec, viewMode) => {
     const q = new URLSearchParams({ container: rec.container });
     if (rec.leaseId) q.set('leaseId', rec.leaseId);
     if (rec._rowNum) q.set('row', String(rec._rowNum));
+    if (viewMode) q.set('view', viewMode);
     navigate(`${ROUTES.OFF_LEASE_RECORD}?${q}`);
   };
-  /* null = no filter; an internal stage number, 'approval' or 'done'. */
+  /* null = no filter; otherwise one internal stage number, 'approval' or
+     'done' — single-select. Was briefly multi-select (explicit request
+     2026-11-10), REVERTED 2026-11-13 (explicit request, "filter multiple
+     select nahi hona chahiye hai" — back to one filter at a time). */
   const [stageFilter, setStageFilter] = useState(null);
+  /* null, or a STAGE_GROUPS key (1/2/3) — mutually exclusive with stageFilter
+     (see toggleFilter/toggleGroupFilter, both clear the other). */
+  const [groupFilter, setGroupFilter] = useState(null);
   /* '' = every month; otherwise a "YYYY-MM" key (monthKey) — explicit request
      2026-09-23, grouped on `intimationDate` (Off-Lease Intimation Date — when
      the request was actually raised). BUG FOUND AND FIXED the same day: this
@@ -107,7 +188,17 @@ export function PipelineDashboard({ onOpenTab }) {
      Date only ever moves forward in step with "when did this actually
      happen", never a planned future date. */
   const [monthFilter, setMonthFilter] = useState('');
+  // '' = everyone; a real salesperson name, or the literal 'Unassigned'.
+  const [salePersonFilter, setSalePersonFilter] = useState('');
   const debouncedSearch = useDebouncedValue(search, 200);
+  /* Rows checked for the bulk SD Refund form — keyed the same way the table
+     rows are (`${leaseId||i}-${container}`). Cleared on a successful submit
+     and whenever the SD Refunds filter is turned off, since the checkbox
+     column itself only shows while that filter is active. */
+  const [selectedKeys, setSelectedKeys] = useState(new Set());
+  const [bulkRefundOpen, setBulkRefundOpen] = useState(false);
+  const showSelectCol = stageFilter === SD_REFUNDS_STAGE_KEY;
+  useEffect(() => { if (!showSelectCol) setSelectedKeys(new Set()); }, [showSelectCol]);
 
   const kpis = data?.kpis || {};
   const items = data?.items || [];
@@ -131,6 +222,72 @@ export function PipelineDashboard({ onOpenTab }) {
       .map(([value, label]) => ({ value, label }));
   }, [items]);
 
+  /* Explicit request 2026-11-05 ("filter sale person") — a Sale Person
+     filter on the main Dashboard toolbar itself, alongside Month, rather
+     than only reachable via the separate Sale Person tab's own popup.
+     `salePerson` is resolved server-side in getOffLeaseDashboardData (same
+     Sales CRM lookup every other "who owns this client" read in this app
+     uses) — built from whatever names are actually present in `items`, not
+     a hand-maintained list, same reasoning monthOptions above uses. A blank
+     salePerson groups under "Unassigned", sorted last, same convention
+     SalePersonTab.jsx's own grouping already uses. */
+  const UNASSIGNED = 'Unassigned';
+  const salePersonOptions = useMemo(() => {
+    const names = new Set();
+    let hasUnassigned = false;
+    for (const it of items) {
+      const name = (it.salePerson || '').trim();
+      if (name) names.add(name); else hasUnassigned = true;
+    }
+    const out = [...names].sort().map((n) => ({ value: n, label: n }));
+    if (hasUnassigned) out.push({ value: UNASSIGNED, label: UNASSIGNED });
+    return out;
+  }, [items]);
+
+  /* One predicate per stageFilter "key" (an internal stage number, 'approval',
+     'done', 'hold', or 'hod'/'accounts'/'ceo') — extracted 2026-11-05 so the
+     3 new STAGE_GROUPS cards below can OR several keys together instead of
+     duplicating this matching logic. Behavior unchanged from before the
+     extraction; see the per-branch comments that used to sit inline here for
+     the full reasoning (pendingStages vs currentStageNum; the hod/accounts/
+     ceo composite-key fix for a container with two off-lease rows). */
+  const refundWaitingSets = useMemo(() => {
+    const sets = {};
+    for (const stage of ['hod', 'accounts', 'ceo']) {
+      const matching = refundRows.filter((r) => r.currentStage === stage);
+      sets[stage] = {
+        composite: new Set(
+          matching
+            .filter((r) => String(r.offLeaseId || '').trim())
+            .map((r) => `${String(r.containerNo || '').trim().toUpperCase()}|${String(r.offLeaseId || '').trim().toUpperCase()}`)
+        ),
+        containerOnly: new Set(matching.map((r) => String(r.containerNo || '').trim().toUpperCase()))
+      };
+    }
+    return sets;
+  }, [refundRows]);
+  const itemsByContainerCount = useMemo(() => {
+    const m = new Map();
+    for (const it of items) {
+      const c = String(it.container || '').trim().toUpperCase();
+      if (c) m.set(c, (m.get(c) || 0) + 1);
+    }
+    return m;
+  }, [items]);
+  const matchesStageKey = (it, key) => {
+    if (key === 'approval') return it.stageClass === 'approval';
+    if (key === 'done') return it.stageClass === 'done';
+    if (key === 'hold') return !!it.onHold;
+    if (key === 'hod' || key === 'accounts' || key === 'ceo') {
+      const { composite, containerOnly } = refundWaitingSets[key];
+      const container = String(it.container || '').trim().toUpperCase();
+      const leaseId = String(it.leaseId || '').trim().toUpperCase();
+      if (leaseId && composite.has(`${container}|${leaseId}`)) return true;
+      return itemsByContainerCount.get(container) === 1 && containerOnly.has(container);
+    }
+    return !!it.pendingStages?.includes(key);
+  };
+
   /* Clicking a KPI card filters this dashboard rather than jumping to that
      stage's tab. The cards describe THIS list, so sending the reader somewhere
      else to see what they just counted loses the context they were building. */
@@ -138,65 +295,23 @@ export function PipelineDashboard({ onOpenTab }) {
     const term = debouncedSearch.trim().toLowerCase();
     let out = items;
 
-    if (stageFilter === 'approval') out = out.filter((it) => it.stageClass === 'approval');
-    else if (stageFilter === 'done') out = out.filter((it) => it.stageClass === 'done');
-    else if (stageFilter === 'hold') out = out.filter((it) => it.onHold);
-    /* pendingStages, not currentStageNum: a container can genuinely be
-       pending in more than one stage's queue at once (see pendingStages'
-       doc comment on the backend), and the KPI card's own count is a real
-       queue length, not a count of items whose single currentStageNum
-       happens to match. Filtering on currentStageNum alone let a card read
-       "1" while its own click-through showed 0 records — the one container
-       behind that count was pending here too, just not as its "primary"
-       stage. */
-    /* 6A / 6B / 6C: the records whose SD Refund is waiting on HOD / Accounts /
-       CEO. That status lives in the refunds sheet, not on the off-lease row,
-       so match by container number + Lease ID (offLeaseId) composite — NOT
-       container alone. BUG FOUND AND FIXED 2026-11-04 (explicit report,
-       live on TRIU6617353, same root cause as OrderBookView.jsx's own
-       refundByContainer fix — see that one's doc comment for the full
-       story): a container with two genuinely separate Off-Lease Tracking
-       rows (a re-lease to a different client) had ONE lease's SD Refund
-       waiting-on-HOD status match BOTH rows, so a long-finished lease at
-       Stage 5 showed up in this card's own filtered list. Falls back to a
-       plain container match ONLY when this container has exactly ONE
-       Off-Lease Tracking row to begin with (legacy refund entries from
-       before offLeaseId was captured have nowhere to leak onto — there's
-       only one row they could possibly belong to). Gating the fallback on
-       the REFUND row count instead was tried first and is WRONG:
-       live-verified on TRIU6617353, which has exactly one refund row (so
-       that condition says "safe to fall back") but TWO Off-Lease Tracking
-       rows — the fallback would still have leaked OF0090's refund onto
-       OF0048. It's the number of off-lease ROWS sharing a container that
-       determines whether a container-only match can ever be ambiguous, not
-       the number of refund rows — same correction made in
-       OrderBookView.jsx's own refundByContainer fix. */
-    else if (stageFilter === 'hod' || stageFilter === 'accounts' || stageFilter === 'ceo') {
-      const matching = refundRows.filter((r) => r.currentStage === stageFilter);
-      const waitingComposite = new Set(
-        matching
-          .filter((r) => String(r.offLeaseId || '').trim())
-          .map((r) => `${String(r.containerNo || '').trim().toUpperCase()}|${String(r.offLeaseId || '').trim().toUpperCase()}`)
-      );
-      const waitingContainerOnly = new Set(matching.map((r) => String(r.containerNo || '').trim().toUpperCase()));
-      const itemsByContainerCount = new Map();
-      for (const it of items) {
-        const c = String(it.container || '').trim().toUpperCase();
-        if (c) itemsByContainerCount.set(c, (itemsByContainerCount.get(c) || 0) + 1);
-      }
-      out = out.filter((it) => {
-        const container = String(it.container || '').trim().toUpperCase();
-        const leaseId = String(it.leaseId || '').trim().toUpperCase();
-        if (leaseId && waitingComposite.has(`${container}|${leaseId}`)) return true;
-        return itemsByContainerCount.get(container) === 1 && waitingContainerOnly.has(container);
-      });
-    } else if (stageFilter != null) out = out.filter((it) => it.pendingStages?.includes(stageFilter));
+    if (groupFilter != null) {
+      const keys = STAGE_GROUPS[groupFilter].keys;
+      out = out.filter((it) => keys.some((k) => matchesStageKey(it, k)));
+    } else if (stageFilter != null) {
+      out = out.filter((it) => matchesStageKey(it, stageFilter));
+    }
 
     if (monthFilter) {
       out = out.filter((it) => {
         const d = toDate(it.intimationDate);
         return d && monthKey(d) === monthFilter;
       });
+    }
+
+    if (salePersonFilter) {
+      out = out.filter((it) => (it.salePerson || '').trim() === salePersonFilter
+        || (!it.salePerson?.trim() && salePersonFilter === UNASSIGNED));
     }
 
     if (!term) return out;
@@ -208,26 +323,84 @@ export function PipelineDashboard({ onOpenTab }) {
       const hay = SEARCH_FIELDS.map((k) => String(it[k] ?? '')).join(' ').toLowerCase();
       return words.every((w) => hay.includes(w));
     });
-  }, [items, debouncedSearch, stageFilter, monthFilter, refundRows]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, debouncedSearch, stageFilter, groupFilter, monthFilter, salePersonFilter, refundWaitingSets, itemsByContainerCount]);
+
+  /* View 2's own chip strip (ChipStrip, same chips View 1's cards show) needs
+     each row's matched refundEntry/tatRecord — OrderBookView.jsx's own
+     exported matchRefundAndTat does the same composite container+Lease-ID
+     matching that component's internal useMemos use, just standalone. */
+  const fmsMatch = useMemo(() => matchRefundAndTat(filtered, refundRows, tatRecords), [filtered, refundRows, tatRecords]);
+
+  /* Group totals for the 3 STAGE_GROUPS cards — a distinct count of items
+     matching ANY of the group's keys (not a naive sum of the individual
+     per-stage counts, which would double-count a container pending in more
+     than one of the group's own stages at once — same reasoning pendingStages
+     already requires for a single stage, see matchesStageKey above). Always
+     computed off the raw `items`, not `filtered`, so a card's own number never
+     reacts to search/month/the OTHER filter being active — same convention
+     the individual kpis.byStage cards already follow. */
+  const groupTotals = useMemo(() => {
+    const out = {};
+    for (const [gk, group] of Object.entries(STAGE_GROUPS)) {
+      out[gk] = items.filter((it) => group.keys.some((k) => matchesStageKey(it, k))).length;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, refundWaitingSets, itemsByContainerCount]);
+
+  /* Second follow-up, same day ("not avg tat time, this add and dirct
+     count", pointing at the TAT Tracking page's own Stage/TAT budget table):
+     dropped the computed-average approach entirely (both the single-span
+     version and the per-stage-average version that came before this) — a
+     group's TAT line is now just the fixed TAT_BUDGETS_MS target for each
+     of its own tatKeys, summed directly. Always available (never "no data
+     yet"), and matches the exact reference numbers already shown elsewhere
+     in this app (1 Day / 3 Hours / 7 Days / ...). */
+  const groupTat = useMemo(() => {
+    const out = {};
+    for (const [gk, group] of Object.entries(STAGE_GROUPS)) {
+      const perStage = group.tatKeys.map((tatKey) => ({ tatKey, budgetMs: TAT_BUDGETS_MS[tatKey] || 0 }));
+      out[gk] = { totalMs: perStage.reduce((sum, p) => sum + p.budgetMs, 0), perStage };
+    }
+    return out;
+  }, []);
 
   /* Clicking the active card again clears it — the same control that applied
-     the filter removes it, so there is no hunting for a reset. */
-  const toggleFilter = (key) => setStageFilter((cur) => (cur === key ? null : key));
-  const filterLabel = stageFilter === 'approval'
-    ? 'Pending approval'
-    : stageFilter === 'done'
-      ? 'Completed'
-      : stageFilter === 'hold'
-        ? 'On hold'
-        : stageFilter === 'hod'
-          ? 'Stage 6A · HOD approval pending'
-          : stageFilter === 'accounts'
-            ? 'Stage 6B · Accounts approval pending'
-            : stageFilter === 'ceo'
-              ? 'Stage 6C · CEO approval pending'
-              : stageFilter != null
-          ? (STAGES.find((s) => s.number === stageFilter)?.label || `Stage ${stageFilter}`)
-          : '';
+     the filter removes it, so there is no hunting for a reset. Group and
+     single-stage filters are mutually exclusive — picking one clears the
+     other, so there's only ever one active filter to reason about/clear. */
+  const toggleFilter = (key) => {
+    setGroupFilter(null);
+    setStageFilter((cur) => (cur === key ? null : key));
+  };
+  const toggleGroupFilter = (key) => { setStageFilter(null); setGroupFilter((cur) => (cur === key ? null : key)); };
+  const toggleRowSelected = (key) => {
+    setSelectedKeys((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  /* Same row-key shape OrderBookView.jsx's own row `key` already uses
+     (`${leaseId||''}-${container}`) — shared so a container checked in View
+     1 stays checked after switching to View 2 and back. */
+  const selectedEntries = filtered
+    .map((it) => ({ key: `${it.leaseId || ''}-${it.container}`, it }))
+    .filter(({ key }) => selectedKeys.has(key))
+    .map(({ it }) => ({ container: it.container, clientName: it.clientName, leaseId: it.leaseId }));
+  const stageKeyLabel = (key) => (
+    key === 'approval' ? 'Pending approval'
+      : key === 'done' ? 'Completed'
+        : key === 'hold' ? 'On hold'
+          : key === 'hod' ? 'Stage 6A · HOD approval pending'
+            : key === 'accounts' ? 'Stage 6B · Accounts approval pending'
+              : key === 'ceo' ? 'Stage 6C · CEO approval pending'
+                : (STAGES.find((s) => s.number === key)?.label || `Stage ${key}`)
+  );
+  const filterLabel = groupFilter != null
+    ? STAGE_GROUPS[groupFilter].label
+    : stageFilter != null ? stageKeyLabel(stageFilter) : '';
 
   return (
     <>
@@ -264,6 +437,26 @@ export function PipelineDashboard({ onOpenTab }) {
           onClick={() => navigate(ROUTES.LEASE_EXPIRY)}
         />
         <StatCard size="lg" icon="package" label="Active off-lease requests" value={kpis.active ?? '—'} loading={loading} tint="navy" />
+      </div>
+
+      {/* Three rolled-up phase cards — see STAGE_GROUPS' own doc comment. */}
+      <div className={styles.kpiGroups}>
+        {Object.entries(STAGE_GROUPS).map(([gk, group]) => {
+          const gt = groupTat[gk];
+          // "S1 2d3h + 1A 0d5h + S2 1d2h" — short per-stage tag (numeric
+          // tatKey -> "S<n>", a gate key like '1A'/'6C' shown as-is, already
+          // reads as a stage).
+          const breakdown = gt.perStage
+            .map((p) => `${/^\d+$/.test(p.tatKey) ? `S${p.tatKey}` : p.tatKey} ${formatDurationMs(p.budgetMs)}`)
+            .join(' + ');
+          return (
+            <StatCard size="xs" key={gk}
+              icon={group.icon} label={group.label} value={groupTotals[gk] ?? '—'} loading={loading}
+              footnote={`TAT Budget ${formatDurationMs(gt.totalMs)} = ${breakdown}`}
+              tint={group.tint} active={groupFilter === Number(gk)} onClick={() => toggleGroupFilter(Number(gk))}
+            />
+          );
+        })}
       </div>
 
       {/* One compact row for the per-stage counts; scrolls sideways rather
@@ -396,14 +589,20 @@ export function PipelineDashboard({ onOpenTab }) {
                 value: monthFilter,
                 onChange: setMonthFilter,
                 options: monthOptions
+              }, {
+                key: 'salePerson',
+                label: 'Sale Person',
+                value: salePersonFilter,
+                onChange: setSalePersonFilter,
+                options: salePersonOptions
               }]}
             />
             <SearchBar variant="large" value={search} onChange={setSearch} placeholder="Search container, client, lease, location…" />
           </div>
           {/* An active filter has to be visible and removable here — otherwise
               a shrunken list looks like missing data. */}
-          {stageFilter != null && (
-            <button type="button" className={styles.filterChip} onClick={() => setStageFilter(null)} title="Clear filter">
+          {(stageFilter != null || groupFilter != null) && (
+            <button type="button" className={styles.filterChip} onClick={() => { setStageFilter(null); setGroupFilter(null); }} title="Clear filter">
               <span className={styles.filterKicker}>Filtered by</span>
               <span className={styles.filterName}>{filterLabel}</span>
               <span className={styles.filterX} aria-hidden="true">×</span>
@@ -412,6 +611,21 @@ export function PipelineDashboard({ onOpenTab }) {
           )}
           <span className={styles.count}>{filtered.length} record{filtered.length === 1 ? '' : 's'}</span>
         </div>
+
+        {/* Bulk SD Refund selection bar — shown above EITHER view, explicit
+            follow-up 2026-11-10 ("stage 6 mai jaise hi rk do click kiya na
+            tho upar ek SD Refunds ka from dedo"): the checkbox lives beside
+            each record (View 1's own Container column, View 2's own new
+            column) and this bar is the one shared trigger for filling the
+            form against everything currently checked, in whichever view the
+            user happens to be looking at. */}
+        {!loading && !error && showSelectCol && selectedEntries.length > 0 && (
+          <div className={styles.bulkBar}>
+            <span><span className={styles.bulkBarCount}>{selectedEntries.length}</span> selected</span>
+            <Button size="sm" variant="primary" onClick={() => setBulkRefundOpen(true)}>Fill one SD Refund form for all</Button>
+            <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear selection</Button>
+          </div>
+        )}
 
         {view === 'book' && (
           <OrderBookView
@@ -432,6 +646,9 @@ export function PipelineDashboard({ onOpenTab }) {
                Refetching all 35 records to reflect one comment is what made
                Save and Delete sit spinning. */
             onOpenRecord={openRecord}
+            showSelectCol={showSelectCol}
+            selectedKeys={selectedKeys}
+            onToggleSelected={toggleRowSelected}
           />
         )}
 
@@ -446,6 +663,7 @@ export function PipelineDashboard({ onOpenTab }) {
             <table className={styles.table}>
               <thead>
                 <tr>
+                  {showSelectCol && <th className={styles.selectCol} />}
                   <th>Lease ID</th>
                   <th>Container</th>
                   <th>Client</th>
@@ -458,77 +676,69 @@ export function PipelineDashboard({ onOpenTab }) {
                     off-leased under two leases (TRIU6681671), which React
                     reported as a duplicate key and could collapse into one
                     row. The lease is what distinguishes the records. */}
-                {filtered.map((it, i) => (
-                  <tr key={`${it.leaseId || i}-${it.container}`}>
+                {filtered.map((it, i) => {
+                  const { refundEntry, tatRecord } = fmsMatch.get(it) || {};
+                  const rowKey = `${it.leaseId || i}-${it.container}`;
+                  const selectKey = `${it.leaseId || ''}-${it.container}`;
+                  return (
+                  /* Row itself opens the full record page (same destination
+                     View 1's cards already use, openRecord) — explicit
+                     request 2026-11-05 ("click the row then open view 2"),
+                     scoped to View 2 only. The Open/Approve button keeps its
+                     own job (jump straight to that stage's tab) — its click
+                     stops propagation so it doesn't also fire the row's
+                     navigate-to-record-page. Same for the selection checkbox,
+                     explicit request 2026-11-10 (bulk SD Refund form). */
+                  <tr key={rowKey} className={styles.clickableRow} onClick={() => openRecord(it, 'phases')}>
+                    {showSelectCol && (
+                      <td className={styles.selectCol} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(selectKey)}
+                          onChange={() => toggleRowSelected(selectKey)}
+                          aria-label={`Select ${it.container} for bulk SD Refund`}
+                        />
+                      </td>
+                    )}
                     <td className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={debouncedSearch} /></td>
                     <td className={styles.container}><Highlight text={it.container} query={debouncedSearch} /></td>
                     <td><Highlight text={it.clientName || '—'} query={debouncedSearch} /></td>
-                    <td><MiniPipeline item={it} /></td>
+                    <td><ChipStrip item={it} refundEntry={refundEntry} tatRecord={tatRecord} /></td>
                     <td className={styles.actionCell}>
                       {it.stageClass === 'approval' ? (
-                        <Button size="sm" variant="primary" onClick={() => onOpenTab?.('approval')}>Approve</Button>
+                        <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); onOpenTab?.('approval'); }}>Approve</Button>
                       ) : it.stageClass === 'done' ? (
                         <span className={styles.doneTag}>Released</span>
                       ) : it.stageClass === 'rejected' ? (
                         <span className={styles.rejectedTag}>Rejected</span>
                       ) : (
-                        <Button size="sm" variant="secondary" onClick={() => onOpenTab?.(`stage${it.currentStageNum}`)}>Open</Button>
+                        <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); onOpenTab?.(`stage${it.currentStageNum}`); }}>Open</Button>
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </Card>
 
+      {bulkRefundOpen && selectedEntries.length > 0 && (
+        <BulkRefundModal
+          entries={selectedEntries}
+          onClose={() => setBulkRefundOpen(false)}
+          onSubmitted={() => { setSelectedKeys(new Set()); setBulkRefundOpen(false); reload(); }}
+        />
+      )}
+
     </>
   );
 }
 
-/**
- * A real connected step-tracker: a numbered dot per stage (1-8, + the
- * approval gate "A" between Stage 1 and 2), joined by a line that fills in
- * behind everything already done. Numbers stay inside the dot so the row
- * stays single-line (matches every other DataGrid in this app) — full stage
- * name is still available via title="" on hover.
- */
-function MiniPipeline({ item }) {
-  const { stages, approvalStatus, currentStageNum, stageClass } = item;
-  const approvalLower = String(approvalStatus || '').trim().toLowerCase();
-
-  const dotClass = (done, isCurrent, rejected) => [
-    styles.dot,
-    rejected ? styles.dotRejected : done ? styles.dotDone : isCurrent ? styles.dotCurrent : styles.dotFuture
-  ].filter(Boolean).join(' ');
-
-  const lineClass = (filled) => [styles.line, filled ? styles.lineDone : ''].filter(Boolean).join(' ');
-
-  const nodes = [];
-  stages.forEach((s, i) => {
-    if (i !== 0) nodes.push(<span key={`l${s.stage}`} className={lineClass(stages[i - 1].done)} />);
-    nodes.push(
-      // displayStage, not stage — the dot shows the user-facing number.
-      <span key={`s${s.stage}`} className={dotClass(s.done, s.stage === currentStageNum)} title={`Stage ${s.displayStage ?? s.stage} · ${s.label}${s.skipped ? ' — Skipped' : s.done ? ' — Completed' : s.stage === currentStageNum ? ' — In progress' : ''}`}>
-        {s.displayStage ?? s.stage}
-      </span>
-    );
-    if (i === 0) {
-      const gateDone = approvalLower === 'approved';
-      const gateRejected = approvalLower === 'rejected';
-      nodes.push(<span key="gl" className={lineClass(gateDone)} />);
-      nodes.push(
-        <span
-          key="gate"
-          className={dotClass(gateDone, stageClass === 'approval', gateRejected)}
-          title={`Intimation Approval — ${gateRejected ? 'Rejected' : gateDone ? 'Approved' : 'Pending'}`}
-        >
-          A
-        </span>
-      );
-    }
-  });
-
-  return <div className={styles.pipeline}>{nodes}</div>;
-}
+/* MiniPipeline (the plain dot-tracker this View 2 table used to show here)
+   was replaced 2026-11-05 ("this table replace same this table show for
+   view 2") by ChipStrip (OrderBookView.jsx) — the real 1/1A/2/.../6A/6B/6C/7
+   chips View 1's own cards show, which the dot tracker had no way to
+   represent (it never showed the SD Refund sub-stages at all). Removed
+   rather than left as dead code once nothing called it any more. */

@@ -1,4 +1,4 @@
-import { getRefunds, createRefund, decideRefundApproval, getRefundReviewEntry, decideRefundReview } from '../api/refunds.api.js';
+import { getRefunds, createRefund, decideRefundApproval, sendBackRefundApproval, getRefundReviewEntry, decideRefundReview } from '../api/refunds.api.js';
 
 export async function fetchRefunds() {
   return getRefunds();
@@ -8,6 +8,9 @@ export async function submitRefund(payload) {
 }
 export async function submitRefundApprovalDecision(payload) {
   return decideRefundApproval(payload);
+}
+export async function submitRefundSendBack(payload) {
+  return sendBackRefundApproval(payload);
 }
 export async function fetchRefundReviewEntry(payload) {
   return getRefundReviewEntry(payload);

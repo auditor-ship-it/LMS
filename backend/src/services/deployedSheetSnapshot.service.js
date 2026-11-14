@@ -86,10 +86,43 @@ export async function diffDeployedSnapshots(oldMonthKey, newMonthKey) {
   ]);
   if (!oldSnap) return { ok: false, reason: `No snapshot stored for ${oldMonthKey}` };
   if (!newSnap) return { ok: false, reason: `No snapshot stored for ${newMonthKey}` };
+  return { ...diffValues(oldSnap.values, newSnap.values), oldMonthKey, newMonthKey };
+}
 
-  const headers = newSnap.values[0] || [];
-  const oldRows = oldSnap.values.slice(1);
-  const newRows = newSnap.values.slice(1);
+/**
+ * Same row-by-row, per-container diff as diffDeployedSnapshots, but against
+ * the LIVE current sheet instead of a second saved snapshot — explicit
+ * request 2026-11-10 ("konse konse update hua hai 25 oct se... us col ka
+ * data ko [green kar do]"): the Deployed Summary detail table (web page,
+ * not the Excel export) wanted the SAME cell-level "what actually changed"
+ * highlighting the Excel export already has, not a coarser whole-row/
+ * rolling-N-days proxy. There is no snapshot dated exactly "25 Oct" — the
+ * closest real one is the "2026-10" monthly snapshot, captured 27-Oct-2026
+ * (the day this snapshot feature itself first shipped, so that was
+ * necessarily its first capture) — close enough to what was asked that
+ * reusing it, rather than inventing a new date-keyed snapshot mechanism
+ * just for this, is the right trade-off.
+ *
+ * @param monthKey the SAVED snapshot to diff the live sheet against (e.g.
+ *   the most recent one before this month, from previousMonthKey)
+ */
+export async function diffLiveAgainstSnapshot(monthKey) {
+  const [oldSnap, liveValues] = await Promise.all([
+    getDeployedSheetSnapshot(monthKey),
+    _deployedRawValues()
+  ]);
+  if (!oldSnap) return { ok: false, reason: `No snapshot stored for ${monthKey}` };
+  return { ...diffValues(oldSnap.values, liveValues.values), oldMonthKey: monthKey, newMonthKey: 'live' };
+}
+
+/** Shared core of diffDeployedSnapshots/diffLiveAgainstSnapshot — row-by-row,
+ *  per-container diff between two { values: [[header...], [row...], ...] }
+ *  shapes. See diffDeployedSnapshots' own doc comment for the matching rules
+ *  (grouped by container, positionally paired) and return shape. */
+function diffValues(oldValues, newValues) {
+  const headers = newValues[0] || [];
+  const oldRows = oldValues.slice(1);
+  const newRows = newValues.slice(1);
 
   const groupByContainer = (rows) => {
     const map = new Map();
@@ -126,5 +159,5 @@ export async function diffDeployedSnapshots(oldMonthKey, newMonthKey) {
     }
   }
 
-  return { ok: true, oldMonthKey, newMonthKey, added, removed, changed, headers };
+  return { ok: true, added, removed, changed, headers };
 }

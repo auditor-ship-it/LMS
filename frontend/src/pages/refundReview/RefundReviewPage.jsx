@@ -22,7 +22,7 @@ const DOC_FIELDS = [
   ['clientEmailConfirmationUrl', 'Client Email Confirmation'],
   ['clientLedgerUrl', 'Client Ledger'],
   ['invoiceFileUrl', 'SD Calculation'],
-  ['piFileUrl', 'Quarterly Ledger'],
+  ['piFileUrl', 'Quatre Ledger'],
   ['attachmentsUrl', 'SD Amounts to be Refunded']
 ];
 

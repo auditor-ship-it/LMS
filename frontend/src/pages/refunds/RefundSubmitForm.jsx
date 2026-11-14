@@ -228,9 +228,9 @@ export function RefundSubmitForm({ onSubmitted, lockedContainerNo, lockedClientN
           />
         </label>
         <label className={styles.field}>
-          <span className={styles.label}>Quarterly Ledger</span>
+          <span className={styles.label}>Quatre Ledger</span>
           <FileUpload
-            label={form.piFile ? `Selected: ${form.piFile.fileName}` : 'Choose quarterly ledger file'}
+            label={form.piFile ? `Selected: ${form.piFile.fileName}` : 'Choose quatre ledger file'}
             accept={ACCEPT}
             onSelected={(file) => setForm((f) => ({ ...f, piFile: file }))}
           />

@@ -24,6 +24,15 @@ export async function decideApproval(req, res) {
   res.json({ result: await refundsService.decideRefundApproval(rowNum, stage, decision, remarks, req.user.email) });
 }
 
+/** POST /api/refunds/send-back — explicit request 2026-11-13, a separate
+ *  action from decide-approval's 'rejected': closes this bill as 'Sent
+ *  Back' AND resets the Off-Lease container's Stage 6 to pending for a
+ *  corrected resubmission (see decideRefundSendBack's own doc comment). */
+export async function sendBack(req, res) {
+  const { rowNum, stage, remarks } = req.body;
+  res.json({ result: await refundsService.decideRefundSendBack(rowNum, stage, remarks, req.user.email) });
+}
+
 /** GET /api/refund-review — no-login read for the signed review link (the
  *  "HOD/CEO/Accounts Review Link" sheet columns). Token carries its own
  *  rowNum/stage; verified inside the service — see getRefundEntryForReview's

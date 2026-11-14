@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button } from '../../components/ui/index.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { submitRefundApprovalDecision } from '../../services/refunds.service.js';
+import { submitRefundApprovalDecision, submitRefundSendBack } from '../../services/refunds.service.js';
 import { SdRefundDetails } from '../stages/StageDetailModal.jsx';
 import styles from './ContainerDetailPage.module.css';
 
@@ -45,12 +45,13 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
   const ownKeys = ['hodStatus', 'hodApprover', 'hodDate', 'hodRemarks', 'accountsStatus', 'accountsApprover', 'accountsDate', 'accountsRemarks', 'ceoStatus', 'ceoApprover', 'ceoDate', 'ceoRemarks'];
 
   /* Decides straight from the buttons — the remarks box is right here, so there
-     is no pop-up in between. A rejection needs a reason (it is sent to the
-     submitter and stops the workflow), so that one asks for it first. */
+     is no pop-up in between. Remarks are required for all three actions —
+     explicit request 2026-11-13 ("remarks required for approval and reject
+     and send back"); previously only Reject enforced this. */
   const decide = async (decision) => {
     const text = remarks.trim();
-    if (decision === 'rejected' && !text) {
-      setError('Add a remark saying why this is being rejected.');
+    if (!text) {
+      setError('Add a remark before deciding.');
       return;
     }
     setBusy(decision);
@@ -59,6 +60,34 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
       const result = await submitRefundApprovalDecision({
         rowNum: entry._rowNum, stage: which, decision, remarks: text
       });
+      if (result === 'INVALID_STATE') {
+        setError("Already decided, or not this stage's turn — refresh and try again.");
+      } else {
+        setRemarks('');
+        onDone();
+      }
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /* Send Back — explicit request 2026-11-13, a separate action from Reject:
+     Reject closes this bill for good; Send Back closes THIS bill too but
+     also resets the Off-Lease container's Stage 6 back to pending, so a
+     corrected bill can be resubmitted through it (see
+     decideRefundSendBack's own doc comment on the backend). */
+  const sendBack = async () => {
+    const text = remarks.trim();
+    if (!text) {
+      setError('Add a remark before deciding.');
+      return;
+    }
+    setBusy('sentback');
+    setError('');
+    try {
+      const result = await submitRefundSendBack({ rowNum: entry._rowNum, stage: which, remarks: text });
       if (result === 'INVALID_STATE') {
         setError("Already decided, or not this stage's turn — refresh and try again.");
       } else {
@@ -90,7 +119,7 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>
-              Remarks (required to reject)
+              Remarks (required)
             </span>
             <textarea
               value={remarks}
@@ -104,6 +133,7 @@ export function RefundDecisionPanel({ which, entry, canAct, onDone }) {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Button size="sm" variant="primary" loading={busy === 'approved'} disabled={!!busy} onClick={() => decide('approved')}>Approve</Button>
             <Button size="sm" variant="danger" loading={busy === 'rejected'} disabled={!!busy} onClick={() => decide('rejected')}>Reject</Button>
+            <Button size="sm" variant="secondary" loading={busy === 'sentback'} disabled={!!busy} onClick={sendBack}>Send Back</Button>
           </div>
         </div>
       )}

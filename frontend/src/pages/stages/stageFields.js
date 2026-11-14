@@ -337,6 +337,14 @@ export const STAGE_FIELDS = {
      show them. They are simply no longer offered for new entry. */
   3: [
     { key: 'col_24', label: 'Container Received Date', type: 'date', required: true },
+    // Explicit request 2026-11-13: compulsory — the submission notification
+    // email goes TO this address (see offlease.service.js's
+    // _sendOffLeaseInspectionEmail/OL_STAGE3_EMAIL_COL). type: 'text', not
+    // 'email' — StageDetailModal.jsx's Field renderer has no 'email' case
+    // (falls through to `return null`, rendering nothing); every other
+    // email-shaped field in this app's stage forms (e.g. Stage 4's "Email
+    // (for quotation notice)", col_167 just below) is plain 'text' too.
+    { key: 'col_358', label: 'Email ID', type: 'text', required: true },
     ...INSPECTION_FIELDS,
     ...MACHINE_FIELDS,
     ...CABIN_FIELDS

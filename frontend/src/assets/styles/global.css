@@ -11,6 +11,15 @@ body {
   -webkit-font-smoothing: antialiased;
   transition: background var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out);
 }
+/* Laptop-range density — explicit request 2026-11-13 ("fully responsive on
+   all laptop screens"), paired with AppShell.module.css's own matching
+   breakpoints: a half-point smaller base font reclaims a little width/height
+   at the two most common smaller laptop panels (1280x720/1366x768). Most
+   component text sets its own explicit px font-size (unaffected by this —
+   see each CSS module), so this mainly tightens unstyled/inherited text and
+   line-height-driven row heights; it's a safe floor, not the whole fix. */
+@media (max-width: 1366px) { body { font-size: 13.5px; } }
+
 h1, h2, h3, h4, h5, h6 { font-family: var(--f-display); }
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 button { cursor: pointer; }

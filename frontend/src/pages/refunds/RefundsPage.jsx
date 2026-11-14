@@ -39,7 +39,7 @@ function StageBadge({ status }) {
 const TABLE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
   'Payment Due Date', 'SD Calculation',
-  'Quarterly Ledger', 'Department', 'Ledger Head',
+  'Quatre Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded',
   // REWORKED 2026-10-07 ("Change Stage 6 Approval Flow"): HOD -> Accounts ->
   // CEO, CEO required only above ₹1,00,000 (see refunds.service.js's

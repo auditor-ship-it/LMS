@@ -67,7 +67,7 @@ function currentTatStage(tatRecord, tatKey) {
   return tatRecord?.stages?.find((s) => s.key === tatKey) || null;
 }
 
-function buildChips(item, refundEntry, tatRecord) {
+export function buildChips(item, refundEntry, tatRecord) {
   const [first, ...rest] = STAGES;
   const approval = String(item.approvalStatus || '').trim().toLowerCase();
   const stageOf = (n) => item.stages?.find((s) => s.stage === n);
@@ -153,6 +153,136 @@ function buildChips(item, refundEntry, tatRecord) {
   return chips;
 }
 
+/** Same composite container+Lease-ID matching this component's own
+ *  refundByContainer/tatByContainer useMemos use internally (see those for
+ *  the full cross-lease-contamination reasoning) — exported standalone so a
+ *  DIFFERENT presentation of the same items (PipelineDashboard.jsx's and
+ *  SalePersonTab.jsx's own View 2 tables) can resolve the same
+ *  refundEntry/tatRecord per item without duplicating that matching logic a
+ *  third time. Returns a Map keyed by item (object identity, not container —
+ *  container alone is not unique). */
+export function matchRefundAndTat(items, refundRows, tatRecords) {
+  const refundByComposite = new Map();
+  /* BUG FOUND AND FIXED 2026-11-13 (live, on TRIU6617353/OF0048 — explicit
+   * report "6 6a 6b 6c sab blue dikh raha hai", HOD/Accounts/CEO chips
+   * showing Approved-tone blue on a record with no SD Refund ever filed):
+   * the fallback used to key off `itemsByContainerCount` — how many rows
+   * for this container are in the CURRENTLY DISPLAYED `items` list — not
+   * how many Off-Lease Tracking rows genuinely exist for this container.
+   * TRIU6617353 has two (OF0048 row 39, OF0090 row 92), but only OF0048 was
+   * showing in this particular filtered/active list at the time, so the
+   * count read as 1 and the fallback wrongly attached OF0090's own real,
+   * CEO-approved refund entry (a different lease, different client) onto
+   * OF0048's chips — the exact same cross-lease-contamination bug class
+   * already fixed in ContainerDetailPage.jsx's `refund` and
+   * StageDetailModal.jsx's `scopedSdRefunds` (see both their own doc
+   * comments), now closed here too, a third place it was independently
+   * reimplemented.
+   *
+   * Fixed the same way those two were: the single-entry fallback may only
+   * ever stand in for a genuinely blank-offLeaseId LEGACY entry (nothing to
+   * disambiguate with), checked against every refund row for this
+   * container — never against how many rows happen to be on screen right
+   * now, and never an entry carrying an explicit, non-matching lease ID. */
+  const refundsByContainer = new Map();
+  const isBetterRefund = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
+  for (const r of refundRows || []) {
+    const container = String(r.containerNo || '').trim().toUpperCase();
+    if (!container) continue;
+    const leaseId = String(r.offLeaseId || '').trim().toUpperCase();
+    if (leaseId) {
+      const key = `${container}|${leaseId}`;
+      if (isBetterRefund(refundByComposite.get(key))) refundByComposite.set(key, r);
+    }
+    if (!refundsByContainer.has(container)) refundsByContainer.set(container, []);
+    refundsByContainer.get(container).push(r);
+  }
+  const refundByContainerSingle = new Map();
+  for (const [container, rowsForContainer] of refundsByContainer) {
+    if (rowsForContainer.length === 1 && !String(rowsForContainer[0].offLeaseId || '').trim()) {
+      refundByContainerSingle.set(container, rowsForContainer[0]);
+    }
+  }
+  const tatByComposite = new Map();
+  const tatByContainerSingle = new Map();
+  for (const r of tatRecords || []) {
+    const container = String(r.containerNo || '').trim().toUpperCase();
+    if (!container) continue;
+    const leaseId = String(r.leaseId || '').trim().toUpperCase();
+    if (leaseId) tatByComposite.set(`${container}|${leaseId}`, r);
+    if (!tatByContainerSingle.has(container)) tatByContainerSingle.set(container, r);
+  }
+  // tatRecords carry no offLeaseId field to disambiguate by (see
+  // getOffLeaseTatReport) — this one fallback is kept on its original,
+  // narrower "only one row showing right now" condition; only the refund
+  // fallback above (which DOES have offLeaseId to check) needed the fix.
+  const itemsByContainerCount = new Map();
+  for (const it of items) {
+    const c = String(it.container || '').trim().toUpperCase();
+    if (c) itemsByContainerCount.set(c, (itemsByContainerCount.get(c) || 0) + 1);
+  }
+  const result = new Map();
+  for (const it of items) {
+    const container = String(it.container || '').trim().toUpperCase();
+    const leaseId = String(it.leaseId || '').trim().toUpperCase();
+    let refundEntry = leaseId ? refundByComposite.get(`${container}|${leaseId}`) : undefined;
+    if (!refundEntry) refundEntry = refundByContainerSingle.get(container);
+    let tatRecord = leaseId ? tatByComposite.get(`${container}|${leaseId}`) : undefined;
+    if (!tatRecord && itemsByContainerCount.get(container) === 1) tatRecord = tatByContainerSingle.get(container);
+    result.set(it, { refundEntry, tatRecord });
+  }
+  return result;
+}
+
+/** buildChips' own keys, split into the SAME 3 phases PipelineDashboard.jsx's
+ *  scorecards use (STAGE_GROUPS there) — explicit request 2026-11-05
+ *  ("change only view 2", "group the stage chips into 3 phases"): View 2's
+ *  own Stage column groups its chips to match, View 1 untouched (it builds
+ *  its chips straight from buildChips, never through ChipStrip). Any chip
+ *  key not listed here (currently just Payment Status' own 's8') falls
+ *  through ungrouped, after the three phase pills. */
+const CHIP_PHASES = [
+  ['s1', 'gate', 's6'],
+  ['s7', 's3', 's5'],
+  ['s11', 'sdHod', 'sdAccounts', 'sdCeo']
+];
+
+/** Non-interactive version of the SAME chip strip every order-book card
+ *  shows (buildChips) — explicit request 2026-11-05 ("this table replace
+ *  same this table show for view 2"): the compact View 2 table wants the
+ *  real 1/1A/2/.../6A/6B/6C/7 chips, not MiniPipeline's plain dot tracker,
+ *  which had no way to show the SD Refund sub-stages at all. No click
+ *  handlers — View 2 already has its own Open/Approve button per row for
+ *  the actual action, same reasoning the status pill elsewhere in this app
+ *  only links out when it's genuinely the current actionable thing. */
+export function ChipStrip({ item, refundEntry, tatRecord }) {
+  const chips = buildChips(item, refundEntry, tatRecord);
+  const byKey = new Map(chips.map((c) => [c.key, c]));
+  const grouped = CHIP_PHASES.map((keys) => keys.map((k) => byKey.get(k)).filter(Boolean));
+  const groupedKeys = new Set(CHIP_PHASES.flat());
+  const leftover = chips.filter((c) => !groupedKeys.has(c.key));
+  // Explicit follow-up 2026-11-05 ("this is not same view 1 jaisa chhaiye
+  // hai"): View 1's own row ends with a readable status pill ("Stage 2 ·
+  // Transportation") after the chips, not just the chips alone — statusOf is
+  // the SAME single source of truth the chips themselves already trust (see
+  // its own doc comment), so this can never disagree with what the chips show.
+  const status = statusOf(item, refundEntry);
+  const renderChip = (c) => (
+    <span key={c.key} className={`${styles.chip} ${styles[c.tone]}`} title={c.title}>
+      {c.label}
+    </span>
+  );
+  return (
+    <span className={styles.strip}>
+      {grouped.map((group, i) => group.length > 0 && (
+        <span key={i} className={styles.chipGroup}>{group.map(renderChip)}</span>
+      ))}
+      {leftover.map(renderChip)}
+      <span className={`${styles.status} ${styles[status.tone]}`}>{status.label}</span>
+    </span>
+  );
+}
+
 /** Status pill wording and tone, and which tab owns acting on it. Also
  *  returns `tatKey` — the SAME stage this label is reporting on, expressed
  *  as offLeaseTatTracking.service.js's own key, so currentTatStage (below)
@@ -165,7 +295,7 @@ function buildChips(item, refundEntry, tatRecord) {
  *  row and this status pill already agree on "where it actually is" via
  *  item.currentStageNum/refundEntry; trust that single source instead of a
  *  second, divergent one. */
-function statusOf(item, refundEntry) {
+export function statusOf(item, refundEntry) {
   /* The off-lease row alone cannot say whether the SD Refund has been signed
      off — that lives in the refunds sheet. So a record the pipeline calls done
      (or has moved on to Payment Status) while its refund still waits on HOD or
@@ -216,12 +346,25 @@ function RemarkCell({ item, onSaved }) {
     html: item.remarkHtml, on: item.remarkOn, by: item.remarkBy, count: item.remarkCount
   };
 
-  /* The full thread, fetched only when the rail is first hovered. Loading it
+  /* The full thread, fetched only when the rail is first opened. Loading it
      with the dashboard would mean one request per record for history most
      rows never get looked at. */
   const [thread, setThread] = useState(null);
   const [threadBusy, setThreadBusy] = useState(false);
   const [threadError, setThreadError] = useState('');
+  /* Explicit request 2026-11-05 ("5 baar remkas date timestamp and emails
+     sab dikhe" — every remark's date/timestamp/email should show, not just
+     the latest): the thread used to reveal only on HOVER
+     (:hover/:focus-within), which a non-technical/touch user has no reason
+     to ever discover — it looked like only the newest remark was kept. Now
+     an explicit click toggles it open and it stays open (not hover-gated),
+     same click-to-reveal pattern as everything else in this app. The thread
+     was never stage-scoped to begin with (it's keyed on container+lease, not
+     on the row's current stage), so a remark written back at Stage 1 was
+     already included once Stage 4 opened this same rail — that part needed
+     no backend change, only this cell being visible enough to actually show
+     it. */
+  const [expanded, setExpanded] = useState(false);
   /* Which existing remark is being edited — null means the composer is
      writing a NEW one. Edit and add share the same editor. */
   const [editingId, setEditingId] = useState(null);
@@ -235,11 +378,16 @@ function RemarkCell({ item, onSaved }) {
     } catch (e) {
       /* Surfaced, not swallowed: showing "No history" for a failed read would
          claim the remarks are gone, and the Delete button would vanish with
-         them. Left unset so the next hover retries. */
+         them. Left unset so the next retry can succeed. */
       setThreadError(apiErrorMessage(e));
     } finally {
       setThreadBusy(false);
     }
+  };
+
+  const toggleExpanded = () => {
+    setExpanded((v) => !v);
+    loadThread();
   };
 
   const beginEdit = (r) => {
@@ -253,13 +401,22 @@ function RemarkCell({ item, onSaved }) {
     setError('');
     setBusy(true);
     try {
+      /* Explicit request 2026-11-05 ("stage difind which stage" — show which
+         stage each remark belongs to): a NEW remark posted from this
+         dashboard cell is tagged with the container's CURRENT stage at the
+         moment it's written — same `stage` column StageDetailModal's own
+         StageRemarks already tags its entries with (offleaseRemarks.service
+         .js's getRemarkThread returns every remark for the record either
+         way, this was already reaching the thread below, just never shown).
+         An edit never changes the original stage tag — only the body/edited
+         stamp are rewritten server-side. */
       const saved = editingId
         ? await editRemark(item.container, editingId, html)
-        : await postRemark(item.container, item.leaseId, html);
+        : await postRemark(item.container, item.leaseId, html, item.currentStageNum);
       setOpen(false);
       setEditingId(null);
       setHtml('');
-      setThread(null); // stale now — refetched on the next hover
+      setThread(null); // stale now — refetched on the next open
       /* An edit replaces the newest entry only if that IS the newest; a new
          remark always becomes it and adds to the count. */
       setLocal({
@@ -311,17 +468,20 @@ function RemarkCell({ item, onSaved }) {
         <span className={styles.sideLabel}>Remark</span>
 
         {/* The rail: one tick per stored remark, so the depth of the thread is
-            visible without opening anything. Hovering loads and shows it.
-            Nothing is ever replaced — every remark is kept, and this is how
-            the older ones are reached. */}
+            visible without opening anything. A click toggles the full list
+            open — not hover-only any more (see `expanded`'s own doc comment
+            above). Nothing is ever replaced — every remark is kept, and this
+            is how the older ones are reached, regardless of which stage the
+            record is at now. */}
         {view.count > 0 && (
           <span
             className={styles.rail}
-            onMouseEnter={loadThread}
-            onFocus={loadThread}
+            onClick={toggleExpanded}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpanded(); } }}
             tabIndex={0}
             role="button"
-            aria-label={`${view.count} remark${view.count === 1 ? '' : 's'} — show history`}
+            aria-expanded={expanded}
+            aria-label={`${view.count} remark${view.count === 1 ? '' : 's'} — ${expanded ? 'hide' : 'show'} history`}
           >
             {/* Capped so a long thread cannot stretch the row; the count next
                 to it stays exact. */}
@@ -330,17 +490,36 @@ function RemarkCell({ item, onSaved }) {
             ))}
             <span className={styles.railCount}>{view.count}</span>
 
-            <span className={styles.railPop} role="tooltip">
-              <span className={styles.railPopHead}>
-                {view.count} remark{view.count === 1 ? '' : 's'}
+            {expanded && (
+            <span className={`${styles.railPop} ${styles.railPopOpen}`} role="dialog" onClick={(e) => e.stopPropagation()}>
+              <span className={styles.railPopHeadRow}>
+                <span className={styles.railPopHead}>
+                  {view.count} remark{view.count === 1 ? '' : 's'}
+                </span>
+                {/* Explicit request 2026-11-05 ("one more option this tab is
+                    close"): an explicit close button — clicking the tick
+                    rail again already toggles it shut, but that's not
+                    obvious once the popup itself has your attention. */}
+                <button type="button" className={styles.railClose} onClick={() => setExpanded(false)} aria-label="Close">×</button>
               </span>
               {threadBusy && <span className={styles.railPopMeta}>Loading…</span>}
-              {thread?.map((r) => (
+              {thread?.map((r) => {
+                /* Explicit request 2026-11-05 ("stage difind which stage"):
+                   which stage the container was at when this remark was
+                   written — blank for an older remark saved before the
+                   Stage column existed, or one added from this same
+                   record-wide cell before this change. */
+                const stageLabel = r.stage && STAGES.find((s) => s.number === Number(r.stage))?.label;
+                return (
                 <span className={styles.railItem} key={r.id}>
                   <span className={styles.railItemBody} dangerouslySetInnerHTML={{ __html: r.html }} />
                   <span className={styles.railItemFoot}>
                     <span className={styles.railPopMeta}>
-                      {[formatActionTimestamp(r.timestamp), r.enteredBy].filter(Boolean).join(' · ')}
+                      {[
+                        stageLabel ? `Stage ${r.stage} · ${stageLabel}` : null,
+                        formatActionTimestamp(r.timestamp),
+                        r.enteredBy
+                      ].filter(Boolean).join(' · ')}
                       {r.editedOn && ' · edited'}
                     </span>
                     {/* Always offered; the server rejects anyone who is not the
@@ -357,17 +536,29 @@ function RemarkCell({ item, onSaved }) {
                     </button>
                   </span>
                 </span>
-              ))}
+                );
+              })}
               {threadError && <span className={styles.remarkError}>{threadError}</span>}
               {thread && !thread.length && !threadBusy && <span className={styles.railPopMeta}>No history</span>}
             </span>
+            )}
           </span>
         )}
 
+        {/* Explicit request 2026-11-05 ("ek aur remaks add kar na hai tho
+            kaise karu" — "I need to add ANOTHER remark, how do I do it"):
+            this button always opens a BLANK composer and posts a NEW thread
+            entry — editingId is never set here, only beginEdit(r) (the
+            per-item Edit button inside the now-always-reachable thread list
+            above) sets it. Labeling it "Edit" once a remark existed was
+            misleading — it looked like it would change the shown remark in
+            place, when it actually adds another one alongside it. Always
+            "Add a remark" now, matching StageDetailModal.jsx's own
+            StageRemarks button wording for the same action. */}
         {!open && (
           <button type="button" className={styles.remarkAdd} onClick={() => setOpen(true)}>
             <Icon name="edit" className={styles.remarkAddIcon} />
-            {view.html ? 'Edit' : 'New'}
+            Add a remark
           </button>
         )}
       </div>
@@ -412,7 +603,7 @@ function RemarkCell({ item, onSaved }) {
   );
 }
 
-export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows, tatRecords }) {
+export function OrderBookView({ highlight, items, loading, error, onRetry, onOpenTab, searching, onRemarkSaved, onOpenRecord, onStageSaved, refundRows, tatRecords, showSelectCol, selectedKeys, onToggleSelected }) {
   const { canAct } = usePermission();
   /* Which record+stage's own form is open, or null. Distinct from
      onOpenRecord (the read-only all-stage history modal) -- this is the
@@ -445,19 +636,29 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
      even though Kirloskar never reached Stage 6 at all. Same bug class as
      offlease.service.js's _lookupStage9OrderNos requireClientMatch fix —
      a container number alone is never a safe join key in this app.
-     Falls back to the OLD container-only match ONLY when this container has
-     exactly ONE Off-Lease Tracking row to begin with (legacy refund entries
-     submitted before offLeaseId was captured have nowhere to leak onto —
-     there's only one row they could possibly belong to). Checking the
-     REFUND row count instead was tried first and is WRONG: live-verified on
-     TRIU6617353, which has exactly one refund row (so that condition says
-     "safe to fall back") but TWO Off-Lease Tracking rows — the fallback
-     would still have leaked OF0090's refund onto OF0048. It's the number of
-     ITEMS sharing a container that determines whether a container-only
-     match can ever be ambiguous, not the number of refund rows. */
+     BUG FOUND AND FIXED AGAIN 2026-11-13 (live report "6 6a 6b 6c sab blue
+     dikh raha hai" on this exact OF0048/TRIU6617353 pair): the "exactly ONE
+     Off-Lease Tracking row" guard this comment used to describe was itself
+     checked against `itemsByContainerCount` — how many rows share this
+     container in the CURRENTLY DISPLAYED `items` list, not the true total on
+     the sheet. The moment OF0090 (still active) wasn't both in view at the
+     same time as OF0048 in whatever filtered/active list this component was
+     given, the count read 1 and the fallback leaked OF0090's own real,
+     CEO-approved refund onto OF0048 anyway — the exact bug this block's
+     original fix already claimed to have closed.
+     Replaced with the same guard ContainerDetailPage.jsx's `refund` and
+     StageDetailModal.jsx's `scopedSdRefunds` already use for this identical
+     bug class: the single-entry fallback may only ever stand in for a
+     genuinely blank-offLeaseId LEGACY refund row (nothing to disambiguate
+     with — there's no lease id on it to be wrong about), checked against
+     the refund row's OWN identity field, never against how many rows of
+     either sheet happen to be visible or exist right now. This sidesteps
+     the whole fragile "how many X are there" counting problem the two
+     previous attempts (item count, then refund-row count — see git history)
+     both still got wrong in their own way. */
   const refundByContainer = useMemo(() => {
     const byComposite = new Map();
-    const byContainerSingle = new Map();
+    const byContainerAll = new Map(); // container -> every refund row for it
     const isBetter = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
     for (const r of refundRows || []) {
       const container = String(r.containerNo || '').trim().toUpperCase();
@@ -467,7 +668,14 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
         const key = `${container}|${leaseId}`;
         if (isBetter(byComposite.get(key))) byComposite.set(key, r);
       }
-      if (isBetter(byContainerSingle.get(container))) byContainerSingle.set(container, r);
+      if (!byContainerAll.has(container)) byContainerAll.set(container, []);
+      byContainerAll.get(container).push(r);
+    }
+    const byContainerSingle = new Map();
+    for (const [container, rowsForContainer] of byContainerAll) {
+      if (rowsForContainer.length === 1 && !String(rowsForContainer[0].offLeaseId || '').trim()) {
+        byContainerSingle.set(container, rowsForContainer[0]);
+      }
     }
     return { byComposite, byContainerSingle };
   }, [refundRows]);
@@ -504,9 +712,7 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     const container = String(it.container || '').trim().toUpperCase();
     const leaseId = String(it.leaseId || '').trim().toUpperCase();
     let refundEntry = leaseId ? refundByContainer.byComposite.get(`${container}|${leaseId}`) : undefined;
-    if (!refundEntry && itemsByContainerCount.get(container) === 1) {
-      refundEntry = refundByContainer.byContainerSingle.get(container);
-    }
+    if (!refundEntry) refundEntry = refundByContainer.byContainerSingle.get(container);
     let tatRecord = leaseId ? tatByContainer.byComposite.get(`${container}|${leaseId}`) : undefined;
     if (!tatRecord && itemsByContainerCount.get(container) === 1) {
       tatRecord = tatByContainer.byContainerSingle.get(container);
@@ -562,6 +768,20 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
                   {currentTat.delayLabel && (
                     <> · <span className={currentTat.status === 'Delayed' ? styles.currentTatLate : styles.currentTatOk}>{currentTat.delayLabel}</span></>
                   )}
+                </span>
+              )}
+              {/* Explicit request 2026-11-05 ("transporation stage 8 9 10
+                  fetch... show the do create stage 9 in transit"), confirmed
+                  display-only — the live FMS movement status for a container
+                  currently at Stage 2 (Transportation), straight from
+                  STAGE-8/9/10 (see getOffLeaseDashboardData's own
+                  transportFms enrichment). Doesn't change when this stage
+                  itself counts as done — still only real Stage 10 delivery
+                  or a manual move, same as before. */}
+              {it.transportFms?.status && (
+                <span className={styles.currentTat}>
+                  {it.transportFms.doNumber && <>DO {it.transportFms.doNumber} · </>}
+                  <span className={it.transportFms.status === 'Delivered' ? styles.currentTatOk : styles.currentTat}>{it.transportFms.status}</span>
                 </span>
               )}
             </div>
@@ -628,6 +848,26 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
           <RemarkCell item={it} onSaved={onRemarkSaved} />
 
           <div className={styles.sideCol}>
+            {/* Bulk SD Refund selection — explicit request 2026-11-10 ("stage
+                6 mai jaise hi rk do click kiya na tho upar ek SD Refunds ka
+                from dedo"): shown only while the SD Refunds stage filter is
+                active (PipelineDashboard.jsx's own showSelectCol), same
+                checkbox View 2's table offers, so either presentation can
+                drive the bulk form. */}
+            {showSelectCol && (
+              <label
+                className={styles.selectRow}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedKeys?.has(`${it.leaseId || ''}-${it.container}`)}
+                  onChange={() => onToggleSelected?.(`${it.leaseId || ''}-${it.container}`)}
+                  aria-label={`Select ${it.container} for bulk SD Refund`}
+                />
+                <span>Select</span>
+              </label>
+            )}
             <div className={styles.sideLabel}>Container</div>
             <div className={styles.containerNo}>
               <Icon name="container" className={styles.containerIcon} />

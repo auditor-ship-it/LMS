@@ -17,6 +17,18 @@ const GROUPS = [
   { key: 'closing', label: 'Closing Deployed' }
 ];
 
+/* View 2's own row set — same underlying categories as GROUPS (opening/
+   addition/deletion/closing), just the legacy report's own wording and no
+   Net Movement row, which that report never had. Explicit request
+   2026-11-10 ("show view 2 same this format"): View 2 reuses View 1's exact
+   months-as-columns table (MovementTable), just with THIS row list. */
+const LEGACY_GROUPS = [
+  { key: 'opening', label: 'Total no. of Containers (Opening)' },
+  { key: 'addition', label: 'Add: New Client Added' },
+  { key: 'deletion', label: 'Less: Container Returned Back' },
+  { key: 'closing', label: 'Total no. of Containers (Closing)' }
+];
+
 // 'PO No' added 2026-10-27 (explicit request: "po no show for this" — the
 // export had PO PDF, a link, but never the actual PO Number) — the backend
 // now returns c.poNo (dashboard.service.js's getDeployedDetailData,
@@ -308,23 +320,46 @@ export function DeployedSummaryPage() {
   );
 }
 
+/* Two presentations of the SAME month-wise data (GET /dashboard/deployed-
+   summary) — explicit request 2026-11-10 ("add the View 1 and View 2 view
+   1 not change any add the view 2 repoet"), same View 1/View 2 pattern the
+   Off-Lease Pipeline Dashboard already uses. View 1 is the existing
+   Category x Month grid, untouched. View 2 is the older, per-month
+   "Total no of containers in <month> / Add: New Client Added / Less:
+   Container Returned Back / Total no of containers in <next month>" layout
+   a screenshot of the legacy report showed — same opening/addition/
+   deletion/closing numbers, just one stacked block per month instead of
+   one wide table. Every number is still clickable into the same
+   DeployedDetailPanel ("click the show all data"). */
+const REPORT_VIEWS = [
+  { key: 'table', label: 'View 1' },
+  { key: 'report', label: 'View 2' }
+];
+
 function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, onTypeChange, onSizeChange, onSelect, monthExporting, onExportMonth, categoryExporting, onExportCategory }) {
   const { months, rows, types } = data;
   const [kpiMonthIdx, setKpiMonthIdx] = useState(0);
+  const [reportView, setReportView] = useState('table');
   const currentRow = rows[kpiMonthIdx] || rows[0]; // months[] is newest-first
+
+  /* Final Billing Due — explicit request 2026-11-10 ("final billing is
+     month ka hai tho woh bhi aajaye... add kar na"): the same off-leased-
+     with-Final-Billing-Date-due containers the Excel export already red-
+     highlights, surfaced here too as a 5th KPI card with the same
+     click-through detail panel every other card already has (DeployedDetailPanel,
+     via the 'finalBilling' category — see getDeployedDetailData's own doc
+     comment). Fetched separately (not part of the summary payload) since
+     it isn't one of the month-wise movement categories. */
+  const { data: finalBillingData } = useAsync(
+    () => fetchDeployedDetail(currentRow.month, 'finalBilling', typeVal, sizeVal),
+    [currentRow.month, typeVal, sizeVal]
+  );
+  const finalBillingCount = finalBillingData?.containers?.length ?? '—';
 
   const typeOptions = types.map((t) => ({ value: t, label: t }));
   const sizeSelectOptions = sizeOptions.map((s) => ({ value: s, label: s }));
   const monthOptions = months.map((m, i) => ({ value: String(i), label: m }));
   const filterLabel = typeVal && sizeVal ? `${typeVal} — ${sizeVal}` : typeVal || (sizeVal ? `Size: ${sizeVal}` : 'All Containers');
-
-  const cellTone = (key, val) => {
-    if (key === 'addition' && val > 0) return styles.pos;
-    if (key === 'deletion' && val > 0) return styles.neg;
-    if (key === 'net' && val < 0) return styles.neg;
-    if (val === 0) return styles.zero;
-    return '';
-  };
 
   return (
     <>
@@ -339,6 +374,10 @@ function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, o
         <StatCard icon="chev-up" tint="success" label={`${currentRow.month} Addition`} value={getVal(currentRow, 'addition', typeVal, sizeVal, types)} />
         <StatCard icon="chev-down" tint="error" label={`${currentRow.month} Deletion`} value={getVal(currentRow, 'deletion', typeVal, sizeVal, types)} />
         <StatCard icon="refresh" tint="neutral" label={`${currentRow.month} Net`} value={getVal(currentRow, 'net', typeVal, sizeVal, types)} />
+        <StatCard
+          icon="clock" tint="warn" label="Final Billing Due" value={finalBillingCount}
+          onClick={() => onSelect({ category: 'finalBilling', monthLabel: currentRow.month, typeVal, sizeVal })}
+        />
       </div>
 
       <div className={styles.filters}>
@@ -353,66 +392,128 @@ function DeployedSummaryBody({ data, typeVal, sizeVal, sizeOptions, selection, o
         <span className={styles.activeLabel}>{filterLabel}</span>
       </div>
 
-      <p className={styles.sectionTitle}>Month-wise Movement</p>
-      <div className={styles.tableWrap}>
-        <table className={styles.dsTable}>
-          <thead>
-            <tr>
-              <th>Category</th>
-              {months.map((m) => (
-                <th key={m}>
-                  <div className={styles.monthHead}>
-                    <span>{monthExporting === m ? 'Exporting…' : m}</span>
-                    <span className={styles.menuScale}>
-                      <ActionMenu
-                        actions={[
-                          { label: 'Export to Excel', onClick: () => onExportMonth(m, 'excel') },
-                          { label: 'Export to PDF', onClick: () => onExportMonth(m, 'pdf') }
-                        ]}
-                      />
-                    </span>
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {GROUPS.map((grp) => (
-              <tr key={grp.key}>
-                <td className={styles.rowHead}>
-                  <div className={styles.rowHeadWrap}>
-                    <span>{categoryExporting === grp.key ? 'Exporting…' : grp.label}</span>
-                    <span className={styles.menuScale}>
-                      <ActionMenu
-                        actions={[
-                          { label: 'Export to Excel', onClick: () => onExportCategory(grp.key, grp.label, 'excel') },
-                          { label: 'Export to PDF', onClick: () => onExportCategory(grp.key, grp.label, 'pdf') }
-                        ]}
-                      />
-                    </span>
-                  </div>
-                </td>
-                {months.map((m, mIdx) => {
-                  const val = getVal(rows[mIdx], grp.key, typeVal, sizeVal, types);
-                  const isSelected = selection && selection.monthIdx === mIdx && selection.category === grp.key;
-                  return (
-                    <td key={m} className={isSelected ? styles.highlight : ''}>
-                      <button
-                        type="button"
-                        className={`${styles.cellBtn} ${cellTone(grp.key, val)}`}
-                        onClick={() => onSelect({ monthIdx: mIdx, category: grp.key, monthLabel: months[mIdx], typeVal, sizeVal })}
-                      >
-                        {val}
-                      </button>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className={styles.sectionHeadRow}>
+        <p className={styles.sectionTitle}>Month-wise Movement</p>
+        <div className={styles.viewToggle}>
+          {REPORT_VIEWS.map((v) => (
+            <button
+              key={v.key}
+              type="button"
+              className={`${styles.viewBtn} ${reportView === v.key ? styles.viewBtnActive : ''}`}
+              onClick={() => setReportView(v.key)}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
       </div>
+
+      <MovementTable
+        groups={reportView === 'report' ? LEGACY_GROUPS : GROUPS}
+        months={months}
+        rows={rows}
+        types={types}
+        typeVal={typeVal}
+        sizeVal={sizeVal}
+        selection={selection}
+        onSelect={onSelect}
+        monthExporting={monthExporting}
+        onExportMonth={onExportMonth}
+        categoryExporting={categoryExporting}
+        onExportCategory={onExportCategory}
+      />
     </>
+  );
+}
+
+/** Category-rows x month-columns table — View 1's own grid, shown unchanged
+ *  there and reused for View 2 ("show view 2 same this format", explicit
+ *  follow-up 2026-11-10): same months-as-columns, scrollable layout, just
+ *  the 4 legacy-report categories (LEGACY_GROUPS) instead of the full 5. */
+function MovementTable({ groups, months, rows, types, typeVal, sizeVal, selection, onSelect, monthExporting, onExportMonth, categoryExporting, onExportCategory }) {
+  const cellTone = (key, val) => {
+    if (key === 'addition' && val > 0) return styles.pos;
+    if (key === 'deletion' && val > 0) return styles.neg;
+    if (key === 'net' && val < 0) return styles.neg;
+    if (val === 0) return styles.zero;
+    return '';
+  };
+  return (
+    <div className={styles.tableWrap}>
+      <table className={styles.dsTable}>
+        <thead>
+          <tr>
+            <th>Category</th>
+            {months.map((m) => (
+              <th key={m}>
+                <div className={styles.monthHead}>
+                  <span>{monthExporting === m ? 'Exporting…' : m}</span>
+                  <span className={styles.menuScale}>
+                    <ActionMenu
+                      actions={[
+                        { label: 'Export to Excel', onClick: () => onExportMonth(m, 'excel') },
+                        { label: 'Export to PDF', onClick: () => onExportMonth(m, 'pdf') }
+                      ]}
+                    />
+                  </span>
+                </div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((grp) => (
+            <tr key={grp.key}>
+              <td className={styles.rowHead}>
+                <div className={styles.rowHeadWrap}>
+                  <span>{categoryExporting === grp.key ? 'Exporting…' : grp.label}</span>
+                  <span className={styles.menuScale}>
+                    <ActionMenu
+                      actions={[
+                        { label: 'Export to Excel', onClick: () => onExportCategory(grp.key, grp.label, 'excel') },
+                        { label: 'Export to PDF', onClick: () => onExportCategory(grp.key, grp.label, 'pdf') }
+                      ]}
+                    />
+                  </span>
+                </div>
+              </td>
+              {months.map((m, mIdx) => {
+                const val = getVal(rows[mIdx], grp.key, typeVal, sizeVal, types);
+                const isSelected = selection && selection.monthIdx === mIdx && selection.category === grp.key;
+                /* Month-over-month % — explicit request 2026-11-10 ("add
+                   the %, yah month itne the tho agl mai itna bada and yah
+                   bhot itne kam hua"): only on the two "stock total" rows
+                   (Opening/Closing Deployed) — Addition/Deletion/Net are
+                   flow counts that can be zero or swing in sign, where a %
+                   of the previous value is often meaningless or undefined
+                   (divide-by-zero), unlike a running total. months[] is
+                   newest-first, so the "previous" month is the NEXT array
+                   index. */
+                const showPct = grp.key === 'opening' || grp.key === 'closing';
+                const prevVal = showPct && mIdx + 1 < rows.length ? getVal(rows[mIdx + 1], grp.key, typeVal, sizeVal, types) : null;
+                const pct = (prevVal != null && prevVal !== 0) ? ((val - prevVal) / prevVal) * 100 : null;
+                return (
+                  <td key={m} className={isSelected ? styles.highlight : ''}>
+                    <button
+                      type="button"
+                      className={`${styles.cellBtn} ${cellTone(grp.key, val)}`}
+                      onClick={() => onSelect({ monthIdx: mIdx, category: grp.key, monthLabel: months[mIdx], typeVal, sizeVal })}
+                    >
+                      <span>{val}</span>
+                      {pct != null && (
+                        <span className={`${styles.pctChange} ${pct > 0 ? styles.pctUp : pct < 0 ? styles.pctDown : styles.pctFlat}`}>
+                          {pct > 0 ? '▲' : pct < 0 ? '▼' : '–'} {Math.abs(pct).toFixed(1)}%
+                        </span>
+                      )}
+                    </button>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -422,12 +523,25 @@ function DeployedDetailPanel({ selection, onClose }) {
     [selection.monthLabel, selection.category, selection.typeVal, selection.sizeVal]
   );
   const containers = data?.containers || [];
-  const catLabel = selection.category.charAt(0).toUpperCase() + selection.category.slice(1);
+  const catLabel = selection.category === 'finalBilling'
+    ? 'Final Billing Due'
+    : selection.category.charAt(0).toUpperCase() + selection.category.slice(1);
   const filterLabel = selection.typeVal ? (selection.sizeVal ? `${selection.typeVal} — ${selection.sizeVal}` : selection.typeVal) : (selection.sizeVal ? `Size: ${selection.sizeVal}` : 'All Types');
 
   const rows = containers.map((c) => ({
     row: [c.container, c.orderNo, c.clientCode, c.clientName, c.size, c.type, c.billingType, c.billingCycle, c.rate, c.poNo, c.poValidity, c.agreementUrl, c.poAttachment, c.location, c.deployedDate, c.validUpto, c.movement],
-    _rowNum: c.container
+    _rowNum: c.container,
+    /* Explicit follow-up 2026-11-10 ("only for example 2469156 PO No change
+       tho wahi green hoga haa and excel pe bhi green hoga"): CELL-level, not
+       row-level — getDeployedDetailData now diffs the live sheet against the
+       last saved monthly snapshot (deployedSheetSnapshot.service.js) and
+       returns changedFields, the exact lowercased column-header set that
+       actually differs for this container, same source the server-built
+       Excel export (fetchDeployedSummaryExport, Download Excel button above)
+       already highlights with. Kept off `row` itself (not a visible column)
+       and matched against DETAIL_HEADERS by index in renderRow below. */
+    changedFields: new Set(c.changedFields || []),
+    lastUpdated: c.lastUpdated
   }));
 
   const fileStamp = `${selection.monthLabel.replace(' ', '-')}-${selection.category}`;
@@ -481,7 +595,14 @@ function DeployedDetailPanel({ selection, onClose }) {
           rows={rows}
           loading={loading}
           rowKey={(r) => r._rowNum}
-          renderRow={(values) => values.map((v, i) => <td key={i}>{renderCellValue(v)}</td>)}
+          renderRow={(values, r) => values.map((v, i) => {
+            const changed = r.changedFields.has(DETAIL_HEADERS[i]?.toLowerCase());
+            return (
+              <td key={i} className={changed ? styles.recentCell : ''} title={changed ? `Changed — last updated ${r.lastUpdated}` : undefined}>
+                {renderCellValue(v)}
+              </td>
+            );
+          })}
         />
       )}
     </Card>

@@ -37,13 +37,18 @@ export function StatCard({
     tint ? styles[`tint-${tint}`] : '',
     active ? styles.active : '',
     size === 'lg' ? styles.sizeLg : '',
-    size === 'sm' ? styles.sizeSm : ''
+    size === 'sm' ? styles.sizeSm : '',
+    // 'xs' — explicit request 2026-11-05 ("scorecard size decresing"), a
+    // step smaller than 'sm': PipelineDashboard.jsx's 3 rolled-up
+    // STAGE_GROUPS cards only. Kept separate from .sizeSm itself so the 11+
+    // existing per-stage cards sharing that class are untouched.
+    size === 'xs' ? styles.sizeXs : ''
   ].filter(Boolean).join(' ');
   const HitTag = onClick ? 'button' : 'div';
   /* Compact cards split "Stage 6A · HOD Approval" into a small kicker line and
      a name line, so every card has the same two-line head and the numbers line
-     up across the row. */
-  const compactParts = size === 'sm' && typeof label === 'string' && label.includes(' · ')
+     up across the row. Same stacked shape for 'xs' — just smaller. */
+  const compactParts = (size === 'sm' || size === 'xs') && typeof label === 'string' && label.includes(' · ')
     ? [label.slice(0, label.indexOf(' · ')), label.slice(label.indexOf(' · ') + 3)]
     : null;
   const hasSegments = Array.isArray(footnoteSegments) && footnoteSegments.length > 0;

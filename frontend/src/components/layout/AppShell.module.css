@@ -1,6 +1,15 @@
 .shell { display: flex; min-height: 100vh; background: var(--bg); touch-action: pan-y; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .content { flex: 1; padding: 8px 20px 16px; max-width: 1760px; width: 100%; margin: 0 auto; }
+/* Laptop-range tightening — explicit request 2026-11-13 ("make the entire
+   application fully responsive on all laptop screens (1280x720, 1366x768,
+   1440x900...)"): a light, low-risk density pass (less side padding as the
+   viewport narrows) rather than touching individual pages — the app's
+   per-page layouts (flex/auto-fit grids, DataGrid's own overflow-x:auto)
+   were already confirmed responsive; this just reclaims a bit of width on
+   the two smallest common laptop resolutions. */
+@media (max-width: 1440px) { .content { padding: 8px 16px 14px; } }
+@media (max-width: 1366px) { .content { padding: 8px 12px 12px; } }
 @media (max-width: 640px) { .content { padding: 14px; } }
 
 .scrim {

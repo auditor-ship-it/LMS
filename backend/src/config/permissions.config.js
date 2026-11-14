@@ -113,7 +113,16 @@ export const PERMISSION_KEYS = [
    * No form is ever submitted directly against this stage (see
    * offlease.service.js's OL_STAGE_INFO[11] doc comment) — this permission
    * only gates viewing/opening Stage 6's tab, same as every other offleaseN. */
-  { key: 'offlease11', label: 'Off-Lease Stage 6: SD Refunds' }
+  { key: 'offlease11', label: 'Off-Lease Stage 6: SD Refunds' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * Daily WhatsApp Report (Sale Person — Contract Expiry Summary), new
+   * feature: a header button on Reports that lets an admin link a WhatsApp
+   * number by QR and send/preview the daily overdue-contract summary.
+   * Defaults to false for everyone — no hardcoded fallback, same "no
+   * baseline" rule as rolesAdmin/apiAdmin above — so this key must be
+   * explicitly granted via Roles & Access after this ships, or the button
+   * stays hidden for everyone including whoever requested the feature. */
+  { key: 'whatsappReportAdmin', label: 'Daily WhatsApp Report Admin' }
   /* offlease10 (Off-Lease Stage 3: LR & Return Transportation) — added
      2026-09-18, REMOVED 2026-09-22 (explicit request: Stage 3 itself was
      removed from the pipeline entirely, LR & Return Transportation + its

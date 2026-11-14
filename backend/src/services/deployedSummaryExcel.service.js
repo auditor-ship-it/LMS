@@ -204,19 +204,19 @@ export async function buildWorkbookBuffer(data, containers, diff) {
  *   snapshot gets saved/compared — the report itself always follows the
  *   live data's own latest row).
  */
-export async function buildDeployedSummaryExcel({ now } = {}) {
+export async function buildDeployedSummaryExcel({ now, user } = {}) {
   const today = now ? new Date(now) : new Date();
 
   const data = await getDeployedSummaryData();
   const latest = data.rows[0];
   if (!latest) throw new Error('No Deployed Summary data available');
 
-  const { containers: deployedContainers } = await getDeployedDetailData(latest.month, 'closing', null, null);
+  const { containers: deployedContainers } = await getDeployedDetailData(latest.month, 'closing', null, null, user);
   // Off-leased containers whose Final Billing Date is this month or any
   // later month (not yet passed) — appended, not merged into the primary
   // list's own count anywhere else (see getOffLeasedWithFinalBillingDue's
   // own doc comment for why).
-  const { containers: finalBillingContainers } = await getOffLeasedWithFinalBillingDue(latest.month);
+  const { containers: finalBillingContainers } = await getOffLeasedWithFinalBillingDue(latest.month, user);
   const containers = [...deployedContainers, ...finalBillingContainers];
   const recentCount = deployedContainers.filter((c) => c.recentlyUpdated).length;
   const finalBillingCount = finalBillingContainers.length;
@@ -250,11 +250,11 @@ export async function buildDeployedSummaryExcel({ now } = {}) {
  * would be misleading (those categories specifically track containers
  * still in or moving through the deployed pool).
  */
-export async function buildMonthAllCategoriesExcel(monthLabel, { typeVal, sizeVal } = {}) {
+export async function buildMonthAllCategoriesExcel(monthLabel, { typeVal, sizeVal, user } = {}) {
   const results = await Promise.all(
-    SUMMARY_GROUPS.map(([key]) => getDeployedDetailData(monthLabel, key, typeVal || null, sizeVal || null))
+    SUMMARY_GROUPS.map(([key]) => getDeployedDetailData(monthLabel, key, typeVal || null, sizeVal || null, user))
   );
-  const { containers: finalBillingContainers } = await getOffLeasedWithFinalBillingDue(monthLabel);
+  const { containers: finalBillingContainers } = await getOffLeasedWithFinalBillingDue(monthLabel, user);
 
   // Explicit request 2026-10-27 ("offlease red col karo and jo new lease
   // green col row hona chahiye hai"): Addition is flat green (every row

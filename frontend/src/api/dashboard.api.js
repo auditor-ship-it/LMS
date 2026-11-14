@@ -10,6 +10,11 @@ export const getDeployedDetail = (month, category, type, size) =>
 /** Every deployed container's Agreement Valid Upto / PO Validity dates, for the PO & Agreement Tracker page. */
 export const getPoAgreementTracker = () => apiClient.get('/dashboard/po-agreement-tracker').then((r) => r.data);
 
+/** Backfill one historical PO/Agreement period — explicit request
+ *  2026-11-04 (see poAgreementHistory.service.js's own header comment).
+ *  Add-only, no edit/delete endpoint exists on purpose. */
+export const addPoAgreementHistory = (payload) => apiClient.post('/dashboard/po-agreement-tracker/history', payload).then((r) => r.data);
+
 /** Server-built Deployed Summary Excel file (Summary / Deployed Containers /
  *  one sheet per Billing Type / Changes vs last month), with real cell
  *  highlighting — explicit request 2026-10-27 ("highlight nahi dikh raha hai

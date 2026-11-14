@@ -91,7 +91,16 @@ export const SHEETS = {
      hot-read tab instead of read live. First consumed 2026-10-01 by
      offlease.service.js's getOffLeaseStageDetail (Stage 1's Transportation
      One Way/Return Way, joined by Order No). */
-  STAGE1_ORDER_FORM: 'Stage 1'
+  STAGE1_ORDER_FORM: 'Stage 1',
+
+  /* PO & Agreement Tracker's historical-period backfill — added 2026-11-04
+   * (explicit request): the user created this tab by hand in the live
+   * workbook, exact columns Timestamp | Container no | Client name |
+   * Agremnet and Po | start date | end date | file | Emails (spelling
+   * "Agremnet" is real, not a typo — matches the live tab/header exactly).
+   * gid 952012121, same main spreadsheet (env.googleSheetId) — confirmed
+   * via the live URL, not an external workbook. */
+  PO_AGREEMENT_HISTORY: 'Master Po and Agremnet data'
 };
 
 // External spreadsheets referenced by hardcoded ID (not the main GOOGLE_SHEET_ID).

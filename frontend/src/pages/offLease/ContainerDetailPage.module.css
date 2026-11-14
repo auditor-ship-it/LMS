@@ -1,10 +1,10 @@
 .page { display: flex; flex-direction: column; gap: 14px; }
 
 .head { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
-.headTop { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 20px; }
-.back { border: 0; background: transparent; font-size: 20px; cursor: pointer; color: var(--text-2); padding: 4px 8px; }
-.titleRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.title { margin: 0; font-size: 26px; font-weight: 800; color: var(--text); }
+.headTop { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 16px; }
+.back { border: 0; background: transparent; font-size: 17px; cursor: pointer; color: var(--text-2); padding: 3px 6px; }
+.titleRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.title { margin: 0; font-size: 19px; font-weight: 800; color: var(--text); }
 .lease { padding: 3px 10px; border-radius: 999px; background: var(--surface-2); font-size: 12px; font-weight: 700; color: var(--text-2); }
 .livePill { padding: 3px 10px; border-radius: 999px; background: var(--success-bg); color: var(--success); font-size: 12px; font-weight: 700; }
 .sub { font-size: 12px; color: var(--text-3); margin-top: 2px; }
@@ -17,16 +17,16 @@
 .bar i { display: block; height: 100%; background: var(--success); border-radius: 999px; }
 
 .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border-top: 1px solid var(--line); }
-.cell { display: flex; flex-direction: column; gap: 3px; padding: 14px 20px; border-right: 1px solid var(--line); }
+.cell { display: flex; flex-direction: column; gap: 2px; padding: 8px 14px; border-right: 1px solid var(--line); }
 .cell:last-child { border-right: 0; }
 .cellStage { background: var(--warn-bg, #fff7e0); }
-.cellLabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: var(--text-3); }
-.cellValue { font-size: 15px; font-weight: 700; color: var(--text); word-break: break-word; }
-.cellSub { font-size: 11.5px; color: var(--text-3); }
+.cellLabel { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: var(--text-3); }
+.cellValue { font-size: 13px; font-weight: 700; color: var(--text); word-break: break-word; }
+.cellSub { font-size: 11px; color: var(--text-3); }
 
-.tabsBar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 8px 12px; }
+.tabsBar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 6px 10px; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.tab { border: 0; background: transparent; padding: 8px 16px; border-radius: var(--r-md); font-size: 13px; font-weight: 600; color: var(--text-2); cursor: pointer; }
+.tab { border: 0; background: transparent; padding: 6px 12px; border-radius: var(--r-md); font-size: 12px; font-weight: 600; color: var(--text-2); cursor: pointer; }
 .tab:hover { background: var(--surface-2); }
 .tabOn, .tabOn:hover { background: var(--accent, #0b1f6b); color: #fff; }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -34,10 +34,19 @@
 .body { display: grid; grid-template-columns: minmax(0, 1fr) 320px 40px; gap: 14px; align-items: start; }
 .main { min-width: 0; }
 .rail { display: flex; flex-direction: column; gap: 14px; }
-.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .panelTitle { margin: 0; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .empty { margin: 0; font-size: 12.5px; color: var(--text-3); }
+.agreementRow { display: flex; flex-wrap: wrap; gap: 24px; margin-bottom: 14px; }
+.agreementRow .cell { padding: 0; border-right: 0; }
+
+.tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); margin-top: 6px; }
+.attachTable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.attachTable thead th { text-align: left; padding: 8px 12px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-3); background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.attachTable tbody td { padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--text); vertical-align: middle; }
+.attachTable tbody tr:last-child td { border-bottom: none; }
+.attachTable tbody tr:hover td { background: var(--surface-2); }
 
 .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; align-items: start; }
 .column { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--r-md); border: 1px solid var(--line); }
@@ -46,6 +55,50 @@
 .colGreen { background: #eef8f0; }
 .columnHead { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text); }
 .columnCount { font-size: 11px; font-weight: 700; color: var(--text-3); }
+
+/* Alternate Overview layout (?view=phases) — View 2's own row-click only,
+   see ContainerDetailPage.jsx's PHASES doc comment. Side-by-side columns,
+   same spatial layout as the original COLUMNS design above — explicit
+   follow-up 2026-11-05 ("data show horizontal not scrolling one view
+   page"): the first version stacked all 3 phases full-width, one under the
+   other, which pushed later phases below the fold. */
+.phases { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 6px; align-items: start; }
+.phase { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); }
+.phaseHead { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.phaseNum { width: 15px; height: 15px; flex: none; border-radius: 50%; background: var(--surface-2); color: var(--text-2); font-size: 8.5px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.phaseTitle { font-size: 10px; font-weight: 800; color: var(--text); }
+.phaseBudget { font-size: 8.5px; color: var(--text-3); font-weight: 600; }
+.phaseBadge { margin-left: auto; font-size: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.2px; padding: 1.5px 6px; border-radius: 999px; }
+.badgeDone { background: var(--success-bg); color: var(--success); }
+.badgeProgress { background: var(--surface-2); color: var(--text-2); }
+.badgeDanger { background: var(--error-bg, #fdecec); color: var(--error); }
+
+.stepper { display: flex; align-items: flex-start; padding: 4px 2px 1px; }
+.stepperCol { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; position: relative; padding: 0 3px; }
+.stepperCol::before { content: ''; position: absolute; top: 10px; right: 50%; width: 100%; height: 2px; background: var(--line); z-index: 0; }
+.stepperCol:first-child::before { display: none; }
+.stepperCol.lineDone::before { background: var(--success); }
+.stepperDot { position: relative; z-index: 1; width: 20px; height: 20px; flex: none; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); color: var(--text-3); font-size: 8px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.dotDone { background: var(--success); border-color: var(--success); color: #fff; }
+.dotCurrent { background: #fff7e0; border-color: #f5b800; color: #7a5b00; box-shadow: 0 0 0 3px rgba(245, 184, 0, 0.25); }
+.dotRejected { background: var(--error); border-color: var(--error); color: #fff; }
+.dotFuture { opacity: 0.55; }
+.stepperName { margin-top: 4px; font-size: 8.5px; font-weight: 700; color: var(--text); text-align: center; line-height: 1.15; }
+.stepperCaption { font-size: 7.5px; color: var(--text-3); text-align: center; margin-top: 1px; }
+
+/* One column, not a grid — each phase is already a narrow side-by-side
+   column (.phases above), too tight for its own cards to sit abreast too.
+   Its own, smaller card sizing — explicit follow-up 2026-11-05 ("proper
+   size decrease") — scoped here rather than shrinking .card/.row/.meta
+   themselves, which View 1's identical COLUMNS layout above also uses. */
+.phaseCards { display: flex; flex-direction: column; gap: 6px; }
+.phaseCards .card { padding: 7px 9px; gap: 3px; }
+.phaseCards .cardNum { font-size: 8.5px; }
+.phaseCards .cardTitle { font-size: 12px; }
+.phaseCards .cardStatus { font-size: 9.5px; }
+.phaseCards .row { font-size: 10.5px; padding-top: 4px; gap: 6px; }
+.phaseCards .meta { font-size: 9.5px; }
+
 .stageRail { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; align-items: center; order: 3; }
 .railDot { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface-2); color: var(--text-3); font-size: 11px; font-weight: 800; cursor: pointer; }
 .railDone { background: var(--success); border-color: var(--success); color: #fff; }

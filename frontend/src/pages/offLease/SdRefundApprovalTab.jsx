@@ -40,7 +40,7 @@ function Link({ url }) {
 const BASE_HEADERS = [
   'Timestamp', 'Submitted By Email', 'Name of Vendor', 'SD Amount', 'SD Amount to be Refunded',
   'Payment Due Date', 'SD Calculation',
-  'Quarterly Ledger', 'Department', 'Ledger Head',
+  'Quatre Ledger', 'Department', 'Ledger Head',
   'Cancelled Cheque', 'Client Email Confirmation', 'Client Ledger', 'SD Amounts to be Refunded'
 ];
 const HOD_AUDIT_HEADERS = ['HOD Remarks', 'HOD Timestamp', 'HOD Approver Email'];

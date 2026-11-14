@@ -69,7 +69,7 @@ import { getGateFormIndexSync, pickGateFormForClient, isGatedIn } from './stage3
 import { getMatchedFmsForContainer } from './stage8.service.js';
 import { getMoveHistory } from './offleaseMoveHistory.service.js';
 import { SLA_MS, parseStamp } from './offleaseSla.service.js';
-import { safeStr } from '../utils/format.js';
+import { safeStr, parseDate } from '../utils/format.js';
 import { normKey } from '../utils/normalize.js';
 
 const OL_SHEET = SHEETS.OFF_LEASE_TRACKING;
@@ -291,7 +291,10 @@ async function _resolveContainerStageEvents(row, entryByContainer, gfIndex, apSt
   const gateInMissingStart = hasDelivery && !stage10At;
 
   const containerKey = _containerKey(container);
-  const gfRow = pickGateFormForClient(gfIndex.get(containerKey) || [], clientName);
+  // Deployed Date as the cycle boundary — see pickGateFormForClient's own
+  // doc comment (BUG FOUND AND FIXED 2026-11-05, MOAU0749105).
+  const rowDeployedAtMs = (() => { const d = parseDate(row[7]); return d ? d.getTime() : null; })();
+  const gfRow = pickGateFormForClient(gfIndex.get(containerKey) || [], clientName, rowDeployedAtMs);
   const gatedIn = isGatedIn(gfRow);
   const gateInAt = gatedIn ? parseStamp(gfRow?.timestamp) : null;
   const gateInMissingEnd = gatedIn && !gateInAt;

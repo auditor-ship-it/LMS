@@ -6,6 +6,7 @@ import { useAsync } from '../../hooks/useAsync.js';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue.js';
 import { fetchPoAgreementTracker } from '../../services/poAgreementTracker.service.js';
 import { ROUTES } from '../../constants/routes.js';
+import { AddPeriodModal } from './AddPeriodModal.jsx';
 import styles from './PoAgreementTrackerPage.module.css';
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -38,13 +39,19 @@ function bandForDate(dateStr, today) {
 // themselves don't use this (see BAND_COLOR_VAR's own comment below).
 const BAND_TEXT_TONE = { overdue: 'textWarn', dueSoon: 'textWarn', safe: 'textOk' };
 // Explicit, repeated request 2026-10-19 ("red chcek box nahi chahiye...
-// bas red kuch nahi"): the month checkboxes are just green (covered) or
-// blank (not) now — no more red for an overdue/lapsed month. Colored
-// inline (border + fill) rather than via CSS class, since a checkbox
-// needs both colors set together.
+// bas red kuch nahi"): the month checkboxes were green (covered) or blank
+// (not) for a long stretch — no red for an overdue/lapsed month. REVERSED
+// 2026-11-05 ("pending for red not dark red light red show"): a pending
+// (past/current, not-yet-covered) month now gets a soft red fill instead of
+// a plain gray outline, using this app's own --error-bg/--error tokens
+// (already a light red in both themes — see tokens.css) rather than a new
+// harsh/dark red. Colored inline (border + fill) rather than via CSS class,
+// since a checkbox needs both colors set together.
 const BAND_COLOR_VAR = {
   safe: 'var(--success)',
-  none: 'var(--text-3)'
+  none: 'var(--text-3)',
+  pending: 'var(--error)',
+  pendingBg: 'var(--error-bg)'
 };
 
 /** "YYYY-MM-DD" -> "DD-MM-YYYY", matching this app's own date display convention elsewhere. */
@@ -52,6 +59,13 @@ function formatDisplayDate(dateStr) {
   if (!dateStr) return '—';
   const [y, m, d] = dateStr.split('-');
   return `${d}-${m}-${y}`;
+}
+
+/** "YYYY-MM-DD" -> "DD-MM", for the timeline chart's own compact segment labels
+ *  (the year is already carried by the axis ticks beneath). */
+function formatShortDate(dateStr) {
+  const [, m, d] = dateStr.split('-');
+  return `${d}-${m}`;
 }
 
 /** Month index (0-11) if `dateStr` ("YYYY-MM-DD") falls in the given year, else null. */
@@ -141,6 +155,23 @@ function resolveCoverageRange({ startStr, endStr, band, deployedDate, year }) {
   return range;
 }
 
+/** True when month `m` (0-11) of `year` is covered by EITHER the current
+ *  period's own {from,to} range OR any backfilled historical period of the
+ *  matching type — explicit request 2026-11-04 (see AddPeriodModal.jsx /
+ *  poAgreementHistory.service.js). Each history entry always carries a
+ *  real start AND end date (the backfill form requires both), so it uses
+ *  the plain coverageMonthsForYear directly — none of resolveCoverageRange's
+ *  single-month/deploy-date/overdue heuristics apply, those exist only for
+ *  the CURRENT period's own often-incomplete data. */
+function isMonthCoveredByAny(m, range, history, year) {
+  if (range && m >= range.from && m <= range.to) return true;
+  for (const h of history || []) {
+    const r = coverageMonthsForYear(h.startDate, h.endDate, year);
+    if (r && m >= r.from && m <= r.to) return true;
+  }
+  return false;
+}
+
 /**
  * PO & Agreement Tracker — explicit request 2026-10-16: a year-wide view
  * (Jan..Dec as columns) of every deployed container's Agreement Valid Upto
@@ -183,6 +214,15 @@ export function PoAgreementTrackerPage() {
   // actually be saved; Edit instead hands off to Renew & Document, which
   // already gates correctly.
   const [selected, setSelected] = useState(null);
+  // "Add Period" — explicit request 2026-11-04 ("create the one form and
+  // gap data file backdata filed"): see AddPeriodModal.jsx's own header
+  // comment. addPeriodFor: null when opened from the toolbar (unscoped,
+  // search any container) or {container, clientName} when opened from one
+  // row's own detail panel (explicit follow-up: "add period sperate add
+  // the indivual spetare from" — pre-filled, no search needed).
+  const [addPeriodOpen, setAddPeriodOpen] = useState(false);
+  const [addPeriodFor, setAddPeriodFor] = useState(null);
+  const openAddPeriod = (forContainer) => { setAddPeriodFor(forContainer || null); setAddPeriodOpen(true); };
 
   const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const displayedYear = today.getFullYear() + yearOffset;
@@ -224,7 +264,12 @@ export function PoAgreementTrackerPage() {
       <PageHeader
         title="PO & Agreement Tracker"
         subtitle="Agreement and PO validity dates across every deployed container"
-        actions={<Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>}
+        actions={(
+          <>
+            <Button variant="primary" size="sm" onClick={() => openAddPeriod(null)}>Add Period</Button>
+            <Button variant="secondary" size="sm" onClick={reload}>Refresh</Button>
+          </>
+        )}
       />
       <Card>
         <div className={styles.toolbar}>
@@ -249,17 +294,17 @@ export function PoAgreementTrackerPage() {
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.warn}`} />Overdue or due within 30 days (row highlighted)</span>
           <span className={styles.legendItem}><span className={`${styles.dot} ${styles.ok}`} />Safe</span>
           <span className={styles.legendDivider} />
-          {/* Explicit, repeated request 2026-10-19: no red checkbox state
-              anymore — just green (covered) or blank (not). The two dots
-              above are for the Agreement/PO Date TEXT columns only, which
-              still show red/green. */}
           {/* Updated 2026-10-23 to match resolveCoverageRange's own doc
-              comment — keep these in sync. */}
+              comment — keep these in sync. Reversed 2026-11-05 ("pending for
+              red not dark red light red show"): a pending (not-yet-covered)
+              month is now a soft red fill, not a plain gray outline — see
+              BAND_COLOR_VAR's own comment above. */}
           {dataView === 'po' ? (
             <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />PO (checked = covered month, Agreement's own start date to PO valid-upto when on file — otherwise just the valid-upto month, or Jan through valid-upto if already overdue)</span>
           ) : (
             <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: 'var(--text-3)' }} />Agreement (checked = covered month, start date to valid-upto when on file — otherwise just the valid-upto month, or Jan through valid-upto if already overdue)</span>
           )}
+          <span className={styles.legendItem}><span className={styles.checkbox} style={{ borderColor: BAND_COLOR_VAR.pending, background: BAND_COLOR_VAR.pendingBg }} />Pending — not yet covered</span>
         </div>}
 
         {!error && !loading && !!filtered.length && !selected && (
@@ -273,7 +318,12 @@ export function PoAgreementTrackerPage() {
         {!error && loading && <SkeletonTable columns={6} rows={10} />}
         {!error && !loading && !filtered.length && <EmptyState message="No containers found" />}
         {!error && !loading && filtered.length > 0 && selected && (
-          <PoAgreementDetail container={selected} onBack={() => setSelected(null)} onEdit={() => navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainer: selected.container } })} />
+          <PoAgreementDetail
+            container={selected}
+            onBack={() => setSelected(null)}
+            onEdit={() => navigate(ROUTES.RENEW_DOCUMENT, { state: { focusContainer: selected.container } })}
+            onAddPeriod={() => openAddPeriod({ container: selected.container, clientName: selected.clientName })}
+          />
         )}
         {!error && !loading && filtered.length > 0 && !selected && (
           <div className={styles.scrollWrap}>
@@ -282,6 +332,8 @@ export function PoAgreementTrackerPage() {
                 <tr>
                   <th className={styles.colContainer}>Container</th>
                   <th className={styles.colClient}>Client</th>
+                  <th className={styles.colCompact}>Size / Type</th>
+                  <th className={styles.colCompact}>Location</th>
                   <th className={styles.colDate}>Deployed Date</th>
                   <th className={styles.colDate}>Agreement Date</th>
                   <th className={styles.colDate}>PO Date</th>
@@ -310,6 +362,10 @@ export function PoAgreementTrackerPage() {
                   const agrRange = resolveCoverageRange({ startStr: c.agreementStartDate, endStr: c.agreementDate, band: agrBand, deployedDate: c.deployedDate, year: displayedYear });
                   const poRange = resolveCoverageRange({ startStr: c.agreementStartDate, endStr: c.poDate, band: poBand, deployedDate: c.deployedDate, year: displayedYear });
                   const range = dataView === 'po' ? poRange : agrRange;
+                  // Backfilled historical periods (Add Period) — merged in
+                  // ADDITIONALLY to the current period's own range, see
+                  // isMonthCoveredByAny's own doc comment.
+                  const history = dataView === 'po' ? c.poHistory : c.agreementHistory;
                   // Explicit request 2026-10-23: highlight the whole row once
                   // either date is due soon OR already overdue (both grey now,
                   // not red — see bandForDate's own comment) — whichever view
@@ -325,6 +381,8 @@ export function PoAgreementTrackerPage() {
                     >
                       <td className={styles.colContainer} title={c.container}>{c.container}</td>
                       <td className={styles.colClient} title={c.clientName}>{c.clientName}</td>
+                      <td className={styles.colCompact} title={[c.size, c.type].filter(Boolean).join(' · ')}>{[c.size, c.type].filter(Boolean).join(' · ') || '—'}</td>
+                      <td className={styles.colCompact} title={c.location}>{c.location || '—'}</td>
                       <td className={styles.colDate}>{formatDisplayDate(c.deployedDate)}</td>
                       <td className={`${styles.colDate} ${agrBand ? styles[BAND_TEXT_TONE[agrBand]] : ''}`}>{formatDisplayDate(c.agreementDate)}</td>
                       <td className={`${styles.colDate} ${poBand ? styles[BAND_TEXT_TONE[poBand]] : ''}`}>{formatDisplayDate(c.poDate)}</td>
@@ -344,7 +402,7 @@ export function PoAgreementTrackerPage() {
                         // {from, to} range or null — a single valid-till
                         // month comes back as {from: m, to: m}, so there's
                         // no separate single-month case to handle here.
-                        const inRange = range ? (m >= range.from && m <= range.to) : false;
+                        const inRange = isMonthCoveredByAny(m, range, history, displayedYear);
                         const label = dataView === 'po' ? 'PO' : 'Agreement';
                         const title = inRange
                           ? (range.from !== range.to ? `${label} covers ${c.agreementStartDate} to ${dataView === 'po' ? c.poDate : c.agreementDate}` : `${label} valid upto ${dataView === 'po' ? c.poDate : c.agreementDate}`)
@@ -380,7 +438,7 @@ export function PoAgreementTrackerPage() {
                           >
                             {/* Covered months always get a filled green
                                 checkbox; past/current (not-yet-covered)
-                                months get an empty "pending" outline; future
+                                months get a light-red "pending" fill; future
                                 months get nothing (see isFutureMonth above).
                                 Rows with no date at all for the current view
                                 are already excluded from the list entirely —
@@ -388,7 +446,10 @@ export function PoAgreementTrackerPage() {
                             {(inRange || (!isFutureMonth && !isBeforeDeployMonth)) && (
                               <span
                                 className={`${styles.checkbox} ${inRange ? styles.checkboxChecked : ''}`}
-                                style={{ borderColor: inRange ? BAND_COLOR_VAR.safe : BAND_COLOR_VAR.none, background: inRange ? BAND_COLOR_VAR.safe : 'transparent' }}
+                                style={{
+                                  borderColor: inRange ? BAND_COLOR_VAR.safe : BAND_COLOR_VAR.pending,
+                                  background: inRange ? BAND_COLOR_VAR.safe : BAND_COLOR_VAR.pendingBg
+                                }}
                               >
                                 {inRange && '✓'}
                               </span>
@@ -404,7 +465,153 @@ export function PoAgreementTrackerPage() {
           </div>
         )}
       </Card>
+
+      <AddPeriodModal
+        key={addPeriodFor?.container || 'global'}
+        open={addPeriodOpen}
+        containers={containers}
+        initialContainer={addPeriodFor}
+        onClose={() => setAddPeriodOpen(false)}
+        onSaved={reload}
+      />
     </>
+  );
+}
+
+// Categorical slots 1 (blue) and 2 (orange) of the dataviz skill's validated
+// default palette, as CSS custom properties defined in tokens.css — fixed
+// order, PO always blue / Agreement always orange, never cycled.
+const LANE_COLOR = { PO: 'var(--series-po)', Agreement: 'var(--series-agreement)' };
+const LANE_ORDER = ['PO', 'Agreement'];
+
+const parseDay = (s) => new Date(`${s}T00:00:00`).getTime();
+
+/**
+ * One-line timeline chart of a container's backfilled periods — explicit
+ * request 2026-11-05 ("one line chart for example", with a hand sketch of a
+ * horizontal bracket per date range). One lane per type present (PO/
+ * Agreement), each a thin horizontal baseline with a rounded, colored segment
+ * per period positioned at its real calendar position — not proportional
+ * placeholders. Only rendered for backfilled history (always has a real,
+ * complete start+end date); the CURRENT live period is deliberately left out
+ * here — PO has no start date anywhere in this system and Agreement's is a
+ * heuristic (see resolveCoverageRange's own doc comment above), so plotting
+ * either on this same precise axis would overstate how exact they are.
+ */
+function HistoryTimeline({ history }) {
+  const { lanes, domainStart, domainEnd, ticks } = useMemo(() => {
+    const starts = history.map((h) => parseDay(h.startDate));
+    const ends = history.map((h) => parseDay(h.endDate));
+    let dStart = Math.min(...starts);
+    let dEnd = Math.max(...ends);
+    const pad = Math.max((dEnd - dStart) * 0.06, 7 * 86400000);
+    dStart -= pad;
+    dEnd += pad;
+    if (dEnd <= dStart) dEnd = dStart + 86400000;
+
+    const laneTypes = LANE_ORDER.filter((t) => history.some((h) => h.type === t));
+    const lanesOut = laneTypes.map((type) => ({
+      type,
+      entries: [...history].filter((h) => h.type === type).sort((a, b) => (a.startDate < b.startDate ? -1 : 1))
+    }));
+
+    // Explicit request 2026-11-05 ("MONTH JAN26 FEB26 MAR26 APR26 ---DEC26"):
+    // every month boundary across the padded domain gets its own tick/label
+    // now — no thinning. W below grows with the tick count so labels stay
+    // legible instead of crowding together.
+    const first = new Date(dStart);
+    const ticksOut = [];
+    const cursor = new Date(first.getFullYear(), first.getMonth(), 1);
+    while (cursor.getTime() <= dEnd) {
+      if (cursor.getTime() >= dStart) ticksOut.push(cursor.getTime());
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    return { lanes: lanesOut, domainStart: dStart, domainEnd: dEnd, ticks: ticksOut };
+  }, [history]);
+
+  const W = 760, MARGIN = 10, LANE_H = 36, BAR_H = 14, AXIS_H = 22;
+  const innerW = W - MARGIN * 2;
+  const x = (t) => MARGIN + ((t - domainStart) / (domainEnd - domainStart)) * innerW;
+  const axisY = lanes.length * LANE_H;
+  const H = axisY + AXIS_H;
+
+  return (
+    <div className={styles.historyChart}>
+      {lanes.length > 1 && (
+        <div className={styles.historyChartLegend}>
+          {lanes.map((l) => (
+            <span key={l.type} className={styles.historyChartLegendItem}>
+              <span className={styles.historyChartSwatch} style={{ background: LANE_COLOR[l.type] }} />
+              {l.type}
+            </span>
+          ))}
+        </div>
+      )}
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width={W}
+        height={H}
+        className={styles.historyChartSvg}
+        style={{ aspectRatio: `${W} / ${H}` }}
+        role="img"
+        aria-label="Timeline of backfilled PO and Agreement periods"
+      >
+        {lanes.map((lane, li) => {
+          const laneY = li * LANE_H + LANE_H / 2;
+          return (
+            <g key={lane.type}>
+              <line x1={MARGIN} x2={W - MARGIN} y1={laneY} y2={laneY} className={styles.historyChartBaseline} />
+              {lane.entries.map((h, i) => {
+                const segX1 = x(parseDay(h.startDate));
+                const segX2 = x(parseDay(h.endDate));
+                const segW = Math.max(segX2 - segX1, 4);
+                // Surface-color gap (dataviz skill's "surface gap" spacer):
+                // without it, two periods that run back-to-back (e.g.
+                // Jan-Mar then Apr-Jun) touch at the boundary and — same
+                // color, same baseline — fuse into one shape with no visible
+                // seam. Insetting each rendered bar 1.5px per side opens a
+                // consistent 3px gap at every touching edge while leaving an
+                // isolated segment's width essentially unchanged. The date
+                // label still centers on the full logical span, not the
+                // inset bar.
+                const gapInset = Math.min(1.5, segW / 2 - 1);
+                const barX = segX1 + gapInset;
+                const barW = Math.max(segW - gapInset * 2, 2);
+                const label = `${formatShortDate(h.startDate)} → ${formatShortDate(h.endDate)}`;
+                // Measure-first (no clipped labels): an SVG <text> can't be
+                // measured before layout, so this estimates width from
+                // character count at the label's own font-size (9px, ~5.2px
+                // average advance) — skip the inline label once it plainly
+                // wouldn't fit; the row list above/below still carries it.
+                const fits = segW >= label.length * 5.2 + 6;
+                return (
+                  <g key={i}>
+                    <rect x={barX} y={laneY - BAR_H / 2} width={barW} height={BAR_H} fill={LANE_COLOR[lane.type]}>
+                      <title>{`${lane.type} · ${formatDisplayDate(h.startDate)} → ${formatDisplayDate(h.endDate)}${h.poNo ? ` · PO ${h.poNo}` : ''} · Added by ${h.enteredBy || '—'}`}</title>
+                    </rect>
+                    {fits && (
+                      <text x={(segX1 + segX2) / 2} y={laneY - BAR_H / 2 - 5} textAnchor="middle" className={styles.historyChartSegLabel}>
+                        {label}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+        <line x1={MARGIN} x2={W - MARGIN} y1={axisY} y2={axisY} className={styles.historyChartAxisLine} />
+        {ticks.map((t, i) => (
+          <g key={i}>
+            <line x1={x(t)} x2={x(t)} y1={axisY} y2={axisY + 4} className={styles.historyChartAxisLine} />
+            <text x={x(t)} y={axisY + 15} textAnchor="middle" className={styles.historyChartAxisLabel}>
+              {new Date(t).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' })}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
   );
 }
 
@@ -416,11 +623,22 @@ export function PoAgreementTrackerPage() {
  * actually save to, so editing happens by handing off to Renew & Document
  * (onEdit) instead of reimplementing that form here.
  */
-function PoAgreementDetail({ container: c, onBack, onEdit }) {
+function PoAgreementDetail({ container: c, onBack, onEdit, onAddPeriod }) {
   const today = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const agrBand = bandForDate(c.agreementDate, today);
   const poBand = bandForDate(c.poDate, today);
   const editable = String(c.status || '').trim().toLowerCase() === 'documents pending';
+  // Backfilled periods (Add Period) — shown here too, not just folded into
+  // the calendar grid's coverage ticks, so a backfilled entry is actually
+  // visible somewhere on this page, not just inferred from green boxes.
+  // Explicit follow-up 2026-11-05 ("data store but not show... pls show
+  // the data"): this panel only ever rendered the CURRENT live PO/Agreement
+  // fields — it never listed history entries at all, so a backfilled period
+  // was invisible here even once the coverage grid itself was fixed.
+  const history = useMemo(
+    () => [...(c.poHistory || []), ...(c.agreementHistory || [])].sort((a, b) => (a.startDate < b.startDate ? 1 : -1)),
+    [c.poHistory, c.agreementHistory]
+  );
 
   return (
     <div className={styles.detailPanel}>
@@ -482,8 +700,27 @@ function PoAgreementDetail({ container: c, onBack, onEdit }) {
         </div>
       </div>
 
+      {history.length > 0 && (
+        <div className={styles.historySection}>
+          <h4 className={styles.historyTitle}>Backfilled History ({history.length})</h4>
+          <HistoryTimeline history={history} />
+          <div className={styles.historyList}>
+            {history.map((h, i) => (
+              <div className={styles.historyRow} key={i}>
+                <span className={styles.historyType}>{h.type}</span>
+                <span className={styles.historyDates}>{formatDisplayDate(h.startDate)} → {formatDisplayDate(h.endDate)}</span>
+                {h.type === 'PO' && h.poNo && <span className={styles.historyPoNo}>PO {h.poNo}</span>}
+                {h.fileUrl && <a href={h.fileUrl} target="_blank" rel="noreferrer">File ↗</a>}
+                <span className={styles.historyMeta}>Added by {h.enteredBy || '—'} · {h.timestamp}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className={styles.detailActions}>
         <Button variant="secondary" onClick={onBack}>Back to list</Button>
+        <Button variant="secondary" onClick={onAddPeriod}>Add Period for this container</Button>
         {editable && <Button variant="primary" onClick={onEdit}>Edit in Renew &amp; Document →</Button>}
       </div>
     </div>

@@ -20,6 +20,7 @@ import { LookupResult } from './LookupResult.jsx';
 import { exportLookupToExcel, exportLookupToPdf } from './lookupExport.js';
 import { useStageSelection, StageSelector } from './StageSelector.jsx';
 import { PipelineDashboard } from './PipelineDashboard.jsx';
+import { SalePersonTab } from './SalePersonTab.jsx';
 import { StagePageBase } from '../stages/StagePageBase.jsx';
 import { SdRefundApprovalTab } from './SdRefundApprovalTab.jsx';
 import { STAGES } from '../../constants/stages.js';
@@ -52,6 +53,9 @@ const SD_REFUNDS_CEO_TAB = { key: 'sdRefundsCeo', label: 'Stage 6C (CEO)', count
 const TABS = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'lookup', label: 'Container Lookup' },
+  // Explicit request 2026-11-05 ("add the tab sale and one pop sale person
+  // i am click the show unke offlease data") — see SalePersonTab.jsx.
+  { key: 'salePerson', label: 'Sale Person' },
   // key uses the internal number (it routes to the stage's columns); the label
   // shows the display number so the tabs read Stage 1..7 with no gap.
   /* countKey is the INTERNAL stage number — the same key the API returns
@@ -96,6 +100,8 @@ export function OffLeasePage() {
     if (t.key === 'approval' || t.key === 'sdRefundsHod' || t.key === 'sdRefundsAccounts' || t.key === 'sdRefundsCeo') return false;
     if (t.key === 'dashboard') return canAct('offleasedashboard');
     if (t.key === 'lookup') return canAct('offleaselookup');
+    // Same gate as Dashboard — it's built from the same underlying data.
+    if (t.key === 'salePerson') return canAct('offleasedashboard');
     // Stage 6A/6B/6C only shown to callers who could actually act on that
     // approval stage — same gate SdRefundApprovalTab itself falls back to a
     // "no permission" message for, but hiding the tab entirely here is
@@ -168,6 +174,7 @@ export function OffLeasePage() {
           braces against `tab` state ever landing on a gated key another way
           (e.g. a stale value from before a permission was revoked). */}
       {tab === 'dashboard' && canAct('offleasedashboard') && <PipelineDashboard onOpenTab={setTab} />}
+      {tab === 'salePerson' && canAct('offleasedashboard') && <SalePersonTab onOpenTab={setTab} />}
       {tab === 'approval' && <ApprovalQueue />}
       {tab === 'lookup' && canAct('offleaselookup') && <ContainerLookup />}
       {stageMatch && <StagePageBase stageNumber={Number(stageMatch[1])} embedded />}

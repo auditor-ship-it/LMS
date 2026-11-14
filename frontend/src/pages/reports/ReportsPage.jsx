@@ -5,8 +5,12 @@ import {
 } from '../../components/ui/index.js';
 import { useAsync } from '../../hooks/useAsync.js';
 import { fetchOffLeaseDashboard } from '../../services/offLease.service.js';
+import { fetchMyTasks } from '../../services/myTask.service.js';
 import { getRenewalLog as fetchRenewalLog, getNewLeaseReport as fetchNewLease } from '../../api/expiry.api.js';
+import { fetchExpiryList } from '../../services/expiry.service.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
+import { usePermission } from '../../hooks/usePermission.js';
+import { DailyReportButton } from '../whatsappReport/DailyReportButton.jsx';
 import styles from './ReportsPage.module.css';
 
 /**
@@ -74,9 +78,22 @@ function weekStartOf(stamp) {
 const WEEK_LABEL_FMT = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short' });
 
 export function ReportsPage() {
+  const { canAct } = usePermission();
   const offlease = useAsync(fetchOffLeaseDashboard, []);
   const renewals = useAsync(fetchRenewalLog, []);
   const newLease = useAsync(fetchNewLease, []);
+  /* Sale Person — Contract Expiry Summary: explicit request 2026-11-04, with
+     an example table image (Client Count, Contract Expired >30 Days, >90
+     Days per Sale Person). Independent of this page's year/month/Sale
+     Person filters above — it IS the Sale-Person breakdown, filtering it by
+     one Sale Person would leave a single-row table. Same source Lease
+     Expiry's own page reads (GET /expiry?filter=pending), not a new
+     endpoint, so this never disagrees with that page's own Overdue counts. */
+  const leaseExpiry = useAsync(fetchExpiryList, []);
+  /* Live Off-Lease Pipeline — Stage 1 to Stage 5 (below) reads its counts
+     straight off this, the same GET /tasks/mine call My Task's own
+     scorecards use. */
+  const myTasks = useAsync(fetchMyTasks, []);
 
   /* Opens on the CURRENT month — a report is nearly always read for "now", and
      defaulting to everything meant scrolling months of history to reach it.
@@ -169,7 +186,82 @@ export function ReportsPage() {
   }, [renewalRows]);
 
   const loading = offlease.loading || renewals.loading || newLease.loading;
-  const reloadAll = () => { offlease.reload(); renewals.reload(); newLease.reload(); };
+  const reloadAll = () => { offlease.reload(); renewals.reload(); newLease.reload(); leaseExpiry.reload(); myTasks.reload(); };
+
+  /* Lease Expiry's own headers are found by name, not a fixed position —
+     "Sale Person" is a CRM-resolved column expiry.service.js adds, same
+     reasoning as LeaseExpiryPage.jsx's own salePersonColIdx/customerColIdx. */
+  const expiryHeaders = leaseExpiry.data?.headers || [];
+  const expirySalePersonColIdx = useMemo(
+    () => expiryHeaders.findIndex((h) => /^sale person$/i.test(String(h || '').trim())),
+    [expiryHeaders]
+  );
+  const expiryCustomerColIdx = useMemo(
+    () => expiryHeaders.findIndex((h) => /^(customer name|client name)$/i.test(String(h || '').trim())),
+    [expiryHeaders]
+  );
+
+  /** Per Sale Person, among OVERDUE containers only (band === 'overdue' —
+   *  same classification LeaseExpiryPage.jsx's own scorecards use):
+   *  distinct client count, and how many are overdue by more than 30 / 90
+   *  days (magnitude = -daysLeft, same formula overdueMagnitudeBucket uses
+   *  on that page). Sorted worst-first (most >90-day breaches) so the
+   *  salesperson needing the most attention is always at the top — except
+   *  "Unassigned" (explicit request 2026-11-04, "unassig add the counts":
+   *  a container the Sales CRM has no owner for was silently dropped from
+   *  this table entirely instead of counted), which is always pinned LAST
+   *  regardless of its own counts — it isn't a person to rank against the
+   *  real salespeople, it's a gap to flag separately. */
+  const salePersonExpirySummary = useMemo(() => {
+    const items = leaseExpiry.data?.data || [];
+    const map = new Map();
+    for (const item of items) {
+      if (item.band !== 'overdue') continue;
+      const rawName = expirySalePersonColIdx >= 0 ? String((item.row || [])[expirySalePersonColIdx] || '').trim() : '';
+      const name = rawName || 'Unassigned';
+      if (!map.has(name)) map.set(name, { clients: new Set(), over30: 0, over90: 0 });
+      const entry = map.get(name);
+      const client = expiryCustomerColIdx >= 0 ? String((item.row || [])[expiryCustomerColIdx] || '').trim() : '';
+      if (client) entry.clients.add(client);
+      const magnitude = -item.daysLeft;
+      if (magnitude > 30) entry.over30 += 1;
+      if (magnitude > 90) entry.over90 += 1;
+    }
+    return [...map.entries()]
+      .map(([name, v]) => ({ name, clientCount: v.clients.size, over30: v.over30, over90: v.over90 }))
+      .sort((a, b) => {
+        if (a.name === 'Unassigned') return 1;
+        if (b.name === 'Unassigned') return -1;
+        return b.over90 - a.over90 || b.over30 - a.over30 || a.name.localeCompare(b.name);
+      });
+  }, [leaseExpiry.data, expirySalePersonColIdx, expiryCustomerColIdx]);
+
+  /* Live Off-Lease Pipeline — Stage 1 to Stage 5: explicit request
+   *  2026-11-12. First built keyed by `raisedBy` (whoever's login raised the
+   *  record — crm@crystalgroup.in etc.), which the user rejected with a
+   *  reference screenshot: one row PER STAGE, named by that stage's actual
+   *  RESPONSIBLE PERSON (e.g. "Stage 1 | Christopher | 5"), not by who
+   *  raised the container. `owner` names mirror CARD_OWNER in
+   *  MyTaskPage.jsx's own CARD_DEFS (olStage1/offleaseApproval/olStage6/
+   *  olStage7/olStage3/olStage5) — the same owners already shown on the My
+   *  Task page for these exact stages — and the counts are read straight off
+   *  that same GET /tasks/mine payload (myTasks.data), so this table can
+   *  never disagree with My Task's own pending counts. Display order matches
+   *  the live workflow (constants/stages.js WORKFLOW): 1 Intimation, 1A
+   *  Pending Approval, 2 Transportation, 3 Gate In, 4 Inspection Checklist,
+   *  5 Final Billing. */
+  const OFFLEASE_STAGE_OWNERS = [
+    { stage: 'Stage 1', label: 'Off-Lease Intimation', owner: 'Christopher', taskKey: 'olStage1' },
+    { stage: 'Stage 1A', label: 'Pending Approval', owner: 'Pushpa', taskKey: 'offleaseApproval' },
+    { stage: 'Stage 2', label: 'Transportation', owner: 'Kshirod Khatua', taskKey: 'olStage6' },
+    { stage: 'Stage 3', label: 'Gate In', owner: 'Nikhil', taskKey: 'olStage7' },
+    { stage: 'Stage 4', label: 'Inspection Checklist', owner: 'Sitaram', taskKey: 'olStage3' },
+    { stage: 'Stage 5', label: 'Final Billing', owner: 'Shivani', taskKey: 'olStage5' }
+  ];
+  const offLeaseStagePending = useMemo(
+    () => OFFLEASE_STAGE_OWNERS.map((s) => ({ ...s, count: Number(myTasks.data?.[s.taskKey]) || 0 })),
+    [myTasks.data]
+  );
 
   /* Exports exactly what is on screen — the same rows, under the same filter.
      A download that quietly contained everything would contradict the page it
@@ -206,7 +298,11 @@ export function ReportsPage() {
 
   return (
     <>
-      <PageHeader title="Reports" subtitle="Month-wise summaries across the lease lifecycle" />
+      <PageHeader
+        title="Reports"
+        subtitle="Month-wise summaries across the lease lifecycle"
+        actions={canAct('whatsappReportAdmin') && <DailyReportButton />}
+      />
 
       <div className={styles.kpiRow}>
         <StatCard icon="package" label="Total off-lease" value={offLeaseRows.length} loading={offlease.loading} tint="navy" />
@@ -251,6 +347,25 @@ export function ReportsPage() {
         </Button>
       </div>
 
+      <Card title="Sale Person — Contract Expiry Summary">
+        {!leaseExpiry.loading && leaseExpiry.error && <ErrorState message={leaseExpiry.error} onRetry={leaseExpiry.reload} />}
+        {(leaseExpiry.loading || !leaseExpiry.error) && (
+          <DataGrid
+            headers={['Sale Person', 'Client Count', 'Contract Expired >30 Days', 'Contract Expired >90 Days']}
+            rows={salePersonExpirySummary}
+            loading={leaseExpiry.loading}
+            rowKey={(r) => r.name}
+            emptyMessage="No overdue leases"
+            renderRow={(_v, r) => [
+              <td key="n"><strong>{r.name}</strong></td>,
+              <td key="c">{r.clientCount}</td>,
+              <td key="30">{r.over30}</td>,
+              <td key="90">{r.over90}</td>
+            ]}
+          />
+        )}
+      </Card>
+
       <Card title="Off-Lease Report">
         {!offlease.loading && offlease.error && <ErrorState message={offlease.error} onRetry={offlease.reload} />}
         {(offlease.loading || !offlease.error) && (
@@ -268,6 +383,24 @@ export function ReportsPage() {
               <td key="t">{it.type || '—'}</td>,
               <td key="loc">{it.location || '—'}</td>,
               <td key="b">{it.raisedBy || '—'}</td>
+            ]}
+          />
+        )}
+      </Card>
+
+      <Card title="Live Off-Lease Pipeline — Stage 1 to Stage 5">
+        {!myTasks.loading && myTasks.error && <ErrorState message={myTasks.error} onRetry={myTasks.reload} />}
+        {(myTasks.loading || !myTasks.error) && (
+          <DataGrid
+            headers={['Stage', 'Name', 'Pending Count']}
+            rows={offLeaseStagePending}
+            loading={myTasks.loading}
+            rowKey={(r) => r.taskKey}
+            emptyMessage="Nothing pending"
+            renderRow={(_v, r) => [
+              <td key="s"><strong>{r.stage}</strong> — {r.label}</td>,
+              <td key="o">{r.owner}</td>,
+              <td key="c">{r.count}</td>
             ]}
           />
         )}

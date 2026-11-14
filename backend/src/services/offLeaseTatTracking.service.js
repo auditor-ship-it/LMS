@@ -33,7 +33,12 @@ import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { normKey } from '../utils/normalize.js';
-import { OL_STAGE_INFO, _findOlColumnMulti, _offLeaseAccessGate } from './offlease.service.js';
+import { OL_STAGE_INFO, _findOlColumnMulti, _offLeaseAccessGate, OL_MOVE_REASON_COL, OL_MOVE_TIMESTAMP_COL, OL_MOVE_DATE_COL, OL_MOVE_BY_COL, OL_MOVE_JUMP_TARGET_COL } from './offlease.service.js';
+
+// Jump target (OL_MOVE_JUMP_TARGET_COL) internal stage -> display stage —
+// the only 3 a "Move To Stage" jump may target (offlease.service.js's own
+// OL_JUMP_TARGET_INTERNALS: Gate In, Inspection, Final Billing).
+const JUMP_TARGET_DISPLAY = { 7: '3', 3: '4', 5: '5' };
 import { parseStamp, humanize } from './offleaseSla.service.js';
 import { getGateFormForContainer, isGatedIn } from './stage3Form.service.js';
 import { getMatchedFmsForContainer } from './stage8.service.js';
@@ -270,6 +275,49 @@ async function _buildRecordStages({ row, apStatusCol, apTsCol, entryStampIndex, 
   actual['4'] = parseStamp(s4Ts) || null;
   by['4'] = s4Ts ? safeStr(row[OL_STAGE_INFO[3].statusCol - 1]) : '';
 
+  /* "Move To Stage" fallback — explicit follow-up report 2026-11-04 ("this
+     is move the stage this is erly show", then "mov to stage automatickky
+     submitted date its 0m"): a container moved forward by hand (Reason
+     column non-blank — same check offlease.service.js's own _isMovedOut
+     uses) genuinely completes Stage 2/3/4 — the real pipeline shows them
+     "Completed" via its own bypassDone/impliedDone logic (see
+     _classifyOffLeaseStages) — but leaves none of the per-stage signals
+     above (no FMS match, no Gate-In form row, no filled status column)
+     for THOSE stages specifically to find, because the whole point of the
+     move was to skip filling them in one at a time. The move itself DOES
+     have a real, known moment — use it as whichever of actual/entry a
+     stage is still missing, for stages 2/3/4 only (a jump never targets
+     past Stage 5/Billing — OL_JUMP_TARGET_INTERNALS — so Billing itself is
+     never bypassed this way and must still get its own real completion).
+     BUG FOUND AND FIXED 2026-11-04 (live on HNKU6097218/OF0033): first
+     built this using OL_MOVE_TIMESTAMP_COL (294) first, falling back to
+     OL_MOVE_DATE_COL (296) — backwards. Confirmed live: Timestamp holds
+     29-Aug-2026 15:37 (the moment the admin clicked Submit on the Move To
+     Stage form), while Date holds 11-Jul-2026 (the Stage data tab's own
+     "Move To Stage — Date" field — a purpose-built, often-backdated "when
+     this actually happened" entry, filled in separately from whenever the
+     admin got around to recording it). TAT needs the real-world date, not
+     the data-entry date — Date now takes priority, Timestamp only as a
+     fallback for older move records with no Date filled in. Also now shows
+     which stage the jump actually targeted ("show mobe to jumd which stage
+     show" — explicit same-day follow-up), from OL_MOVE_JUMP_TARGET_COL. */
+  const moveActive = safeStr(row[OL_MOVE_REASON_COL]).trim() !== '';
+  if (moveActive) {
+    const moveAt = parseStamp(row[OL_MOVE_DATE_COL]) || parseStamp(row[OL_MOVE_TIMESTAMP_COL]);
+    const moveBy = safeStr(row[OL_MOVE_BY_COL]);
+    const jumpTargetInternal = parseInt(safeStr(row[OL_MOVE_JUMP_TARGET_COL]).trim(), 10);
+    const jumpTargetDisplay = JUMP_TARGET_DISPLAY[jumpTargetInternal];
+    const moveLabel = [
+      moveBy ? `Moved by ${moveBy}` : 'Moved',
+      jumpTargetDisplay ? `→ Stage ${jumpTargetDisplay}` : ''
+    ].filter(Boolean).join(' ');
+    if (moveAt) {
+      for (const key of ['2', '3', '4']) {
+        if (!actual[key]) { actual[key] = moveAt; by[key] = moveLabel; }
+      }
+    }
+  }
+
   // Stage 5 — Final Billing. No budget (spec: "Track TAT" only).
   const s5Ts = _genericStageTimestamp(row, 5);
   actual['5'] = parseStamp(s5Ts) || null;
@@ -313,7 +361,13 @@ async function _buildRecordStages({ row, apStatusCol, apTsCol, entryStampIndex, 
   entry['1'] = parseStamp(entryStampIndex.get(normKey(container)) || '');
   entry['1A'] = actual['1'];
   entry['2'] = actual['1A'];
-  entry['3'] = stage10At; // deliberate exception — see header comment
+  // deliberate exception — see header comment — but falls back to Stage 3's
+  // OWN resolved actual (e.g. the Move To Stage timestamp above) when
+  // STAGE-10 never matched at all: without this, a stage with a real,
+  // known actualAt still showed Pending below (entryAt null short-circuits
+  // before actualAt is ever looked at) — confirmed live 2026-11-04 ("mov to
+  // stage automatickky submitted date its 0m").
+  entry['3'] = stage10At || actual['3'];
   // Stage 4's entry: Gate-In form's own timestamp when available (same
   // reasoning as attachStageTat's own needsGateInFallback — Stage 3's own
   // status column is as unreliable as Transportation's), else Stage 3's
