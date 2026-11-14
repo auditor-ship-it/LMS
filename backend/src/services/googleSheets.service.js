@@ -5,8 +5,7 @@ import { touchSource } from '../utils/requestContext.js';
 import { getGlobalQuotaLock, tripGlobalQuotaLock } from '../utils/quotaLock.js';
 import {
   isCentral, googleDisabled, parseA1, centralGetValues, centralGetSheetData, centralWriteRange,
-  centralBatchUpdate, centralAppendRows, centralDeleteRows, centralEnsureHeader
-} from './centralSheets.service.js';
+  centralBatchUpdate, centralAppendRows, centralDeleteRows, centralEnsureHeader, mirrorToCentral, centralHasTab, parseQualifiedRange } from './centralSheets.service.js';
 
 /* DATA_SOURCE=central: every function below serves the central `lease`
    tables instead (centralSheets.service.js) and Google is never called. */
@@ -200,6 +199,8 @@ export async function getRange(sheetName, a1Range, ssId = env.googleSheetId, ren
   return res.data.values || [];
 }
 
+const dual = (label, tab, ssId, fn) => mirrorToCentral(label + ' ' + tab, async () => { if (centralHasTab(tab, ssId)) await fn(); });
+
 export async function appendRow(sheetName, rowArray, ssId = env.googleSheetId) {
   if (isCentral()) return { rowNum: await centralAppendRows(sheetName, [rowArray], ssId) };
   logSheetsAccess('appendRow (values.append)', sheetName, ssId);
@@ -214,6 +215,7 @@ export async function appendRow(sheetName, rowArray, ssId = env.googleSheetId) {
   const updatedRange = res.data.updates?.updatedRange || '';
   const m = updatedRange.match(/![A-Z]+(\d+):/);
   const rowNum = m ? Number(m[1]) : null;
+  dual('appendRow', sheetName, ssId, () => (rowNum ? centralWriteRange(sheetName, rowNum, 0, [rowArray], ssId) : centralAppendRows(sheetName, [rowArray], ssId)));
   return { rowNum };
 }
 
@@ -221,13 +223,15 @@ export async function appendRows(sheetName, rows2D, ssId = env.googleSheetId) {
   if (isCentral()) { await centralAppendRows(sheetName, rows2D || [], ssId); return; }
   logSheetsAccess(`appendRows (values.append x${rows2D?.length || 0})`, sheetName, ssId);
   const sheets = getSheetsClient();
-  await withQuotaRetry(`appendRows(${sheetName})`, () => sheets.spreadsheets.values.append({
+  const res = await withQuotaRetry(`appendRows(${sheetName})`, () => sheets.spreadsheets.values.append({
     spreadsheetId: ssId,
     range: `'${sheetName}'!A1`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: rows2D }
   }));
+  const first = Number(((res?.data?.updates?.updatedRange || '').match(/![A-Z]+(d+):/) || [])[1]) || null;
+  dual('appendRows', sheetName, ssId, () => (first ? centralWriteRange(sheetName, first, 0, rows2D || [], ssId) : centralAppendRows(sheetName, rows2D || [], ssId)));
 }
 
 /** 1-based row number, full row overwrite starting at column A. */
@@ -242,6 +246,7 @@ export async function updateRow(sheetName, rowNum, rowArray, ssId = env.googleSh
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [rowArray] }
   }));
+  dual('updateRow', sheetName, ssId, () => centralWriteRange(sheetName, rowNum, 0, [rowArray], ssId));
 }
 
 /** 1-based row number, 0-based column index. */
@@ -256,6 +261,7 @@ export async function updateCell(sheetName, rowNum, col0, value, ssId = env.goog
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [[value]] }
   }));
+  dual('updateCell', sheetName, ssId, () => centralWriteRange(sheetName, rowNum, col0, [[value]], ssId));
 }
 
 /**
@@ -304,6 +310,7 @@ export async function updateRange(sheetName, a1Range, values2D, ssId = env.googl
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: values2D }
   }));
+  dual('updateRange', sheetName, ssId, () => { const b = parseA1(a1Range); return centralWriteRange(sheetName, b.r0 + 1, b.c0, values2D, ssId); });
 }
 
 export async function batchUpdateValues(updates, ssId = env.googleSheetId) {
@@ -316,6 +323,10 @@ export async function batchUpdateValues(updates, ssId = env.googleSheetId) {
     spreadsheetId: ssId,
     requestBody: { valueInputOption: 'USER_ENTERED', data: updates }
   }));
+  for (const u of updates || []) {
+    const p = parseQualifiedRange(u.range);
+    if (p) dual('batchUpdateValues', p.tab, ssId, () => centralWriteRange(p.tab, p.startRow, p.startCol, u.values, ssId));
+  }
 }
 
 /** Deletes 1-based row numbers (any order/duplicates handled), batched, highest-first so indices stay valid. */
@@ -340,6 +351,7 @@ export async function deleteRows(sheetName, rowNums, ssId = env.googleSheetId) {
     spreadsheetId: ssId,
     requestBody: { requests }
   }));
+  dual('deleteRows', sheetName, ssId, () => centralDeleteRows(sheetName, rowNums, ssId));
 }
 
 export async function deleteSheetIfExists(sheetName, ssId = env.googleSheetId) {

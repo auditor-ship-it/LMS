@@ -32,6 +32,23 @@ export const isCentral = () => !googleBypass.getStore() && String(process.env.DA
 /** Runs fn with the central switch off for this async call chain, so googleSheets.service talks to real Google (used only by the write-behind worker). */
 export const runAgainstGoogle = (fn) => googleBypass.run(true, fn);
 /** Write-behind to Sheets (CENTRAL_SHEETS_MIRROR=on): every central write is also queued in lease.sheet_outbox, in the same transaction. */
+/** Dual-write (CENTRAL_DUAL_WRITE=on, DATA_SOURCE unset): Sheets/Mongo stay primary; every Sheets write the app makes is also applied to the central lease tables. */
+export const dualWriteToCentral = () => !googleBypass.getStore()
+  && String(process.env.DATA_SOURCE || '').toLowerCase() !== 'central'
+  && /^(on|true|1)$/i.test(String(process.env.CENTRAL_DUAL_WRITE || ''))
+  && !!process.env.CENTRAL_DATABASE_URL;
+let dualChain = Promise.resolve();
+let dualFailures = 0;
+/** Queues fn after the previous dual-write (keeps order); errors are logged, never thrown — the Sheets write already succeeded. */
+export function mirrorToCentral(label, fn) {
+  if (!dualWriteToCentral()) return;
+  dualChain = dualChain.then(async () => {
+    try { await initCentral(); await fn(); }
+    catch (e) { dualFailures++; logger.error(`[DUAL-WRITE] ${label} failed (central is now behind this change): ${e.message}`); }
+  });
+}
+export const dualWriteStats = () => ({ failures: dualFailures });
+export const centralHasTab = (tab, ssId) => !!entryFor(tab, ssId);
 export const mirrorToSheets = () => isCentral() && /^(on|true|1)$/i.test(String(process.env.CENTRAL_SHEETS_MIRROR || ''));
 
 const SCHEMA = 'lease';
@@ -74,7 +91,7 @@ export function centralPool() {
 
 /** Loads the tab registry. Call once at boot (idempotent, cheap). */
 export async function initCentral() {
-  if (!isCentral()) return;
+  if (!isCentral() && !dualWriteToCentral()) return;
   if (!ready) {
     ready = (async () => {
       const db = centralPool();
@@ -249,7 +266,7 @@ async function enqueue(c, e, op, payload) {
   await c.query(`INSERT INTO ${SCHEMA}.sheet_outbox (workbook_key, tab, op, payload) VALUES ($1, $2, $3, $4::jsonb)`, [e.wb, e.tab, op, JSON.stringify(payload)]);
 }
 
-const markWritten = (c, e) => c.query(`UPDATE ${SCHEMA}.sheet_tab SET app_written_at = now() WHERE table_name = $1`, [e.table]);
+const markWritten = (c, e) => dualWriteToCentral() ? Promise.resolve() : c.query(`UPDATE ${SCHEMA}.sheet_tab SET app_written_at = now() WHERE table_name = $1`, [e.table]);
 
 async function writeHeaderCells(c, e, startCol, vals) {
   for (let i = 0; i < vals.length; i++) {

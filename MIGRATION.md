@@ -154,6 +154,21 @@ Old Mongo mirror collections are not refreshed by this (central mode does not ru
 an old-mode instance kept running against the Sheets would refresh them as before.
 Tests: `node --test backend/test/sheetsWriteBehind.test.mjs` (fake Google client; no real Sheet is touched).
 
+## Dual-write before cutover — `CENTRAL_DUAL_WRITE=on` (DATA_SOURCE unset)
+
+Sheets and Mongo stay the primary store and behave exactly as today; additionally every Sheets write the
+app makes (append / update row / cell / range / batch / delete rows — all go through
+`googleSheets.service.js`, including the Mongo-first outbox replays) is applied to the central `lease`
+tables after the Google call succeeded. Needs `CENTRAL_DATABASE_URL` (login `lease_app`). Best effort and
+in order inside one process: a central failure is logged as `[DUAL-WRITE] … failed` and counted
+(`dualWriteStats()`), it never fails or slows the user's request. Tabs not in the central copy are
+skipped. It does not set `app_written_at`, so `load-lease.mjs` can still re-load a tab to repair drift.
+Not combined with `DATA_SOURCE=central`. **Network:** the central DB is closed to the internet
+(PgBouncer on the VPS loopback), so an app hosted elsewhere (e.g. Render) cannot reach it until the
+admin provides a private path (tunnel/VPN/allow-listed port); an app running on the VPS can.
+Hand edits made directly in the Sheet are not captured by dual-write — the periodic loader run is what
+brings those over until cutover. Tests: `node --test backend/test/dualWrite.test.mjs`.
+
 ## Known data/behaviour notes (not changed here)
 
 - Production LMS runs code that is not in GitHub `main`: `/leases/expiry` in prod returns 11 extra
