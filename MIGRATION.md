@@ -169,6 +169,31 @@ admin provides a private path (tunnel/VPN/allow-listed port); an app running on 
 Hand edits made directly in the Sheet are not captured by dual-write — the periodic loader run is what
 brings those over until cutover. Tests: `node --test backend/test/dualWrite.test.mjs`.
 
+## Keeping Sheets, Mongo and central in step until cutover (nothing existing changes)
+
+Sheets and Mongo remain the live system and the backup; central follows them. Where a change is made → where it shows up:
+- **App write** → Sheet + Mongo as today; with `CENTRAL_DUAL_WRITE=on` also central immediately (see above).
+- **Hand edit in a Sheet** → Mongo mirror within ~5 min (existing `sheetsReconcile`) → central within ~10-25 min:
+  systemd timer `crystal-lease-reload.timer` on the VPS (every 10 min, user postgres, files in
+  `/opt/crystal-lease-loader`) runs `scripts/central/reload-changed.mjs`, which reloads only tabs whose
+  `landing_sheets` copy changed since their last load (`synced_at` moves only on change). Check:
+  `journalctl -u crystal-lease-reload.service`. **Disable at cutover:** `systemctl disable --now crystal-lease-reload.timer`
+  (the loader also refuses tabs the apps have written since their last load). Because the Sheet copy is up to
+  15-30 min old, a just-made app write can be reverted in central until the next sync; it self-heals.
+- **Mongo-only collection** (clients, notifications, …) → central via the admin's `landing_lease` sync.
+  `invoice_archive_2526`, `invoice_template_mirror`, `tms_vetting_mirror` were copied once into
+  `lease.mongo_*`; they are not refreshed.
+- **Manual edit of a Mongo copy of a Sheet** → `MONGO_EDIT_PUSH=off|report|on` (default off), in
+  `jobs/mongoEditPush.js`, called from `sheetsReconcile` before it rebuilds the mirror. Three-way compare per row
+  (Mongo row M, last-reconciled Sheet hash S0 kept in `_mirror_snapshots`, Sheet row now S1): M != S0 and S1 == S0 →
+  the changed cells are written to the Sheet (through `googleSheets.service`, so central gets them via dual-write and the
+  rebuilt mirror keeps them); S1 changed too → Sheet wins (logged); M == S1 → nothing (app writes already replayed).
+  Only cell edits of existing rows; Mongo-side row inserts/deletes are never pushed; more than 25 edits in one cycle
+  (`MONGO_EDIT_PUSH_MAX`) are refused as a probable bulk change. **Roll out in `report` first** (logs
+  `would push …`, writes nothing), look at a day of logs, then `on`. Not tested against a live Sheet/Mongo.
+  Not used in central mode (the mirrors are the central tables there).
+Tests: `node --test backend/test/*.test.mjs`.
+
 ## Known data/behaviour notes (not changed here)
 
 - Production LMS runs code that is not in GitHub `main`: `/leases/expiry` in prod returns 11 extra

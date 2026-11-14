@@ -27,6 +27,7 @@ import { getCollection, withTransaction } from '../services/mongo.service.js';
 import { MONGO_SHEET_MAPPING, normalizeKey } from '../config/mongoSheetMapping.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { OUTBOX_COLLECTION } from '../services/outbox.service.js';
+import { applyManualMongoEdits } from './mongoEditPush.js';
 import { safeStr } from '../utils/format.js';
 import { logger } from '../utils/logger.js';
 
@@ -252,6 +253,9 @@ export async function reconcileSheet(sheetName) {
 
   const postFetch = POST_FETCH_HOOKS[sheetName];
   if (postFetch && rows.length) rows = await postFetch(rows, mapping.ssId);
+
+  // MONGO_EDIT_PUSH (default off): manual edits made to this Mongo mirror reach the Sheet before it is rebuilt.
+  if (rows.length) rows = await applyManualMongoEdits(sheetName, mapping, rows);
 
   const col = getCollection(sheetName);
   const now = new Date();
