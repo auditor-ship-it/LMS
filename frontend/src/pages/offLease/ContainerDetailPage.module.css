@@ -125,7 +125,22 @@
 
 @media (max-width: 1100px) {
   .body { grid-template-columns: minmax(0, 1fr); }
-  .stageRail { display: none; }
+  /* BUG FOUND AND FIXED 2026-11-16 (explicit request: "make the system
+     fully responsive without hiding any component... if data is visible on
+     PC view then it must be visible on all viewport"): this used to hide
+     the stage-jump rail entirely below 1100px. It's real navigation data
+     (every stage's done/current/future state, each dot clickable to jump
+     there) — on a narrow screen it now lays out as a horizontal scrollable
+     strip above the main content instead of disappearing, same information,
+     just reflowed for the width available. */
+  .stageRail {
+    position: static;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    order: -1;
+    padding-bottom: 4px;
+  }
   .progress { margin-left: 0; width: 100%; }
 }
 
