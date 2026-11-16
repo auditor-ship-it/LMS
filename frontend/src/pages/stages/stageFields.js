@@ -167,19 +167,19 @@ const MACHINE_POINTS = [
  * shows a blank expected quantity rather than a wrong one.
  */
 const CABIN_ITEMS = [
-  { item: 'Fan', col: 244, qty: { '20FT': 3 } },
-  { item: 'LED', col: 245, qty: { '20FT': 4 } },
-  { item: '5 Amp Switch', col: 246, qty: { '20FT': 2 } },
-  { item: 'Window', col: 247, qty: { '20FT': 2 } },
-  { item: '15A Switch', col: 248, qty: { '20FT': 1 } },
-  { item: 'Bulkhead', col: 249, qty: { '20FT': 1 } },
-  { item: 'AC point', col: 250, qty: { '20FT': 1 } },
-  { item: 'MCB', col: 251, qty: { '20FT': 1 } },
-  { item: 'Manager Table', col: 252, qty: { '20FT': 1 } },
-  { item: 'Table', col: 253, qty: { '20FT': 4 } },
-  { item: 'Overhead Storage', col: 254, qty: { '20FT': 4 } },
-  { item: 'Chair', col: 255, qty: { '20FT': 7 } },
-  { item: 'Partition', col: 256, qty: { '20FT': 1 } }
+  { item: 'Fan', col: 244, qty: { '20FT': 3 }, statusCol: 359, photoCol: 360, remarkCol: 361 },
+  { item: 'LED', col: 245, qty: { '20FT': 4 }, statusCol: 362, photoCol: 363, remarkCol: 364 },
+  { item: '5 Amp Switch', col: 246, qty: { '20FT': 2 }, statusCol: 365, photoCol: 366, remarkCol: 367 },
+  { item: 'Window', col: 247, qty: { '20FT': 2 }, statusCol: 368, photoCol: 369, remarkCol: 370 },
+  { item: '15A Switch', col: 248, qty: { '20FT': 1 }, statusCol: 371, photoCol: 372, remarkCol: 373 },
+  { item: 'Bulkhead', col: 249, qty: { '20FT': 1 }, statusCol: 374, photoCol: 375, remarkCol: 376 },
+  { item: 'AC point', col: 250, qty: { '20FT': 1 }, statusCol: 377, photoCol: 378, remarkCol: 379 },
+  { item: 'MCB', col: 251, qty: { '20FT': 1 }, statusCol: 380, photoCol: 381, remarkCol: 382 },
+  { item: 'Manager Table', col: 252, qty: { '20FT': 1 }, statusCol: 383, photoCol: 384, remarkCol: 385 },
+  { item: 'Table', col: 253, qty: { '20FT': 4 }, statusCol: 386, photoCol: 387, remarkCol: 388 },
+  { item: 'Overhead Storage', col: 254, qty: { '20FT': 4 }, statusCol: 389, photoCol: 390, remarkCol: 391 },
+  { item: 'Chair', col: 255, qty: { '20FT': 7 }, statusCol: 392, photoCol: 393, remarkCol: 394 },
+  { item: 'Partition', col: 256, qty: { '20FT': 1 }, statusCol: 395, photoCol: 396, remarkCol: 397 }
 ];
 
 /** Site Cabin is a container Type (see Stage 6's Container Type options). */
@@ -188,13 +188,50 @@ const isSiteCabin = (v) => String(v.col_3 || '').trim().toLowerCase().includes('
 export const normaliseSize = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, '');
 export const cabinExpectedQty = (entry, size) => entry.qty[normaliseSize(size)] ?? '';
 
-const CABIN_FIELDS = CABIN_ITEMS.map((c, i) => ({
-  key: `col_${c.col}`,
-  label: c.item,
-  type: 'number',
-  showIf: isSiteCabin,
-  cabin: { n: i + 1, item: c.item, qty: c.qty }
-}));
+/** Column 249 (Bulkhead's own Available cell, OL_CABIN_ITEMS in
+ *  offlease.service.js) still carries a legacy sync flag — the literal
+ *  string "Marked" — left over from BEFORE this column was repurposed for
+ *  the cabin fittings count (see OL_MACHINE_HEADER_BLOCK's own doc comment
+ *  there for that flag's original history). Confirmed live 2026-11-16: 176
+ *  rows still carry it, Site Cabin 52/OF0098 among them — the Condition
+ *  dropdown never opened for Bulkhead because `Number("Marked")` is NaN, so
+ *  the shortfall check silently failed. Treated as "no count recorded yet",
+ *  exactly like a genuinely blank cell, everywhere an Available value is
+ *  read — not reallocating the column, since that would need a real sheet
+ *  migration; this just stops the stale flag from being misread as data. */
+export function sanitizeCabinAvailable(raw) {
+  const s = String(raw ?? '').trim();
+  return s.toLowerCase() === 'marked' ? '' : s;
+}
+
+/* Explicit request 2026-11-16 ("qty se available kam hota hai tho... good
+   damage missing... not working good raha tho upload and remarks nahi open
+   hoga"): a Condition dropdown opens ONLY once an item's Available count
+   falls short of its own expected Qty — `shortfall` needs both this field's
+   own Available value AND the container's Size (col_2), so it is built
+   per-item below rather than reused from isSiteCabin alone. Photo/Remark
+   then open only once Condition reads something other than Good — same
+   two-level "detail fields only on a fault" shape checklistFields() below
+   uses for the Inspection Checklist's own points. */
+const CABIN_STATUS = ['Good', 'Damage', 'Missing', 'Not Working'];
+
+const CABIN_FIELDS = CABIN_ITEMS.flatMap((c, i) => {
+  const availKey = `col_${c.col}`;
+  const statusKey = `col_${c.statusCol}`;
+  const shortfall = (v) => {
+    if (!isSiteCabin(v)) return false;
+    const expected = cabinExpectedQty(c, v.col_2);
+    const avail = Number(sanitizeCabinAvailable(v[availKey]) || 0);
+    return expected !== '' && Number.isFinite(avail) && avail < Number(expected);
+  };
+  const needsDetail = (v) => shortfall(v) && isFaultStatus(v[statusKey]);
+  return [
+    { key: availKey, label: c.item, type: 'number', showIf: isSiteCabin, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'available' } },
+    { key: statusKey, label: `${c.item} — Condition`, type: 'radio', options: CABIN_STATUS, showIf: shortfall, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'status' } },
+    { key: `col_${c.photoCol}`, label: `${c.item} — Photo`, type: 'file', showIf: needsDetail, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'photo' } },
+    { key: `col_${c.remarkCol}`, label: `${c.item} — Remark`, type: 'text', showIf: needsDetail, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'remark' } }
+  ];
+});
 
 /** Technician labour — hours entered here, cost derived server-side at this
  *  rate (see OL_TECHNICIAN_RATE_PER_HOUR in offlease.service.js). */

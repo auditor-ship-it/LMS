@@ -18,7 +18,7 @@ import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.a
 import { usePermission } from '../../hooks/usePermission.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
-import { BASE_FIELDS, STAGE_FIELDS, cabinExpectedQty, normaliseSize, isFaultStatus, SOUND_STATUSES } from './stageFields.js';
+import { BASE_FIELDS, STAGE_FIELDS, cabinExpectedQty, normaliseSize, sanitizeCabinAvailable, isFaultStatus, SOUND_STATUSES } from './stageFields.js';
 import { stageCaption } from '../../constants/stages.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import styles from './StageDetailModal.module.css';
@@ -336,13 +336,18 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      its status radio plus (once Damage is picked, via the field's own showIf)
      the estimate and photo. Everything stays an ordinary field, so required-
      checks, file upload and payload building below are untouched. */
-  const { plainFields, cabinFields, checklists } = useMemo(() => {
+  const { plainFields, cabinRows, checklists } = useMemo(() => {
     const plain = [];
-    const cabin = [];
+    const cabinByN = new Map(); // n -> { n, item, qty, available, status, photo, remark }
     const groups = new Map();  // group -> Map(n -> row)
     const footers = new Map(); // group -> [field] rendered under that table
     for (const f of visibleFields) {
-      if (f.cabin) { cabin.push(f); continue; }
+      if (f.cabin) {
+        const { n, item, qty, role } = f.cabin;
+        if (!cabinByN.has(n)) cabinByN.set(n, { n, item, qty });
+        cabinByN.get(n)[role] = f;
+        continue;
+      }
       if (f.footerOf) {
         if (!footers.has(f.footerOf)) footers.set(f.footerOf, []);
         footers.get(f.footerOf).push(f);
@@ -357,7 +362,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     }
     return {
       plainFields: plain,
-      cabinFields: cabin,
+      cabinRows: [...cabinByN.values()].sort((a, b) => a.n - b.n),
       checklists: CHECKLISTS
         .filter((c) => groups.has(c.group))
         .map((c) => ({
@@ -856,13 +861,15 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                 />
               ))}
 
-              {!identityOnly && !data?._skipped && cabinFields.length > 0 && (
+              {!identityOnly && !data?._skipped && cabinRows.length > 0 && (
                 <CabinTable
-                  fields={cabinFields}
+                  rows={cabinRows}
                   size={data?.col_2}
                   values={values}
+                  pendingFiles={pendingFiles}
                   disabled={readOnly || busy}
                   onChange={setField}
+                  onFile={(key, payload) => { setPendingFiles((p) => ({ ...p, [key]: payload })); setField(key, payload.fileName); }}
                 />
               )}
 
@@ -2449,13 +2456,22 @@ function ChecklistTable({ title, columnLabel, rows, footer = [], values, pending
  * size; a size with no spec yet shows "—" rather than a wrong number.
  * A shortfall is highlighted so it is obvious at a glance.
  */
-function CabinTable({ fields, size, values, disabled, onChange }) {
+function CabinTable({ rows, size, values, pendingFiles, disabled, onChange, onFile }) {
   const sizeKey = normaliseSize(size);
+  /* Same "columns, not an expanding row" fix as ChecklistTable's own
+     anyDamage — explicit follow-up 2026-11-16 ("this not same for this ad
+     example"): Photo/Remark were a highlighted row that opened underneath a
+     shortfall item, which didn't match the Inspection Checklist's own
+     look (a plain dropdown + always-one-row-per-point layout). Now Photo/
+     Remark become two more columns every row already has (dash when not
+     needed) the moment ANY item needs them, same as that table. */
+  const anyDamage = rows.some((row) => row.status && isFaultStatus(String(values[row.status.key] || '')));
   return (
     <>
       <h3 className={styles.sectionTitle}>Site Cabin Fittings</h3>
       <p className={styles.sectionHint}>
-        Expected quantities for {sizeKey || 'this size'}. Enter how many are actually present.
+        Expected quantities for {sizeKey || 'this size'}. Enter how many are actually present —
+        falling short of the expected count opens a Condition dropdown for that item.
       </p>
 
       <table className={styles.inspTable}>
@@ -2465,21 +2481,32 @@ function CabinTable({ fields, size, values, disabled, onChange }) {
             <th scope="col">Items</th>
             <th scope="col">Qty</th>
             <th scope="col">Available</th>
+            <th scope="col">Condition</th>
+            {anyDamage && <th scope="col">Photo</th>}
+            {anyDamage && <th scope="col">Remarks</th>}
           </tr>
         </thead>
         <tbody>
-          {fields.map((f) => {
-            const expected = cabinExpectedQty({ qty: f.cabin.qty }, size);
-            const raw = values[f.key];
-            const available = String(raw ?? '').trim();
+          {rows.map((row) => {
+            const availField = row.available;
+            const expected = cabinExpectedQty({ qty: row.qty }, size);
+            // sanitizeCabinAvailable strips the legacy "Marked" sync flag
+            // still sitting in Bulkhead's own Available cell on ~176 live
+            // rows (see its own doc comment in stageFields.js) — without
+            // this, that row's shortfall/Condition dropdown silently never
+            // triggered, confirmed live on Site Cabin 52/OF0098.
+            const raw = sanitizeCabinAvailable(values[availField.key]);
+            const available = raw;
             // Only flag a shortfall when both sides are actually numeric —
             // a column may hold stray text left behind by a sheet edit.
             const short = expected !== '' && available !== '' &&
               Number.isFinite(Number(available)) && Number(available) < Number(expected);
+            const selected = row.status ? String(values[row.status.key] || '') : '';
+            const damaged = !!row.status && isFaultStatus(selected);
             return (
-              <tr key={f.key}>
-                <td className={styles.inspNum}>{f.cabin.n}</td>
-                <td className={styles.inspPoint}>{f.cabin.item}</td>
+              <tr key={row.n}>
+                <td className={styles.inspNum}>{row.n}</td>
+                <td className={styles.inspPoint}>{row.item}</td>
                 <td>{expected === '' ? '—' : expected}</td>
                 <td>
                   <input
@@ -2488,12 +2515,42 @@ function CabinTable({ fields, size, values, disabled, onChange }) {
                     step="1"
                     className={`${styles.cabinQty} ${short ? styles.cabinShort : ''}`}
                     value={raw ?? ''}
-                    onChange={(e) => onChange(f.key, e.target.value)}
+                    onChange={(e) => onChange(availField.key, e.target.value)}
                     onWheel={(e) => e.target.blur()}
                     disabled={disabled}
-                    aria-label={`${f.cabin.item} available`}
+                    aria-label={`${row.item} available`}
                   />
                 </td>
+                <td>
+                  {row.status ? (
+                    <select
+                      className={`${styles.statusSelect} ${statusTone(selected, styles)}`}
+                      value={selected}
+                      onChange={(e) => onChange(row.status.key, e.target.value)}
+                      disabled={disabled}
+                      aria-label={`${row.item} condition`}
+                    >
+                      <option value="">Select…</option>
+                      {row.status.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                  ) : <span className={styles.inspDamageDash}>—</span>}
+                </td>
+                {anyDamage && ['photo', 'remark'].map((role) => {
+                  const f = row[role];
+                  if (!damaged || !f) return <td key={role} className={styles.inspDamageDash}>—</td>;
+                  return (
+                    <td key={role} className={styles.inspDamageCol}>
+                      <Field
+                        field={{ ...f, label: '' }}
+                        value={values[f.key]}
+                        pendingFileName={pendingFiles[f.key]?.fileName}
+                        onChange={(v) => onChange(f.key, v)}
+                        onFile={(payload) => onFile(f.key, payload)}
+                        disabled={disabled}
+                      />
+                    </td>
+                  );
+                })}
               </tr>
             );
           })}

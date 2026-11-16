@@ -255,4 +255,29 @@ export const OL_HEADERS = [
      address. Keep this entry if this file is ever regenerated from the
      live header row. */
   "Stage 4 Email ID",
+  /* Indices 359-397 — same deliberate, hand-added exception as above: added
+     2026-11-16 (explicit request: "qty se available kam hota hai tho...
+     good damage missing... not working good raha tho upload and remarks
+     nahi open hoga") — three new columns PER Site Cabin fitting item
+     (Condition / Photo / Remark, OL_CABIN_ITEMS in offlease.service.js),
+     shown only once that item's Available count falls short of its
+     expected Qty, mirroring the Inspection Checklist's own Status/Photo/
+     Remark pattern for a damaged point. 13 items x 3 columns, in the same
+     order as OL_CABIN_ITEMS (Fan, LED, 5 Amp Switch, Window, 15A Switch,
+     Bulkhead, AC point, MCB, Manager Table, Table, Overhead Storage, Chair,
+     Partition). Keep these 39 entries if this file is ever regenerated from
+     the live header row. */
+  "Cabin Fan Condition", "Cabin Fan Photo", "Cabin Fan Remark",
+  "Cabin LED Condition", "Cabin LED Photo", "Cabin LED Remark",
+  "Cabin 5 Amp Switch Condition", "Cabin 5 Amp Switch Photo", "Cabin 5 Amp Switch Remark",
+  "Cabin Window Condition", "Cabin Window Photo", "Cabin Window Remark",
+  "Cabin 15A Switch Condition", "Cabin 15A Switch Photo", "Cabin 15A Switch Remark",
+  "Cabin Bulkhead Condition", "Cabin Bulkhead Photo", "Cabin Bulkhead Remark",
+  "Cabin AC Point Condition", "Cabin AC Point Photo", "Cabin AC Point Remark",
+  "Cabin MCB Condition", "Cabin MCB Photo", "Cabin MCB Remark",
+  "Cabin Manager Table Condition", "Cabin Manager Table Photo", "Cabin Manager Table Remark",
+  "Cabin Table Condition", "Cabin Table Photo", "Cabin Table Remark",
+  "Cabin Overhead Storage Condition", "Cabin Overhead Storage Photo", "Cabin Overhead Storage Remark",
+  "Cabin Chair Condition", "Cabin Chair Photo", "Cabin Chair Remark",
+  "Cabin Partition Condition", "Cabin Partition Photo", "Cabin Partition Remark",
 ];

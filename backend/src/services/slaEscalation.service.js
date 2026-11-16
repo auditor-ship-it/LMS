@@ -457,12 +457,34 @@ export async function runSlaEscalation(now = new Date()) {
     }
   }
 
-  if (configIssues.length) {
+  /* BUG FOUND AND FIXED 2026-11-16 (explicit report, "yeh mail kaha se ja
+     raha hai" — this alert has no dedup at all, unlike the owner/backup/
+     manager escalation emails above (ALERTS_COLLECTION's unique index): it
+     resent the SAME list to FALLBACK_EMAIL on every 5-minute job run for as
+     long as any stage had a missing backup/manager address — which, since
+     EVERY stage's backup/manager is still a TODO placeholder (see
+     SLA_ROUTING's own doc comment), meant every single run. Explicit
+     follow-up ("EVENING 5 PM ONLY"): throttled to once per calendar day, at
+     the first run at/after 17:00 — the server's own confirmed local
+     timezone is Asia/Calcutta (see leaseExpiryDigest's 9 AM cron comment),
+     so `getHours()`/local date need no explicit TZ math. Dedup state reuses
+     _runtime_config (already imported for FEATURE_FLAGS_ID above) rather
+     than a new collection, same "one tiny doc" footprint. */
+  const CONFIG_ALERT_HOUR = 17;
+  const CONFIG_ALERT_SENT_ID = 'slaConfigAlertLastSent';
+  if (configIssues.length && new Date().getHours() === CONFIG_ALERT_HOUR) {
     try {
-      const subject = `[SLA Escalation] Routing config missing for ${configIssues.length} stage(s)`;
-      const lines = configIssues.map((c) => `${c.container}${c.offLeaseId ? ` (${c.offLeaseId})` : ''} — stage ${c.stage} — level ${c.level}`);
-      const body = ['One or more stages breached their SLA but have no configured recipient, so no escalation email could be sent for them:', '', ...lines, '', 'Fix: set real addresses in SLA_ROUTING (offleaseSla.service.js) or the _runtime_config "slaRouting" override doc.'].join('\n');
-      await sendMail({ to: FALLBACK_EMAIL, subject, body, html: undefined });
+      const now = new Date();
+      const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const alertsCol = getCollection(FEATURE_FLAGS_COLLECTION);
+      const already = await alertsCol.findOne({ _id: CONFIG_ALERT_SENT_ID });
+      if (already?.date !== todayKey) {
+        const subject = `[SLA Escalation] Routing config missing for ${configIssues.length} stage(s)`;
+        const lines = configIssues.map((c) => `${c.container}${c.offLeaseId ? ` (${c.offLeaseId})` : ''} — stage ${c.stage} — level ${c.level}`);
+        const body = ['One or more stages breached their SLA but have no configured recipient, so no escalation email could be sent for them:', '', ...lines, '', 'Fix: set real addresses in SLA_ROUTING (offleaseSla.service.js) or the _runtime_config "slaRouting" override doc.', '', 'This admin alert is sent at most once per day, around 5 PM.'].join('\n');
+        await sendMail({ to: FALLBACK_EMAIL, subject, body, html: undefined });
+        await alertsCol.updateOne({ _id: CONFIG_ALERT_SENT_ID }, { $set: { date: todayKey } }, { upsert: true });
+      }
     } catch (e) {
       logger.error('[SLA-ESCALATION] Failed to send config-missing admin alert (non-fatal):', e?.message || e);
     }
