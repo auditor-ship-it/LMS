@@ -357,21 +357,31 @@ function _olMoney(v) {
  *
  * 20FT quantities are from the supplied cabin sheet. Sizes without an entry
  * render with a blank expected quantity until their spec is supplied.
- */
+ *
+ * `statusCol`/`photoCol`/`remarkCol` — added 2026-11-16 (explicit request:
+ * "qty se available kam hota hai tho... good damage missing... not working
+ * good raha tho upload and remarks nahi open hoga"): once an item's
+ * Available count falls short of its expected Qty, the frontend shows a
+ * Condition dropdown (Good/Damage/Missing/Not Working) at `statusCol`, and
+ * — only once that reads something other than Good — a Photo/Remark pair at
+ * `photoCol`/`remarkCol`, same "detail fields only on a fault" shape
+ * checklistFields() in stageFields.js already uses for the Inspection
+ * Checklist's own points. New columns (359-397), appended rather than
+ * inserted — see olHeaders.generated.js's own doc comment on this batch. */
 export const OL_CABIN_ITEMS = [
-  { item: 'Fan', col: 244, qty: { '20FT': 3 } },
-  { item: 'LED', col: 245, qty: { '20FT': 4 } },
-  { item: '5 Amp Switch', col: 246, qty: { '20FT': 2 } },
-  { item: 'Window', col: 247, qty: { '20FT': 2 } },
-  { item: '15A Switch', col: 248, qty: { '20FT': 1 } },
-  { item: 'Bulkhead', col: 249, qty: { '20FT': 1 } },
-  { item: 'AC point', col: 250, qty: { '20FT': 1 } },
-  { item: 'MCB', col: 251, qty: { '20FT': 1 } },
-  { item: 'Manager Table', col: 252, qty: { '20FT': 1 } },
-  { item: 'Table', col: 253, qty: { '20FT': 4 } },
-  { item: 'Overhead Storage', col: 254, qty: { '20FT': 4 } },
-  { item: 'Chair', col: 255, qty: { '20FT': 7 } },
-  { item: 'Partition', col: 256, qty: { '20FT': 1 } }
+  { item: 'Fan', col: 244, qty: { '20FT': 3 }, statusCol: 359, photoCol: 360, remarkCol: 361 },
+  { item: 'LED', col: 245, qty: { '20FT': 4 }, statusCol: 362, photoCol: 363, remarkCol: 364 },
+  { item: '5 Amp Switch', col: 246, qty: { '20FT': 2 }, statusCol: 365, photoCol: 366, remarkCol: 367 },
+  { item: 'Window', col: 247, qty: { '20FT': 2 }, statusCol: 368, photoCol: 369, remarkCol: 370 },
+  { item: '15A Switch', col: 248, qty: { '20FT': 1 }, statusCol: 371, photoCol: 372, remarkCol: 373 },
+  { item: 'Bulkhead', col: 249, qty: { '20FT': 1 }, statusCol: 374, photoCol: 375, remarkCol: 376 },
+  { item: 'AC point', col: 250, qty: { '20FT': 1 }, statusCol: 377, photoCol: 378, remarkCol: 379 },
+  { item: 'MCB', col: 251, qty: { '20FT': 1 }, statusCol: 380, photoCol: 381, remarkCol: 382 },
+  { item: 'Manager Table', col: 252, qty: { '20FT': 1 }, statusCol: 383, photoCol: 384, remarkCol: 385 },
+  { item: 'Table', col: 253, qty: { '20FT': 4 }, statusCol: 386, photoCol: 387, remarkCol: 388 },
+  { item: 'Overhead Storage', col: 254, qty: { '20FT': 4 }, statusCol: 389, photoCol: 390, remarkCol: 391 },
+  { item: 'Chair', col: 255, qty: { '20FT': 7 }, statusCol: 392, photoCol: 393, remarkCol: 394 },
+  { item: 'Partition', col: 256, qty: { '20FT': 1 }, statusCol: 395, photoCol: 396, remarkCol: 397 }
 ];
 
 /** Expected quantity for an item at a given container size, or '' if that
@@ -379,6 +389,20 @@ export const OL_CABIN_ITEMS = [
 export function cabinExpectedQty(entry, size) {
   const key = String(size || '').trim().toUpperCase().replace(/\s+/g, '');
   return entry.qty[key] ?? '';
+}
+
+/** Column 249 (Bulkhead's own Available cell) still carries a legacy sync
+ *  flag — the literal string "Marked" — left over from before this column
+ *  was repurposed for the cabin fittings count (see OL_MARKED_COL_1BASED's
+ *  own doc comment for that flag's original history; confirmed live
+ *  2026-11-16, 176 rows still carry it). Mirrors stageFields.js's own
+ *  sanitizeCabinAvailable on the frontend — every BACKEND reader of this
+ *  column (getOffLeaseStageDetail's cabin array, the Stage 3 submission
+ *  email) must apply the same sanitizing or the stray flag surfaces as if
+ *  it were a real Available count, as it did in the email before this fix. */
+export function sanitizeCabinAvailable(raw) {
+  const s = safeStr(raw).trim();
+  return s.toLowerCase() === 'marked' ? '' : s;
 }
 
 /** Technician labour — hours entered by the inspector, cost derived. */
@@ -393,7 +417,7 @@ const OL_STAGE3_MACHINE_COLS = [
   OL_TECHNICIAN_HOURS_COL,
   OL_TECHNICIAN_COST_COL
 ];
-const OL_STAGE3_CABIN_COLS = OL_CABIN_ITEMS.map((c) => c.col);
+const OL_STAGE3_CABIN_COLS = OL_CABIN_ITEMS.flatMap((c) => [c.col, c.statusCol, c.photoCol, c.remarkCol]);
 const OL_INSPECTION_COL_SET = new Set([
   ...OL_STAGE3_INSPECTION_COLS, ...OL_STAGE3_MACHINE_COLS, ...OL_STAGE3_CABIN_COLS
 ]);
@@ -5134,21 +5158,19 @@ async function _sendOffLeaseQuotationEmail(rn, data, row) {
 /**
  * Stage 4 (Inspection Checklist, internal stage 3) submission notification.
  *
- * REWORKED 2026-11-13 (explicit request: "add the emails id type
- * complusory this emails type and submitted the from and only stage 4
- * continer no client name and insepectio n reprt total billing yah send
- * hoga emails pe and na cc mai pushpa shivani and crm and mansi hogi") —
- * replaces the original 2026-09-29 version (full checklist + per-point
- * photos + technician cost, to Pushpa/Shivani only). Now:
+ * REWORKED 2026-11-16 (explicit request: "full data kyu nahi show ho raha
+ * hai stage 4 all data send mails") — the 2026-11-13 simplification (below)
+ * is reversed: this now attaches the FULL submission (every Container
+ * Inspection / Machine Check point, Technician Hours/Cost, and the Site
+ * Cabin Fittings table for a Site Cabin container), same content the
+ * original 2026-09-29 version sent, plus the cabin fittings table that
+ * didn't exist back then (see OL_CABIN_ITEMS' own 2026-11-16 doc comment).
+ * TO/CC are UNCHANGED from the 2026-11-13 rework:
  *   - TO is the inspector's own "Email ID" (col_358, OL_STAGE3_EMAIL_COL —
- *     a new compulsory field on this stage's form, see stageFields.js).
+ *     a compulsory field on this stage's form, see stageFields.js).
  *   - CC is Pushpa, Shivani, CRM and Mansi (same 4 desks the other Off-Lease
  *     digests already copy — see e.g. deployedSummaryDigest.service.js's own
  *     REPORT_RECIPIENTS).
- *   - Content is ONLY Container No, Client Name and the Inspection Report's
- *     Total Estimated Repair Cost — not the full point-by-point checklist or
- *     photos any more (those stay fully visible in-app, on this same stage's
- *     own record page; this is now a short notification, not a report).
  *
  * `row` = the pre-save row (identity columns never change in a Stage 3
  * save); `mergedRow` = that same row with this submission's own payload
@@ -5168,6 +5190,7 @@ const OL_STAGE3_EMAIL_CC = [
 export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
   const containerNo = safeStr(row[0]);
   const clientName = safeStr(mergedRow[5]);
+  const size = safeStr(mergedRow[2]);
   const estimateTotal = _olInspectionEstimateTotal(mergedRow);
   const totalBilling = estimateTotal != null ? `₹${_olMoney(estimateTotal)}` : '-';
 
@@ -5178,22 +5201,113 @@ export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
   }
 
   const subject = `Inspection Checklist Submitted – ${containerNo}`;
-  const body = [
-    `Container No: ${containerNo}`,
-    `Client Name: ${clientName || '-'}`,
-    `Inspection Report Total Billing: ${totalBilling}`
-  ].join('\n');
 
-  const th = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-weight:bold;font-size:13px;white-space:nowrap;">${s}</td>`;
-  const td = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:13px;">${s || '-'}</td>`;
+  const th = (s) => `<th style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-size:12.5px;text-align:left;white-space:nowrap;">${s}</th>`;
+  const td = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;">${s || '-'}</td>`;
+  const tdLink = (url) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;">${url ? `<a href="${url}" target="_blank">View</a>` : '-'}</td>`;
+
+  /* Container Inspection / Machine Check — one row per point that has ANY
+     value recorded, same filter getOffLeaseStageDetail's own readPoints()
+     uses, so a point nobody touched doesn't pad the email with blank rows. */
+  const pointSection = (title, points) => {
+    const pointRows = points
+      .map((p) => ({
+        n: p.n, item: p.item,
+        status: safeStr(mergedRow[p.status]).trim(),
+        estimate: fmtNumCell(mergedRow[p.estimate]),
+        photo: safeStr(mergedRow[p.photo]).trim(),
+        remark: safeStr(mergedRow[p.remark]).trim()
+      }))
+      .filter((p) => p.status || p.estimate || p.photo || p.remark);
+    if (!pointRows.length) return '';
+    return `
+      <h4 style="font-family:Arial,sans-serif;margin:16px 0 6px;">${title}</h4>
+      <table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;">
+        <tr>${th('#')}${th('Item')}${th('Condition')}${th('Estimate')}${th('Photo')}${th('Remark')}</tr>
+        ${pointRows.map((p) => `<tr>${td(p.n)}${td(p.item)}${td(p.status)}${td(p.estimate)}${tdLink(p.photo)}${td(p.remark)}</tr>`).join('')}
+      </table>`;
+  };
+
+  // Site Cabin Fittings — only present at all for a Site Cabin container
+  // (see OL_CABIN_ITEMS), same shape as the Condition/Photo/Remark table
+  // the app's own Stage 4 form shows once an item falls short of its Qty.
+  const cabinRows = OL_CABIN_ITEMS
+    .map((c, i) => ({
+      n: i + 1, item: c.item,
+      qty: cabinExpectedQty(c, size),
+      available: sanitizeCabinAvailable(mergedRow[c.col]),
+      status: safeStr(mergedRow[c.statusCol]).trim(),
+      photo: safeStr(mergedRow[c.photoCol]).trim(),
+      remark: safeStr(mergedRow[c.remarkCol]).trim()
+    }))
+    .filter((c) => c.available !== '');
+  const cabinSection = cabinRows.length ? `
+    <h4 style="font-family:Arial,sans-serif;margin:16px 0 6px;">Site Cabin Fittings</h4>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;">
+      <tr>${th('#')}${th('Item')}${th('Qty')}${th('Available')}${th('Condition')}${th('Photo')}${th('Remark')}</tr>
+      ${cabinRows.map((c) => `<tr>${td(c.n)}${td(c.item)}${td(c.qty)}${td(c.available)}${td(c.status)}${tdLink(c.photo)}${td(c.remark)}</tr>`).join('')}
+    </table>` : '';
+
+  const hours = fmtNumCell(mergedRow[OL_TECHNICIAN_HOURS_COL]);
+  const techCost = fmtNumCell(mergedRow[OL_TECHNICIAN_COST_COL]);
+  const technicianLine = (hours !== '' || techCost !== '')
+    ? `<p style="font-family:Arial,sans-serif;font-size:13px;">Technician Hours: ${hours || '-'} &nbsp; Technician Cost: ${techCost !== '' ? `₹${_olMoney(techCost)}` : '-'}</p>`
+    : '';
+
+  /* "Repair Estimate Summary" — explicit request 2026-11-16 ("yah bhi mail
+     pe jana chahiye", pointing at this exact table): the SAME Section/Item/
+     Condition/Remarks/Amount breakdown + Total Estimate row Stage 5's own
+     Cost Reference card shows (StageDetailModal.jsx's buildCostReferenceLines)
+     — every point with an ESTIMATE > 0 regardless of status, plus
+     technician labour. Deliberately a SEPARATE list from pointSection()
+     above: that one lists every point touched at all (for the full record),
+     this one is the condensed, costed-only view the reconciler actually
+     bills off. */
+  const costLines = [];
+  for (const [points, section] of [[OL_INSPECTION_POINTS, 'Inspection'], [OL_MACHINE_POINTS, 'Machine Check']]) {
+    for (const p of points) {
+      const amount = Number(safeStr(mergedRow[p.estimate]).trim().replace(/,/g, '')) || 0;
+      if (amount > 0) {
+        costLines.push({ section, item: p.item, status: safeStr(mergedRow[p.status]).trim(), remark: safeStr(mergedRow[p.remark]).trim(), amount });
+      }
+    }
+  }
+  if (hours !== '' && Number(hours) > 0 || (techCost !== '' && Number(techCost) > 0)) {
+    costLines.push({
+      section: 'Labour',
+      item: `Technician (${hours || 0} hr @ ${OL_TECHNICIAN_RATE_PER_HOUR.toLocaleString('en-IN')}/hr)`,
+      status: '', remark: '', amount: Number(techCost) || 0
+    });
+  }
+  const costSection = costLines.length ? `
+    <h4 style="font-family:Arial,sans-serif;margin:16px 0 6px;">Repair Estimate Summary</h4>
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;">
+      <tr>${th('Section')}${th('Item')}${th('Condition')}${th('Remarks')}${th('Amount')}</tr>
+      ${costLines.map((l) => `<tr>${td(l.section)}${td(l.item)}${td(l.status)}${td(l.remark)}${td(`₹${_olMoney(l.amount)}`)}</tr>`).join('')}
+      <tr><td colspan="4" style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;"><strong>Total Estimate</strong></td>${td(`<strong>₹${_olMoney(costLines.reduce((s, l) => s + l.amount, 0))}</strong>`)}</tr>
+    </table>` : '';
+
   const html = `
-    <p>The Inspection Checklist for <strong>${containerNo}</strong> has just been submitted.</p>
+    <p style="font-family:Arial,sans-serif;">The Inspection Checklist for <strong>${containerNo}</strong> has just been submitted.</p>
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;">
       <tr>${th('Container No')}${td(containerNo)}</tr>
       <tr>${th('Client Name')}${td(clientName)}</tr>
       <tr>${th('Inspection Report Total Billing')}${td(totalBilling)}</tr>
     </table>
+    ${costSection}
+    ${pointSection('Container Inspection Checklist', OL_INSPECTION_POINTS)}
+    ${pointSection('Machine Check', OL_MACHINE_POINTS)}
+    ${technicianLine}
+    ${cabinSection}
   `;
+
+  const body = [
+    `Container No: ${containerNo}`,
+    `Client Name: ${clientName || '-'}`,
+    `Inspection Report Total Billing: ${totalBilling}`,
+    '',
+    'Full checklist details (per-point condition, estimate, photo, remark) are in the HTML version of this email.'
+  ].join('\n');
 
   await sendMail({ to, cc: OL_STAGE3_EMAIL_CC.join(','), subject, body, html });
   console.log(`[OL-STAGE3-INSPECTION-EMAIL] sent to ${to} for ${containerNo}`);
@@ -6260,7 +6374,13 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
           n: i + 1,
           item: c.item,
           qty: cabinExpectedQty(c, safeStr(row[2])), // col 2 = Size
-          available: fmtNumCell(row[c.col])
+          available: sanitizeCabinAvailable(row[c.col]),
+          // Condition/Photo/Remark — added 2026-11-16, only ever written once
+          // Available fell short of Qty (see OL_CABIN_ITEMS' own doc comment);
+          // safeStr, not fmtCell, same reasoning readPoints() above uses.
+          status: safeStr(row[c.statusCol]).trim(),
+          photo: safeStr(row[c.photoCol]).trim(),
+          remark: safeStr(row[c.remarkCol]).trim()
         }))
         .filter((c) => c.available !== '');
       if (cab.length) cabin = cab;
