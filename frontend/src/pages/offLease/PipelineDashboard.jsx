@@ -14,6 +14,12 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { STAGES } from '../../constants/stages.js';
 import { ROUTES } from '../../constants/routes.js';
 import { toDate } from '../../utils/formatDateTime.js';
+import { apiErrorMessage } from '../../shared/auth/index.js';
+import { submitStage } from '../../services/stage.service.js';
+import { uploadStageFile } from '../../services/upload.service.js';
+import { settleSequentially, describeBulkFailures } from '../../utils/bulkRenewalSubmit.js';
+import { STAGE_FIELDS } from '../stages/stageFields.js';
+import { BulkStage5Modal } from '../stages/BulkStage5Modal.jsx';
 import { Highlight } from './Highlight.jsx';
 import { OrderBookView, ChipStrip, matchRefundAndTat } from './OrderBookView.jsx';
 import { BulkRefundModal } from './BulkRefundModal.jsx';
@@ -23,6 +29,11 @@ import styles from './PipelineDashboard.module.css';
  *  STAGE_GROUPS' own group 3 uses. Bulk-select only makes sense scoped to
  *  this stage's own form (see BulkRefundModal). */
 const SD_REFUNDS_STAGE_KEY = 11;
+/** Same idea, for "Final Billing" — explicit request 2026-11-14 ("stage 5
+ *  mai multiple slect ka option nahi hai"): the checkbox column and bulk bar
+ *  also activate under this filter, driving BulkStage5Modal instead of the
+ *  SD Refund one. */
+const FINAL_BILLING_STAGE_KEY = 5;
 
 const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
 
@@ -197,7 +208,10 @@ export function PipelineDashboard({ onOpenTab }) {
      column itself only shows while that filter is active. */
   const [selectedKeys, setSelectedKeys] = useState(new Set());
   const [bulkRefundOpen, setBulkRefundOpen] = useState(false);
-  const showSelectCol = stageFilter === SD_REFUNDS_STAGE_KEY;
+  const [bulkStage5Open, setBulkStage5Open] = useState(false);
+  const [bulkStage5Busy, setBulkStage5Busy] = useState(false);
+  const [bulkStage5Error, setBulkStage5Error] = useState('');
+  const showSelectCol = stageFilter === SD_REFUNDS_STAGE_KEY || stageFilter === FINAL_BILLING_STAGE_KEY;
   useEffect(() => { if (!showSelectCol) setSelectedKeys(new Set()); }, [showSelectCol]);
 
   const kpis = data?.kpis || {};
@@ -388,7 +402,37 @@ export function PipelineDashboard({ onOpenTab }) {
   const selectedEntries = filtered
     .map((it) => ({ key: `${it.leaseId || ''}-${it.container}`, it }))
     .filter(({ key }) => selectedKeys.has(key))
-    .map(({ it }) => ({ container: it.container, clientName: it.clientName, leaseId: it.leaseId }));
+    .map(({ it }) => ({ container: it.container, clientName: it.clientName, leaseId: it.leaseId, rowNum: it._rowNum }));
+
+  /* Fill Stage 5 (Final Billing) once, submit it to every selected
+   * container's own row — explicit request 2026-11-14. Files are uploaded
+   * once (shared across every submission, same convention the Stage 5 queue
+   * page's own bulk-fill handler uses), then settleSequentially submits one
+   * at a time so the shared Google Sheets write-burst quota isn't tripped by
+   * firing them all in parallel. */
+  const handleBulkStage5Submit = async ({ values, pendingFiles }) => {
+    setBulkStage5Busy(true);
+    setBulkStage5Error('');
+    try {
+      const fileKeys = Object.keys(pendingFiles);
+      const uploaded = {};
+      for (const key of fileKeys) uploaded[key] = await uploadStageFile(pendingFiles[key]);
+      const payload = { ...values, ...uploaded };
+      const results = await settleSequentially(selectedEntries, (en) => submitStage(en.container, 5, payload, en.rowNum));
+      const failures = describeBulkFailures(results, selectedEntries.map((en) => ({ row: [en.container] })), 'submitted', apiErrorMessage);
+      if (failures) {
+        setBulkStage5Error(failures);
+        return;
+      }
+      setSelectedKeys(new Set());
+      setBulkStage5Open(false);
+      reload();
+    } catch (e) {
+      setBulkStage5Error(apiErrorMessage(e));
+    } finally {
+      setBulkStage5Busy(false);
+    }
+  };
   const stageKeyLabel = (key) => (
     key === 'approval' ? 'Pending approval'
       : key === 'done' ? 'Completed'
@@ -622,7 +666,11 @@ export function PipelineDashboard({ onOpenTab }) {
         {!loading && !error && showSelectCol && selectedEntries.length > 0 && (
           <div className={styles.bulkBar}>
             <span><span className={styles.bulkBarCount}>{selectedEntries.length}</span> selected</span>
-            <Button size="sm" variant="primary" onClick={() => setBulkRefundOpen(true)}>Fill one SD Refund form for all</Button>
+            {stageFilter === FINAL_BILLING_STAGE_KEY ? (
+              <Button size="sm" variant="primary" onClick={() => setBulkStage5Open(true)}>Fill Stage 5 Form for all</Button>
+            ) : (
+              <Button size="sm" variant="primary" onClick={() => setBulkRefundOpen(true)}>Fill one SD Refund form for all</Button>
+            )}
             <Button size="sm" variant="secondary" onClick={() => setSelectedKeys(new Set())}>Clear selection</Button>
           </div>
         )}
@@ -731,6 +779,15 @@ export function PipelineDashboard({ onOpenTab }) {
           onSubmitted={() => { setSelectedKeys(new Set()); setBulkRefundOpen(false); reload(); }}
         />
       )}
+
+      <BulkStage5Modal
+        open={bulkStage5Open && selectedEntries.length > 0}
+        items={selectedEntries.map((en) => ({ containerNo: en.container, rowNum: en.rowNum }))}
+        submitting={bulkStage5Busy}
+        error={bulkStage5Error}
+        onClose={() => { setBulkStage5Open(false); setBulkStage5Error(''); }}
+        onSubmit={handleBulkStage5Submit}
+      />
 
     </>
   );
