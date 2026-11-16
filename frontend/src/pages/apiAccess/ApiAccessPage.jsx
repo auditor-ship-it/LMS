@@ -18,7 +18,11 @@ const DOMAIN_LABELS = {
   // apiKeys.service.js's WRITE_CAPABLE_DOMAINS).
   refunds: 'Refunds',
   renewdocument: 'Renew & Document',
-  deployedsummary: 'Deployed Summary',
+  // "(includes Rate)" added 2026-11-16, explicit follow-up to the API-key
+  // Rate access fix — there is no separate Rate scope/checkbox; checking
+  // this one domain is what unlocks real Rate values on /deployed-summary/
+  // detail (see dashboard.service.js's canSeeRate/viaApiKey doc comment).
+  deployedsummary: 'Deployed Summary (includes Rate)',
   reports: 'Reports',
   all: 'All domains'
 };
@@ -50,7 +54,12 @@ const ENDPOINTS = [
   { domain: 'renewdocument', method: 'GET', path: '/renew-document' },
   { domain: 'renewdocument', method: 'GET', path: '/renew-document/approval-pending' },
   { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary' },
-  { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary/detail' },
+  // Only /detail returns per-row Rate (the plain /deployed-summary aggregate
+  // above never did) — a key with this scope sees real Rate values here,
+  // unlike every session-login caller except the 3 named exceptions. `note`
+  // is display-only (see the docsRow render below) — never appended to
+  // `path`, which still has to be a real, curl-able URL.
+  { domain: 'deployedsummary', method: 'GET', path: '/deployed-summary/detail', note: 'includes Rate' },
   { domain: 'reports', method: 'GET', path: '/reports/renewal-log' },
   { domain: 'reports', method: 'GET', path: '/reports/new-lease' },
   // Added 2026-10-30, explicit request — flat total Off-Lease record list
@@ -254,6 +263,7 @@ export function ApiAccessPage() {
               <div key={e.path} className={styles.docsRow}>
                 <span className={styles.docsDomain}>{e.domain}</span>
                 <code className={`${styles.docsPath} ${e.write ? styles.docsPathWrite : ''}`}>{e.method} {PUBLIC_BASE}{e.path}</code>
+                {e.note && <span className={styles.docsNote}>{e.note}</span>}
               </div>
             ))}
           </div>

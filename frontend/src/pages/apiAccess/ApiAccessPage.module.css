@@ -165,4 +165,5 @@
   color: var(--text-3);
 }
 .docsPath { font-family: var(--f-mono); color: var(--text-2); word-break: break-all; }
+.docsNote { flex: none; font-size: 10.5px; font-weight: 700; color: var(--success); white-space: nowrap; }
 .docsPathWrite { color: var(--warn); }
