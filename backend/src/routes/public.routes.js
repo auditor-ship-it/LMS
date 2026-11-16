@@ -40,10 +40,18 @@ const router = Router();
  * requirePublicApiKey's write check — the controller (and anything it calls,
  * including offlease.service.js's internal checkActionPermission) runs
  * exactly as if that real LMS user made the call themselves, body included.
+ *
+ * `rateViaApiKey: true` (deployed-summary/detail only — explicit request
+ * 2026-11-16, "deployed sheet api acess for rate data" + "api key"): sets
+ * `user.viaApiKey`, which dashboard.service.js's canSeeRate() treats as
+ * equivalent to one of its three named logins — Rate is pricing data,
+ * hidden from every OTHER public/session caller by design, so this is
+ * deliberately opt-in per route, never a blanket "null user sees
+ * everything" change.
  */
-function reuse(controllerFn, { write = false } = {}) {
+function reuse(controllerFn, { write = false, rateViaApiKey = false } = {}) {
   return (req, res, next) => {
-    const user = write ? { email: req.actsAsEmail } : null;
+    const user = write ? { email: req.actsAsEmail } : rateViaApiKey ? { viaApiKey: true } : null;
     const shimReq = { user, query: req.query, params: req.params, body: req.body };
     const shimRes = { json: (data) => res.json(data), status() { return this; } };
     Promise.resolve(controllerFn(shimReq, shimRes)).catch(next);
@@ -133,7 +141,10 @@ router.get('/renew-document/approval-pending', requirePublicApiKey('renewdocumen
 /* ---------------- deployed summary (read-only) ---------------- */
 router.get('/deployed-summary', requirePublicApiKey('deployedsummary'), asyncHandler(reuse(dashboardController.getDeployedSummary)));
 // ?month=&category=&type=&size= — same query params as the internal endpoint.
-router.get('/deployed-summary/detail', requirePublicApiKey('deployedsummary'), asyncHandler(reuse(dashboardController.getDeployedDetail)));
+// Includes Rate (see reuse()'s rateViaApiKey doc comment above) — unlike
+// every other caller of this same function, a valid 'deployedsummary'-scoped
+// API key sees real Rate values instead of ''.
+router.get('/deployed-summary/detail', requirePublicApiKey('deployedsummary'), asyncHandler(reuse(dashboardController.getDeployedDetail, { rateViaApiKey: true })));
 
 /* ---------------- reports (read-only) ----------------
    The Reports page's own Off-Lease section is GET /offlease/dashboard,

@@ -31,7 +31,19 @@ const RATE_VISIBLE_EMAILS = new Set([
   'shivani.dhall@crystalgroup.in',
   'dmo@crystalgroup.in'
 ]);
+/* Explicit request 2026-11-16 ("deployed sheet api acess for rate data" /
+ * "api key"): the public API's own /deployed-summary/detail route
+ * (routes/public.routes.js) calls this with `user: null` (reuse()'s normal
+ * shape for a read), since an API key has no LMS login/email of its own to
+ * check against RATE_VISIBLE_EMAILS — Rate silently came back blank for
+ * every API key caller regardless of scope. A key is itself an admin-issued,
+ * deliberately provisioned credential (the API Access screen), the same
+ * trust tier as being one of the three named logins above, so
+ * `user.viaApiKey` (set only by that one route, never by a session user)
+ * grants the same access a named login would, without widening what any
+ * ordinary logged-in user can see. */
 function canSeeRate(user) {
+  if (user?.viaApiKey) return true;
   return RATE_VISIBLE_EMAILS.has(String(user?.email || '').trim().toLowerCase());
 }
 
