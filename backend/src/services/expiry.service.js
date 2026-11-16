@@ -30,6 +30,7 @@
  * they're just re-exports of utils/normalize.js's normKey/splitContainers
  * there, so import directly from normalize.js instead.
  */
+import { isCentral } from './centralSheets.service.js';
 import {
   getSheetData,
   getRange,
@@ -804,6 +805,8 @@ export async function completeDocumentStage(containerNo, callerEmail, knownRow) 
  * above to make the same change on the real Google Sheet in the background.
  */
 export async function completeDocumentStageFast(containerNo, callerEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) { const r = await completeDocumentStage(containerNo, callerEmail, knownRow); cacheRemove(DEPLOYED_RAW_CACHE_KEY); cacheRemoveByPrefix('mytasks_v1'); return r; }
   await checkActionPermission('document', callerEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
@@ -883,6 +886,8 @@ export async function saveExpiryAction(rowId, timestamp, status, callerEmail, kn
  * the background (env.outboxPollMs later, not instantly).
  */
 export async function saveExpiryActionFast(rowId, timestamp, status, callerEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) { const r = await saveExpiryAction(rowId, timestamp, status, callerEmail, knownRow); cacheRemove(DEPLOYED_RAW_CACHE_KEY); cacheRemoveByPrefix('mytasks_v1'); return r; }
   await checkActionPermission('expiry', callerEmail);
   if (!rowId || String(rowId).trim() === '') throw new AppError('Container number is required');
 
@@ -954,6 +959,8 @@ export async function sendExpiryToPending(containerNo, callerEmail, knownRow) {
  * saveExpiryActionFast above.
  */
 export async function sendExpiryToPendingFast(containerNo, callerEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) { const r = await sendExpiryToPending(containerNo, callerEmail, knownRow); cacheRemove(DEPLOYED_RAW_CACHE_KEY); cacheRemoveByPrefix('mytasks_v1'); return r; }
   await checkActionPermission('expiry', callerEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 
@@ -1027,6 +1034,8 @@ export async function saveExpiryRemark(containerNo, remark, callerEmail, knownRo
  * sheet via the outbox (same pattern as saveExpiryActionFast).
  */
 export async function saveExpiryRemarkFast(containerNo, remark, callerEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) { const r = await saveExpiryRemark(containerNo, remark, callerEmail, knownRow); cacheRemove(DEPLOYED_RAW_CACHE_KEY); cacheRemoveByPrefix('mytasks_v1'); return r; }
   await checkActionPermission('expiry', callerEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
 

@@ -70,6 +70,7 @@ import { warmFmsCache } from '../services/stage8.service.js';
 import { checkPendingClientToClientMoves } from '../services/offlease.service.js';
 import { sendLeaseExpiryDigest } from '../services/leaseExpiryDigest.service.js';
 import { sendMonthlyReport } from '../services/monthlyReport.service.js';
+import { runSlaEscalation } from '../services/slaEscalation.service.js';
 import { sendPoAgreementDigest } from '../services/poAgreementDigest.service.js';
 import { sendDeployedSummaryDigest } from '../services/deployedSummaryDigest.service.js';
 import { saveDeployedSheetSnapshotIfNeeded } from '../services/deployedSheetSnapshot.service.js';
@@ -78,6 +79,7 @@ import { expireOldHolds } from '../services/offlease.service.js';
 import { sendOffLeaseStageDigest } from '../services/offLeaseStageDigest.service.js';
 import { schedulerTick } from '../services/dailyWhatsappReportService.js';
 import { logger } from '../utils/logger.js';
+import { isCentral } from '../services/centralSheets.service.js';
 
 function safeRun(name, fn) {
   return () => {
@@ -206,20 +208,35 @@ const WARM_FMS_CACHE_MINUTES = '4,9,14,19,24,29,34,39,44,49,54,59';
    in and warmFmsCache has refreshed the application-level read cache on top
    of it. See checkPendingClientToClientMoves' own doc comment. */
 const CTC_PENDING_CHECK_MINUTES = '5,10,15,20,25,30,35,40,45,50,55,0';
+/* 1 minute after RECONCILE_MINUTES — the L7 SLA-escalation scan (Issue #55)
+   is Mongo-ONLY (no Sheets/FMS call of its own — see
+   slaEscalation.service.js's own header), but it reads the off-lease
+   dashboard/container detail straight off the Mongo mirror reconcile just
+   refreshed, so it needs to run strictly AFTER that job, same reasoning as
+   WARM_FMS_CACHE_MINUTES/CTC_PENDING_CHECK_MINUTES just above. Explicit
+   minute list, not range+step ('1-59/5') — see this file's own header for
+   why that syntax silently fails to produce the intended offset in
+   node-cron. Gated (cheaply, a single Mongo read) behind
+   `_runtime_config.featureFlags.slaEscalation` inside runSlaEscalation
+   itself — safe to register unconditionally here. */
+const SLA_ESCALATION_MINUTES = '2,7,12,17,22,27,32,37,42,47,52,57';
 
 export function registerSheetsSync() {
   // STAGE-8/9/10 (2026-08-28): now part of runSheetsReconciliation's own
   // sheet list (mongoSheetMapping.js) — the separate refreshFmsCaches live-
   // read job that used to cover them is retired; stage8.service.js reads
   // exclusively from the Mongo mirror now, same as every other sheet.
-  cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
+  // DATA_SOURCE=central: no Sheets->Mongo reconcile — the central tables are the data.
+  if (!isCentral()) cron.schedule(`${RECONCILE_MINUTES} * * * *`, safeRun('sheetsReconcile', runSheetsReconciliation));
   cron.schedule(`${FMS_REFRESH_MINUTES} * * * *`, safeRun('refreshStage3FormCache', refreshStage3FormCache));
   cron.schedule(`${WARM_FMS_CACHE_MINUTES} * * * *`, safeRun('warmFmsCache', warmFmsCache));
   cron.schedule(`${CTC_PENDING_CHECK_MINUTES} * * * *`, safeRun('checkPendingClientToClientMoves', checkPendingClientToClientMoves));
+  cron.schedule(`${SLA_ESCALATION_MINUTES} * * * *`, safeRun('slaEscalation', () => runSlaEscalation()));
   logger.info('[SYNC] Sheets<->Mongo reconciliation registered (every 5 min, offset :01) — now includes STAGE-8/9/10');
   logger.info('[SYNC] Stage 3 Gate-In form refresh registered (every 5 min, offset :03)');
   logger.info('[SYNC] STAGE-8/9/10 application cache warm registered (every 5 min, offset :04)');
   logger.info('[SYNC] Transportation "Client to Client" pending-DO check registered (every 5 min, offset :05)');
+  logger.info('[SYNC] L7 SLA-escalation scan registered (every 5 min, offset :02 — 1 min after reconcile; no-ops until featureFlags.slaEscalation is on)');
 }
 
 /**

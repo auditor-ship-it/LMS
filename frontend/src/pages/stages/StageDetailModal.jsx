@@ -1287,7 +1287,7 @@ function OutstandingPanel({ data, loading }) {
  * default — this is the opposite case: hiding data behind a click the
  * FIRST time you look is exactly what's wanted here).
  */
-function CollapsibleSection({ title, children }) {
+export function CollapsibleSection({ title, children }) {
   const [open, setOpen] = useState(false);
   return (
     <section className={styles.fmsGroup} style={{ marginBottom: 16 }}>
@@ -1335,7 +1335,7 @@ function buildCostReferenceLines(inspectionPoints, machinePoints, technician) {
   return { lines, total: lines.reduce((sum, l) => sum + l.amount, 0) };
 }
 
-function CostReferencePanel({ inspectionCost, inspectionPoints, machinePoints, technician }) {
+export function CostReferencePanel({ inspectionCost, inspectionPoints, machinePoints, technician }) {
   const i = parseCostFigure(inspectionCost);
   const inr = (n) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
   const summary = buildCostReferenceLines(inspectionPoints, machinePoints, technician);
@@ -1403,7 +1403,7 @@ function CostReferencePanel({ inspectionCost, inspectionPoints, machinePoints, t
  * near-empty wall of dashes on almost every container, not a useful
  * reference. Only worth showing once there's an actual file to open.
  */
-function TransportInvoiceNote({ invoice }) {
+export function TransportInvoiceNote({ invoice }) {
   if (!invoice?.invoiceUrl) return null;
   return (
     <>
@@ -1447,7 +1447,7 @@ function TransportInvoiceNote({ invoice }) {
  * rule) as LookupResult.jsx's own read-only ChecklistTable — see
  * getOffLeaseStageDetail's _inspectionPoints/_machinePoints for the fetch.
  */
-function InspectionReferenceTable({ title, points }) {
+export function InspectionReferenceTable({ title, points }) {
   if (!points?.length) return null;
   const anyDamage = points.some((p) => isFaultStatus(p.status));
   return (
@@ -1487,7 +1487,7 @@ function InspectionReferenceTable({ title, points }) {
  * reconcile against, set back at intimation time and otherwise invisible on
  * this form (getOffLeaseStageDetail's _stage1Data); never saved from here.
  */
-function Stage1DataNote({ data }) {
+export function Stage1DataNote({ data }) {
   if (!data || (!data.intimationDate && !data.offLeaseDate && !data.finalBillingDate && !data.emailNotification)) return null;
   return (
     <div className={styles.outstandingRow}>
@@ -2644,7 +2644,7 @@ function StageRemarks({ containerNo, leaseId, stageNumber }) {
   );
 }
 
-function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
+export function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
   const { label, type, options = [], required } = field;
 
   if (type === 'text') {

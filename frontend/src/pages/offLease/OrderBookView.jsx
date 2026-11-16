@@ -74,10 +74,15 @@ export function buildChips(item, refundEntry, tatRecord) {
 
   const chip = (stage) => {
     const s = stageOf(stage.number);
+    /* Stage 1's own remark (col_14) carries the Send Back note once
+       saveOffLeaseSendBackFromBilling resets it back to pending — explicit
+       request 2026-11-14 ("send back data show for this stge 5"): surface
+       it on the chip's own hover title too, not just the banner below. */
+    const sentBackNote = stage.number === 1 && !s?.done && s?.remark ? s.remark : '';
     return {
       key: `s${stage.number}`,
       label: String(stage.display),
-      title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${formatActionTimestamp(s.timestamp)}`.trimEnd() : ' — pending'}${tatSuffix(tatRecord, TAT_KEY_BY_INTERNAL[stage.number])}`,
+      title: `Stage ${stage.display} · ${stage.label}${s?.done ? ` — completed ${formatActionTimestamp(s.timestamp)}`.trimEnd() : sentBackNote ? ` — Sent back: ${sentBackNote}` : ' — pending'}${tatSuffix(tatRecord, TAT_KEY_BY_INTERNAL[stage.number])}`,
       tab: `stage${stage.number}`,
       stageNumber: stage.number,
       tone: s?.done ? 'done' : item.currentStageNum === stage.number ? 'current' : 'future'
@@ -718,7 +723,9 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
       tatRecord = tatByContainer.byContainerSingle.get(container);
     }
     const status = statusOf(it, refundEntry);
-    return { it, chips: buildChips(it, refundEntry, tatRecord), status, currentTat: currentTatStage(tatRecord, status.tatKey) };
+    const stage1 = it.stages?.find((s) => s.stage === 1);
+    const sentBackNote = !stage1?.done && stage1?.remark ? stage1.remark : '';
+    return { it, chips: buildChips(it, refundEntry, tatRecord), status, currentTat: currentTatStage(tatRecord, status.tatKey), sentBackNote };
   }), [items, refundByContainer, itemsByContainerCount, tatByContainer]);
 
   if (loading) return <SkeletonCards count={6} />;
@@ -730,7 +737,7 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
   return (
     <>
       <div className={styles.book}>
-      {rows.map(({ it, chips, status, currentTat }) => (
+      {rows.map(({ it, chips, status, currentTat, sentBackNote }) => (
         <div
           className={styles.row}
           key={`${it.leaseId || ''}-${it.container}`}
@@ -782,6 +789,19 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
                 <span className={styles.currentTat}>
                   {it.transportFms.doNumber && <>DO {it.transportFms.doNumber} · </>}
                   <span className={it.transportFms.status === 'Delivered' ? styles.currentTatOk : styles.currentTat}>{it.transportFms.status}</span>
+                </span>
+              )}
+              {/* Explicit request 2026-11-14 ("send back data show for this
+                  stge 5"): when a record was sent back to Stage 1 from Final
+                  Billing (saveOffLeaseSendBackFromBilling writes its note to
+                  Stage 1's own Remark column, col_14), show that note right
+                  on the card — not just inside the chip's hover title or the
+                  Stage 1 form once reopened. Only ever true while Stage 1 is
+                  genuinely still pending (same col_14 invariant the Stage 5
+                  queue-gating fix relies on). */}
+              {sentBackNote && (
+                <span className={styles.currentTatLate}>
+                  ⚠ Sent Back: <Highlight text={sentBackNote} query={highlight} />
                 </span>
               )}
             </div>

@@ -2,9 +2,11 @@ import { env } from './config/env.js';
 import { createApp } from './app.js';
 import { registerCronJobs, registerSheetsSync, registerWhatsappReportScheduler } from './jobs/index.js';
 import { startOutboxWorker } from './jobs/outboxWorker.js';
+import { startSheetsWriteBehind } from './jobs/sheetsWriteBehind.job.js';
 import { warmFmsCache } from './services/stage8.service.js';
 import { connectMongo } from './config/db.js';
 import { loadRuntimeSecretsFromMongo } from './config/runtimeSecrets.js';
+import { isCentral, initCentral } from './services/centralSheets.service.js';
 import { logger } from './utils/logger.js';
 
 logger.info('[SERVER] Starting Lease Management backend...');
@@ -43,6 +45,8 @@ await connectMongo();
 // REFUND_REVIEW_SECRET) from Mongo when the server's own .env doesn't have
 // them, so a feature doesn't stay disabled purely for lack of server access.
 await loadRuntimeSecretsFromMongo();
+// DATA_SOURCE=central: sheet data comes from the central PostgreSQL `lease` schema (fails fast if unreachable).
+await initCentral();
 
 const app = createApp();
 
@@ -86,5 +90,10 @@ app.listen(env.port, env.host, () => {
   // fast-path write against the real Google Sheet in the background. Runs
   // independent of ENABLE_CRON/ENABLE_SHEETS_SYNC — this is the write half
   // of the app's own data path, not a periodic housekeeping job.
-  startOutboxWorker();
+  if (isCentral()) {
+    logger.info('[CENTRAL] outbox worker NOT started — central mode writes directly to the central tables; Google Sheets are only written by the write-behind mirror when CENTRAL_SHEETS_MIRROR=on');
+    startSheetsWriteBehind();
+  } else {
+    startOutboxWorker();
+  }
 });
