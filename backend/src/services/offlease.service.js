@@ -2335,6 +2335,25 @@ export async function getOffLeaseData(stage, opts = {}, user) {
     const jumpTarget = _jumpTargetInternal(row);
 
     const statusVal = row[info.statusCol];
+    /* BUG FOUND AND FIXED 2026-11-14 ("send back hua hai tho stage 1 mai hi
+       dikhe na stage 5 mai kyu dikh raha hai"): saveOffLeaseSendBackFromBilling
+       resets BOTH Stage 1's own status AND Stage 5's own status back to
+       blank, so a blank Stage 5 status column alone looks identical to
+       "never yet submitted" — this row walked right back into Stage 5's own
+       pending queue (and every other later stage's) via the ordinary
+       statusVal-blank check just below, exactly as if it were a brand new
+       container, even though it genuinely belongs back at Stage 1 only. The
+       one safe signal that this is a send-back rather than a fresh row:
+       Stage 1's own Remark (col_14) is non-empty while Stage 1's own status
+       is still blank — that combination is only ever written by a send-back
+       (saveOffLeaseSendBackFromApproval/saveOffLeaseSendBackFromBilling),
+       never by a container that simply hasn't reached Stage 1 yet. Excluded
+       from every stage's queue EXCEPT Stage 1 itself, where it must keep
+       showing as pending. */
+    const sentBackToStage1 = Number(stage) !== 1
+      && safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() === ''
+      && safeStr(row[14]).trim() !== '';
+    if (sentBackToStage1) continue;
     /* A rejected row's OWN Stage 1 Status stays 'Completed' forever — that
        is a prerequisite for ever having reached Stage 1A/Approval in the
        first place (see getOffLeaseApprovalData's queue-membership check) —
