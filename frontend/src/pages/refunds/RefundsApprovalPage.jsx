@@ -178,6 +178,7 @@ export function RefundsApprovalPage() {
                       <div className={styles.field}><span className={styles.label}>Client Ledger</span><Link url={reviewRow.clientLedgerUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>SD Amounts to be Refunded</span><Link url={reviewRow.attachmentsUrl} /></div>
                       <div className={styles.field}><span className={styles.label}>Submitted By</span><span>{reviewRow.userEmail}</span></div>
+                      <div className={styles.field}><span className={styles.label}>Submitted On</span><span>{reviewRow.timestamp || '—'}</span></div>
                     </div>
 
                     {/* Every PRIOR stage's own decision — shown so whoever is

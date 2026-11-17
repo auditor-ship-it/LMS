@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Modal, Button } from '../../components/ui/index.js';
+import { Modal, Button, FileUpload } from '../../components/ui/index.js';
 import styles from './OffLeaseModal.module.css';
+
+const ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.eml,.msg';
 
 /**
  * Lease Expiry's "Off-Lease" confirmation — captures who requested/handled
@@ -14,23 +16,56 @@ import styles from './OffLeaseModal.module.css';
  * Doubles as the BULK version: pass `items` (array) instead of `item` and
  * the same Person Name/Remarks applies to every selected container — same
  * convention as RenewModal.jsx/RejectModal.jsx.
+ *
+ * Email Confirmation (required) — explicit request 2026-11-16 ("add the
+ * one emails confirmation upload"): the client's own email confirming this
+ * off-lease, uploaded here alongside Person Name/Remarks and written to
+ * the SAME new tracking row (OL_EMAIL_CONFIRMATION_COL in
+ * offlease.service.js). `onSubmit` receives the already-uploaded file's
+ * URL as `emailConfirmationUrl` — uploading is this modal's own job so the
+ * caller (LeaseExpiryPage.jsx) doesn't need its own upload step.
+ *
+ * "Location Change" checkbox — explicit follow-up 2026-11-16 ("location
+ * change click check box agar yah click karuga tabhi new lease navigatio
+ * add karo"): unchecked by default, a plain Off-Lease exactly as before.
+ * Checked, this container ALSO gets queued into the new "New Lease"
+ * sidebar page (pending redeployment at a new location) — see
+ * newLeaseQueue.service.js on the backend. Bulk mode has no checkbox of
+ * its own; it's single-container-only, same reasoning the Email
+ * Confirmation upload already applies per-container in bulk (one shared
+ * file for every selected container), kept simple since a location change
+ * is inherently a one-container-at-a-time decision.
  */
-export function OffLeaseModal({ open, item, items, submitting, error, onClose, onSubmit }) {
+export function OffLeaseModal({ open, item, items, submitting, error, onClose, onSubmit, onUploadFile }) {
   const [personName, setPersonName] = useState('');
   const [remarks, setRemarks] = useState('');
+  const [emailConfirmationFile, setEmailConfirmationFile] = useState(null);
+  const [locationChange, setLocationChange] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const bulk = Array.isArray(items);
 
   useEffect(() => {
-    if (open) { setPersonName(''); setRemarks(''); }
+    if (open) { setPersonName(''); setRemarks(''); setEmailConfirmationFile(null); setLocationChange(false); setUploadError(''); }
   }, [open, item, items]);
 
   if (!bulk && !item) return null;
   if (bulk && !items.length) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!personName.trim()) return;
-    onSubmit({ personName: personName.trim(), remarks: remarks.trim() });
+    if (!emailConfirmationFile) { setUploadError('Email confirmation is required.'); return; }
+    setUploadError('');
+    setUploading(true);
+    try {
+      const emailConfirmationUrl = await onUploadFile(emailConfirmationFile);
+      onSubmit({ personName: personName.trim(), remarks: remarks.trim(), emailConfirmationUrl, locationChange });
+    } catch (e2) {
+      setUploadError('Could not upload the email confirmation — try again.');
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -72,12 +107,26 @@ export function OffLeaseModal({ open, item, items, submitting, error, onClose, o
             placeholder="Optional"
           />
         </label>
+        <div className={styles.field}>
+          <span className={styles.label}>Email Confirmation *</span>
+          <FileUpload
+            label={emailConfirmationFile ? `Selected: ${emailConfirmationFile.fileName}` : 'Upload email confirmation'}
+            accept={ACCEPT}
+            onSelected={setEmailConfirmationFile}
+          />
+        </div>
+        {!bulk && (
+          <label className={styles.checkboxField}>
+            <input type="checkbox" checked={locationChange} onChange={(e) => setLocationChange(e.target.checked)} />
+            <span>Location Change — this container will be redeployed at a new location once off-leased</span>
+          </label>
+        )}
 
-        {error && <p className={styles.error}>{error}</p>}
+        {(error || uploadError) && <p className={styles.error}>{error || uploadError}</p>}
 
         <div className={styles.footer}>
-          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button type="submit" variant="primary" loading={submitting}>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={submitting || uploading}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={submitting || uploading}>
             {bulk ? `Off-Lease ${items.length}` : 'Off-Lease'}
           </Button>
         </div>

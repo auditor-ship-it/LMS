@@ -7,6 +7,12 @@
 // Tabs in the main spreadsheet (env.googleSheetId)
 export const SHEETS = {
   NEW_LEASE: 'New Lease',
+  // Added 2026-11-16, explicit request ("ek new sheet pe jayega" — a
+  // DIFFERENT, brand-new tab for the New Lease sidebar feature's full
+  // record, distinct from the pre-existing "New Lease" tab above, which is
+  // Verify Lease's own, unrelated data source). Auto-created on first use
+  // via insertSheetIfMissing — see newLeaseQueue.service.js.
+  NEW_LEASE_REQUEST: 'New Lease Request',
   DEPLOYED: 'Deployed sheet',
   OPERATION: 'Operation sheet',
   BILLING_SALES: 'Billing Sales',

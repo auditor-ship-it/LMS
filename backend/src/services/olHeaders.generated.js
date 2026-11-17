@@ -280,4 +280,12 @@ export const OL_HEADERS = [
   "Cabin Overhead Storage Condition", "Cabin Overhead Storage Photo", "Cabin Overhead Storage Remark",
   "Cabin Chair Condition", "Cabin Chair Photo", "Cabin Chair Remark",
   "Cabin Partition Condition", "Cabin Partition Photo", "Cabin Partition Remark",
+  /* Index 398 — same deliberate, hand-added exception as the batch above:
+     added 2026-11-16 for the Lease Expiry "Off-Lease Container" modal's new
+     required Email Confirmation upload (OL_EMAIL_CONFIRMATION_COL in
+     offlease.service.js), captured at the SAME moment as Person Name/
+     Remarks (col 303/304) — the client's email confirming this off-lease.
+     Keep this entry if this file is ever regenerated from the live header
+     row. */
+  "Email Confirmation",
 ];

@@ -75,8 +75,8 @@ export const getOffLeaseContainerDetail = (containerNo, leaseId, row) => {
  *  off-leased. See _lookupDeployedForOffLease's doc comment on the backend.
  *  `remarks`/`personName` (OffLeaseModal) captured once, at creation time —
  *  personName is who requested/handled this off-lease, remarks is optional. */
-export const addToOffLeaseTracking = (containerNo, deployedRow, remarks, personName) =>
-  apiClient.post('/offlease/tracking', { containerNo, deployedRow, remarks, personName }).then((r) => r.data.message);
+export const addToOffLeaseTracking = (containerNo, deployedRow, remarks, personName, emailConfirmationUrl, locationChange) =>
+  apiClient.post('/offlease/tracking', { containerNo, deployedRow, remarks, personName, emailConfirmationUrl, locationChange }).then((r) => r.data.message);
 
 /** GET /api/offlease/stage-counts — pending count per stage, for tab badges. */
 export const getStageCounts = () => apiClient.get('/offlease/stage-counts').then((r) => r.data.counts || {});

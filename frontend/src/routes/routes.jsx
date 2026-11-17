@@ -7,6 +7,7 @@ const ApproveLeasePage = lazy(() => import('../pages/approveLease/ApproveLeasePa
 const LeaseExpiryPage = lazy(() => import('../pages/leaseExpiry/LeaseExpiryPage.jsx').then((m) => ({ default: m.LeaseExpiryPage })));
 const RenewDocumentPage = lazy(() => import('../pages/renewDocument/RenewDocumentPage.jsx').then((m) => ({ default: m.RenewDocumentPage })));
 const ApprovalPendingPage = lazy(() => import('../pages/renewDocument/ApprovalPendingPage.jsx').then((m) => ({ default: m.ApprovalPendingPage })));
+const NewLeasePage = lazy(() => import('../pages/leaseExpiry/NewLeasePage.jsx').then((m) => ({ default: m.NewLeasePage })));
 const OffLeasePage = lazy(() => import('../pages/offLease/OffLeasePage.jsx').then((m) => ({ default: m.OffLeasePage })));
 const ContainerDetailPage = lazy(() => import('../pages/offLease/ContainerDetailPage.jsx').then((m) => ({ default: m.ContainerDetailPage })));
 const OffLeaseEfficiencyPage = lazy(() => import('../pages/offLease/OffLeaseEfficiencyPage.jsx').then((m) => ({ default: m.OffLeaseEfficiencyPage })));
@@ -41,6 +42,7 @@ export const APP_ROUTES = [
   { path: ROUTES.LEASE_EXPIRY, element: LeaseExpiryPage },
   { path: ROUTES.RENEW_DOCUMENT, element: RenewDocumentPage },
   { path: ROUTES.APPROVAL_PENDING, element: ApprovalPendingPage },
+  { path: ROUTES.NEW_LEASE, element: NewLeasePage },
   { path: ROUTES.OFF_LEASE, element: OffLeasePage },
   { path: ROUTES.OFF_LEASE_RECORD, element: ContainerDetailPage },
   { path: ROUTES.OFF_LEASE_EFFICIENCY, element: OffLeaseEfficiencyPage },

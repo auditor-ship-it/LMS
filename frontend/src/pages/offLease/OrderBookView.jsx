@@ -166,6 +166,13 @@ export function buildChips(item, refundEntry, tatRecord) {
  *  refundEntry/tatRecord per item without duplicating that matching logic a
  *  third time. Returns a Map keyed by item (object identity, not container —
  *  container alone is not unique). */
+/** Same [,;\n]+ convention as backend's splitContainers (utils/normalize.js)
+ *  and PipelineDashboard.jsx's own copy — a bulk "Fill one SD Refund form for
+ *  all" submission (BulkRefundModal) writes ONE Offlease Bills row whose
+ *  Container No / Off-Lease ID cells both hold several values joined this
+ *  way, not one container per row. */
+const splitMulti = (raw) => String(raw || '').split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+
 export function matchRefundAndTat(items, refundRows, tatRecords) {
   const refundByComposite = new Map();
   /* BUG FOUND AND FIXED 2026-11-13 (live, on TRIU6617353/OF0048 — explicit
@@ -192,15 +199,27 @@ export function matchRefundAndTat(items, refundRows, tatRecords) {
   const refundsByContainer = new Map();
   const isBetterRefund = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
   for (const r of refundRows || []) {
-    const container = String(r.containerNo || '').trim().toUpperCase();
-    if (!container) continue;
-    const leaseId = String(r.offLeaseId || '').trim().toUpperCase();
-    if (leaseId) {
-      const key = `${container}|${leaseId}`;
-      if (isBetterRefund(refundByComposite.get(key))) refundByComposite.set(key, r);
-    }
-    if (!refundsByContainer.has(container)) refundsByContainer.set(container, []);
-    refundsByContainer.get(container).push(r);
+    /* BUG FOUND AND FIXED 2026-11-17 (explicit report, live on OF0020/
+     * OF0021/OF0026 — "stage 7 mai kyu dikh raha hai": a bulk-submitted
+     * refund row covering 4 containers meant NONE of this row's containers
+     * ever matched here, so refundEntry resolved to undefined for all of
+     * them — the 6A/6B/6C chips fell through to plain 'future' instead of
+     * showing Accounts Approval as current, leaving only the record's own,
+     * separate stage-progression field (already past SD Refunds) visibly
+     * highlighted. Same root cause, same fix, as PipelineDashboard.jsx's
+     * refundWaitingSets. */
+    const containers = splitMulti(r.containerNo).map((c) => c.toUpperCase());
+    if (!containers.length) continue;
+    const leaseIds = splitMulti(r.offLeaseId).map((l) => l.toUpperCase());
+    containers.forEach((container, i) => {
+      const leaseId = leaseIds[i] || '';
+      if (leaseId) {
+        const key = `${container}|${leaseId}`;
+        if (isBetterRefund(refundByComposite.get(key))) refundByComposite.set(key, r);
+      }
+      if (!refundsByContainer.has(container)) refundsByContainer.set(container, []);
+      refundsByContainer.get(container).push(r);
+    });
   }
   const refundByContainerSingle = new Map();
   for (const [container, rowsForContainer] of refundsByContainer) {
@@ -661,20 +680,40 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
      the whole fragile "how many X are there" counting problem the two
      previous attempts (item count, then refund-row count — see git history)
      both still got wrong in their own way. */
+  /* BUG FOUND AND FIXED 2026-11-17 (explicit report, live on OF0020/OF0021/
+   * OF0026/OF0038 — "stage 7 mai kyu dikh raha hai", 6A/6B/6C all showing
+   * plain grey despite HOD already Approved and Accounts genuinely pending):
+   * a bulk "Fill one SD Refund form for all" submission (BulkRefundModal)
+   * writes ONE Offlease Bills row covering SEVERAL containers — Container
+   * No / Off-Lease ID both land as one comma/newline-joined cell, same
+   * convention as every other multi-container cell in this app (backend's
+   * own splitContainers). This block compared that WHOLE joined string
+   * against one container's own plain number — never equal — so refundRows
+   * for a bulk-submitted row matched NONE of its own containers here, and
+   * every one of them fell through to a plain, unmatched "future" chip.
+   * THIS is the third independent copy of the exact matching logic this
+   * file's own exported matchRefundAndTat function has (see its own,
+   * identically-worded fix above) — this one is what View 1 (this
+   * component) actually renders from; matchRefundAndTat is used by View 2 /
+   * other presentations. Both needed the fix; a single-container row is
+   * unaffected (splitting a string with no separator returns that string). */
   const refundByContainer = useMemo(() => {
     const byComposite = new Map();
     const byContainerAll = new Map(); // container -> every refund row for it
     const isBetter = (existing) => !existing || existing.currentStage === 'done' || existing.currentStage === 'rejected';
     for (const r of refundRows || []) {
-      const container = String(r.containerNo || '').trim().toUpperCase();
-      if (!container) continue;
-      const leaseId = String(r.offLeaseId || '').trim().toUpperCase();
-      if (leaseId) {
-        const key = `${container}|${leaseId}`;
-        if (isBetter(byComposite.get(key))) byComposite.set(key, r);
-      }
-      if (!byContainerAll.has(container)) byContainerAll.set(container, []);
-      byContainerAll.get(container).push(r);
+      const containers = splitMulti(r.containerNo).map((c) => c.toUpperCase());
+      if (!containers.length) continue;
+      const leaseIds = splitMulti(r.offLeaseId).map((l) => l.toUpperCase());
+      containers.forEach((container, i) => {
+        const leaseId = leaseIds[i] || '';
+        if (leaseId) {
+          const key = `${container}|${leaseId}`;
+          if (isBetter(byComposite.get(key))) byComposite.set(key, r);
+        }
+        if (!byContainerAll.has(container)) byContainerAll.set(container, []);
+        byContainerAll.get(container).push(r);
+      });
     }
     const byContainerSingle = new Map();
     for (const [container, rowsForContainer] of byContainerAll) {
@@ -792,17 +831,18 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
                 </span>
               )}
               {/* Explicit request 2026-11-14 ("send back data show for this
-                  stge 5"): when a record was sent back to Stage 1 from Final
-                  Billing (saveOffLeaseSendBackFromBilling writes its note to
-                  Stage 1's own Remark column, col_14), show that note right
-                  on the card — not just inside the chip's hover title or the
-                  Stage 1 form once reopened. Only ever true while Stage 1 is
-                  genuinely still pending (same col_14 invariant the Stage 5
-                  queue-gating fix relies on). */}
+                  stge 5"), simplified 2026-11-16 ("only send back chip only
+                  show... remarks send back stage and emails show for
+                  inside"): the list now shows just a compact chip — the
+                  full remark text used to sit inline here and ran several
+                  lines long for a real note, breaking the card's layout.
+                  The full text is still one hover away (title), and now
+                  also shown in full inside the record page itself
+                  (ContainerDetailPage.jsx's own Sent Back panel). Only ever
+                  true while Stage 1 is genuinely still pending (same col_14
+                  invariant the Stage 5 queue-gating fix relies on). */}
               {sentBackNote && (
-                <span className={styles.currentTatLate}>
-                  ⚠ Sent Back: <Highlight text={sentBackNote} query={highlight} />
-                </span>
+                <span className={`${styles.sentBackChip} ${styles.danger}`} title={sentBackNote}>⚠ Sent Back</span>
               )}
             </div>
             {/* Spec, code and location on one line — three short values on

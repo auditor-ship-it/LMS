@@ -203,6 +203,13 @@ export function ContainerDetailPage({ isActive }) {
   const filledStages = stages.filter((s) => s.done);
   const estimateTotals = buildEstimateTotals(data);
   const history = buildHistoryRows(data);
+  /* Explicit request 2026-11-16 ("remaks send back stage and emails show
+     for inside"): the Dashboard list shows a compact "Sent Back" chip only
+     (see OrderBookView.jsx) — the full remark belongs here, inside the
+     record, same col_14 invariant (Stage 1 undone + its own Remark
+     non-empty = a send-back note, not a never-yet-submitted blank). */
+  const stage1 = stages.find((s) => s.stage === 1);
+  const sentBackNote = stage1 && !stage1.done && stage1.remark ? stage1.remark : '';
   const invoices = buildInvoices(data);
   const movements = buildMovements(data);
   /* Every off-lease stage field that is itself a file/link (Email
@@ -730,6 +737,13 @@ export function ContainerDetailPage({ isActive }) {
         </nav>
 
         <aside className={styles.rail}>
+          {sentBackNote && (
+            <section className={`${styles.panel} ${styles.sentBackPanel}`}>
+              <h3 className={styles.panelTitle}>Sent Back to Stage 1</h3>
+              <p className={styles.sentBackText}>{sentBackNote}</p>
+            </section>
+          )}
+
           <section className={styles.panel}>
             <h3 className={styles.panelTitle}>Remarks · {remarks?.length ?? 0}</h3>
             {(remarks || []).slice(0, 5).map((r) => (

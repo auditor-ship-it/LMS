@@ -53,8 +53,12 @@ function overdueMagnitudeBucket(item) {
   return 'over60';
 }
 
-// Kept out of the compact table view and shown only in the row detail panel.
-const DETAIL_ONLY_HEADERS = /^(location|size|type|city|billing cycle|po)$/i;
+/* Kept out of the compact table view and shown only in the row detail panel.
+   Location is deliberately NOT in this list (explicit request 2026-11-17,
+   "add location table") — it's needed at a glance in the table itself, not
+   just on the detail panel. It still shows in the detail panel too, which
+   renders every visible column, not just the table's own subset. */
+const DETAIL_ONLY_HEADERS = /^(size|type|city|billing cycle|po)$/i;
 
 /* The detail panel's fields, grouped by what they're about rather than shown
    as one flat grid — explicit request 2026-10-08. Matched by header text
@@ -223,7 +227,7 @@ export function LeaseExpiryPage() {
     () => headers.map((_, i) => i).filter((i) => !isRateOrAmountHeader(headers[i])),
     [headers]
   );
-  // The compact table view drops Location/Size/Type/City — those only show in the detail panel.
+  // The compact table view drops Size/Type/City — those only show in the detail panel.
   const tableColIdx = useMemo(
     () => visibleColIdx.filter((i) => !DETAIL_ONLY_HEADERS.test(String(headers[i] || '').trim())),
     [visibleColIdx, headers]
@@ -240,6 +244,9 @@ export function LeaseExpiryPage() {
       const h = String(headers[ci] || '').trim().toLowerCase();
       if (h === 'container no') return '170px';
       if (h === 'customer name') return '200px';
+      // Location holds real place names ("Pune - Chakan", "Navi Mumbai"),
+      // so it needs more than the generic share or it ellipsis-truncates.
+      if (h === 'location') return '150px';
       return '110px';
     }),
     '90px', // Ageing
@@ -629,14 +636,14 @@ export function LeaseExpiryPage() {
   // first" shape as Stage 1's Hold and Stage 1A's Reject, both built this
   // session. handleOffLeaseSubmit below does the actual write, for both the
   // single-row (offLeaseItem) and bulk (offLeaseItems) case.
-  const handleOffLeaseSubmit = async ({ personName, remarks }) => {
+  const handleOffLeaseSubmit = async ({ personName, remarks, emailConfirmationUrl, locationChange }) => {
     setOffLeaseBusy(true);
     setOffLeaseError('');
     try {
       if (offLeaseItems) {
         const containers = offLeaseItems.map((it) => it.row?.[0]);
         const results = await Promise.allSettled(
-          offLeaseItems.map((it) => trackContainer(it.row?.[0], it._rowNum, remarks, personName))
+          offLeaseItems.map((it) => trackContainer(it.row?.[0], it._rowNum, remarks, personName, emailConfirmationUrl))
         );
         const alreadyExists = results
           .map((r, i) => (r.status === 'fulfilled' && r.value === 'ALREADY_EXISTS' ? containers[i] : null))
@@ -653,7 +660,7 @@ export function LeaseExpiryPage() {
         // offLeaseItem._rowNum: this exact Deployed row, not just the
         // container number — see trackContainer's doc comment for why that
         // distinction matters.
-        const result = await trackContainer(containerNo, offLeaseItem._rowNum, remarks, personName);
+        const result = await trackContainer(containerNo, offLeaseItem._rowNum, remarks, personName, emailConfirmationUrl, locationChange);
         if (result === 'ALREADY_EXISTS') setActionError(`${containerNo} is already in Off-Lease tracking.`);
         setSelectedIdx(null);
       }
@@ -856,6 +863,7 @@ export function LeaseExpiryPage() {
         error={offLeaseError}
         onClose={closeOffLease}
         onSubmit={handleOffLeaseSubmit}
+        onUploadFile={uploadStageFile}
       />
 
       <RenewalHandoffModal

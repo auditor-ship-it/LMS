@@ -22,6 +22,7 @@ import { appendRow, insertSheetIfMissing, batchUpdateValues, getSheetData, updat
 import { getSheetDataFromMongo, appendMongoMirrorRow, patchMongoMirrorRow, getMongoRowsWithKeys } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
+import { splitContainers } from '../utils/normalize.js';
 import { AppError, notFound, accessDenied } from '../utils/AppError.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { checkActionPermission } from './permissions.service.js';
@@ -315,14 +316,45 @@ export async function getRefundStageCounts() {
  *  _assertCanViewRefunds gate here on purpose — the caller is already behind
  *  Off-Lease's own stage access control (a separate permission boundary from
  *  the standalone SD Refunds page). */
+/**
+ * BUG FOUND AND FIXED 2026-11-17 (explicit report, live on OF0020/OF0021/
+ * OF0026/OF0038 — Container No and Off-Lease ID both empty/missing at Stage
+ * 6A/6B/6C for a container that genuinely has a pending refund). A bulk
+ * "Fill one SD Refund form for all" submission (BulkRefundModal) writes ONE
+ * Offlease Bills row covering SEVERAL containers — Container No and
+ * Off-Lease ID both land as one comma/newline-joined cell (same convention
+ * as every other multi-container cell in this app — see splitContainers),
+ * not one container per row. The exact-string match below used to compare
+ * that WHOLE joined cell against one container's own plain number — never
+ * equal — so this function returned NOTHING for any container that was part
+ * of a bulk submission, no matter how real and pending its own refund was.
+ *
+ * Fixed by exploding a matching row into a PER-CONTAINER view: `containerNo`
+ * narrowed to the exact container asked for, `offLeaseId` narrowed to that
+ * same container's own paired lease ID (position-matched — the two cells
+ * are written from the same ordered list at submit time) rather than the
+ * whole joined string. Every caller of this function (ContainerDetailPage's
+ * `refund`, StageDetailModal's `scopedSdRefunds`, OrderBookView's chips)
+ * already assumes containerNo/offLeaseId are single values and does its own
+ * exact-equality lease-scoping on them — fixing the shape HERE means none of
+ * those callers need to change. A single-container row is unaffected
+ * (splitting a string with no separator returns that same string, at index
+ * 0, same offLeaseId as before).
+ */
 export async function getRefundEntriesForContainer(containerNo) {
   const want = safeStr(containerNo).trim().toUpperCase();
   if (!want) return [];
   const { rows } = await getSheetDataFromMongo(REFUNDS_SHEET);
-  return rows
-    .map((r, i) => _mapRow(r, i + 2))
-    .filter((r) => safeStr(r.containerNo).trim().toUpperCase() === want)
-    .reverse();
+  const out = [];
+  rows.forEach((r, i) => {
+    const mapped = _mapRow(r, i + 2);
+    const containers = splitContainers(mapped.containerNo).map((c) => c.trim());
+    const idx = containers.findIndex((c) => c.toUpperCase() === want);
+    if (idx === -1) return;
+    const leaseIds = splitContainers(mapped.offLeaseId).map((l) => l.trim());
+    out.push({ ...mapped, containerNo: containers[idx], offLeaseId: leaseIds[idx] || mapped.offLeaseId });
+  });
+  return out.reverse();
 }
 
 export async function addRefundEntry(payload, userEmail) {

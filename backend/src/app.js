@@ -12,6 +12,7 @@ import verifyRoutes from './routes/verify.routes.js';
 import approveRoutes from './routes/approve.routes.js';
 import expiryRoutes from './routes/expiry.routes.js';
 import offLeaseRoutes from './routes/offlease.routes.js';
+import newLeaseRoutes from './routes/newLease.routes.js';
 import tasksRoutes from './routes/tasks.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import apiKeysRoutes from './routes/apiKeys.routes.js';
@@ -93,6 +94,7 @@ export function createApp() {
   app.use('/api/approve', approveRoutes);
   app.use('/api/expiry', expiryRoutes);
   app.use('/api/offlease', offLeaseRoutes);
+  app.use('/api/new-lease', newLeaseRoutes);
   app.use('/api/tasks', tasksRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/api-keys', apiKeysRoutes);

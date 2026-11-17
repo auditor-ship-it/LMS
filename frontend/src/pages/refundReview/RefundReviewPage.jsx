@@ -157,6 +157,7 @@ export function RefundReviewPage() {
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Ledger Head</span><span>{entry.ledgerHead || '—'}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Department</span><span>{entry.department}</span></div>
                 <div className={refundsStyles.field}><span className={refundsStyles.label}>Submitted By</span><span>{entry.userEmail}</span></div>
+                <div className={refundsStyles.field}><span className={refundsStyles.label}>Submitted On</span><span>{entry.timestamp || '—'}</span></div>
               </div>
 
               {/* DOCUMENTS — one row of chips, blank ones simply absent. */}

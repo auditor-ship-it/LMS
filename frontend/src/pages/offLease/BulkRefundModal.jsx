@@ -1,10 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Modal } from '../../components/ui/Modal.jsx';
 import { Button, FileUpload } from '../../components/ui/index.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { submitRefund } from '../../services/refunds.service.js';
+import { fetchStageDetail } from '../../services/stage.service.js';
 import { FIXED_LEDGER_HEAD, FIXED_DEPARTMENT } from '../refunds/RefundSubmitForm.jsx';
+
+/** Same stage number PipelineDashboard.jsx's own SD_REFUNDS_STAGE_KEY /
+ *  StageDetailModal.jsx's own SD_REFUNDS_STAGE use — the single-container
+ *  RefundSubmitForm fetches this stage's detail for its own `defaultSdAmount`
+ *  prop (`data?._stage5Data?.securityDepositAmount`, set back at Stage 5 /
+ *  Billing Reconciliation — see offlease.service.js's own field). */
+const SD_REFUNDS_STAGE = 11;
 import formStyles from '../refunds/RefundsPage.module.css';
 import styles from './PipelineDashboard.module.css';
 
@@ -46,6 +54,45 @@ export function BulkRefundModal({ entries, onClose, onSubmitted }) {
   const [piFile, setPiFile] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [sdAmountAutoFilled, setSdAmountAutoFilled] = useState(false);
+
+  /* Explicit report 2026-11-17 ("yah sd amount yah sab fetch kyu nahi ho
+   * raha hai" — screenshotted on a 2-container bulk refund, Vendor Name
+   * pre-filled but SD Amount blank, cursor sitting in it): the
+   * single-container RefundSubmitForm auto-fills SD Amount from that one
+   * container's own Security Deposit Amount (Stage 5/Billing Reconciliation
+   * — see this file's SD_REFUNDS_STAGE comment); this bulk form never
+   * fetched anything for ANY of its containers, leaving it blank no matter
+   * how many were selected. Fixed the same way BulkStage5Modal already
+   * fetches per-container reference data: each entry's own Stage 5 detail,
+   * in parallel, then SUMMED into one combined default — this form writes
+   * the SAME invoiceAmount to every selected container's own refund row (see
+   * handleSubmit below), so "SD Amount" here means the combined bill total,
+   * not any one container's own deposit. Only fills invoiceAmount if it is
+   * still blank once the fetch resolves — never clobbers something the user
+   * already started typing while this was loading. */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const amounts = await Promise.all(entries.map(async (en) => {
+        try {
+          const detail = await fetchStageDetail(en.container, SD_REFUNDS_STAGE, en.rowNum);
+          const n = Number(String(detail?._stage5Data?.securityDepositAmount ?? '').trim());
+          return Number.isFinite(n) ? n : 0;
+        } catch (e) {
+          return 0; // One container's lookup failing must not block the rest.
+        }
+      }));
+      if (cancelled) return;
+      const total = amounts.reduce((s, n) => s + n, 0);
+      if (total > 0) {
+        setInvoiceAmount((cur) => (cur.trim() === '' ? String(total) : cur));
+        setSdAmountAutoFilled(true);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -115,7 +162,10 @@ export function BulkRefundModal({ entries, onClose, onSubmitted }) {
           </label>
           <label className={formStyles.field}>
             <span className={formStyles.label}>SD Amount *</span>
-            <input type="number" step="0.01" value={invoiceAmount} onChange={(e) => setInvoiceAmount(e.target.value)} onWheel={(e) => e.target.blur()} required />
+            <input type="number" step="0.01" value={invoiceAmount} onChange={(e) => { setInvoiceAmount(e.target.value); setSdAmountAutoFilled(false); }} onWheel={(e) => e.target.blur()} required />
+            {sdAmountAutoFilled && (
+              <span className={formStyles.hint}>Auto-filled: sum of each container&apos;s own Security Deposit Amount (Stage 5) — adjust if needed.</span>
+            )}
           </label>
           <label className={formStyles.field}>
             <span className={formStyles.label}>SD Amount to be Refunded *</span>
