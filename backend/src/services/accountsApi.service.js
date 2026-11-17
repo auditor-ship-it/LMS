@@ -1,32 +1,52 @@
 /**
- * Client for the Accounts & Collection app (accounts-collection.vercel.app),
+ * Client for the Accounts & Collection app (collections.crystalgrp.xyz),
  * used to show Tally outstanding on Off-Lease Stage 1.
  *
- * AUTH: that service authenticates by Employee ID + password and returns a
- * bearer token; the `cak_` API key it also issues is not accepted on data
- * routes (verified — a deliberately bogus key gets the identical 401). So we
- * log in once with a service account and cache the token.
+ * REWRITTEN 2026-11-17. Two things changed at once:
  *
- * Credentials live in backend/.env and never reach the browser — the frontend
+ *  1. The old host, accounts-collection.vercel.app, is a DISABLED Vercel
+ *     deployment — every route, /api/auth/login included, answers 402
+ *     DEPLOYMENT_DISABLED. That was the user-visible "Accounts API login
+ *     failed (402): no token" on Off-Lease Stage 1.
+ *  2. On the new host the Employee-ID + password service account this file
+ *     used to log in with is rejected ("Invalid Employee ID or password"),
+ *     and no valid one exists for us. But that app now publishes a proper
+ *     read API at /api/v1 authenticated by the `cak_` API key — the same
+ *     key family the old header comment dismissed as "not accepted on data
+ *     routes". That WAS true of the old session-only routes (/api/search,
+ *     /api/tally/outstanding, /api/payment-advice/*, all still 401 to a
+ *     key); it is not true of /api/v1/*, which is key-only and is the
+ *     supported integration surface. Our key is named "lms", scopes ["*"],
+ *     clientAccess "all", 120 req/min.
+ *
+ * So: no login, no token cache, no credentials — one header, X-API-Key.
+ * The key lives in backend/.env and never reaches the browser; the frontend
  * calls our own /api/offlease/:containerNo/outstanding, which proxies here.
+ *
+ * getOutstandingForContainer's RETURN SHAPE IS UNCHANGED, deliberately —
+ * StageDetailModal.jsx and lookupModel.js read these exact fields and were
+ * not touched.
+ *
+ * ONE CAPABILITY IS GONE: per-invoice document links. The old
+ * /api/payment-advice/party-ledger carried `invoiceCopyUrl` per bill; /api/v1
+ * exposes only a `hasInvoiceCopy` boolean and no URL (and it is false on
+ * every invoice sampled). `invoiceUrl` is therefore always '' now. That
+ * degrades rather than breaks: both consumers already fall back to the LMS's
+ * own Billing Sales file map — see StageDetailModal's `fileFor`.
  */
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
-const BASE = (env.accountsApiUrl || 'https://accounts-collection.vercel.app').replace(/\/+$/, '');
-const TOKEN_TTL_MS = 20 * 60 * 1000; // re-login well inside any server-side expiry
-/** /api/search returns only 6 rows unless `limit` is passed — high enough that
- *  no invoice's container list is ever cut short. */
-const SEARCH_LIMIT = 500;
-// BUG FOUND AND FIXED 2026-10-19 (Off-Lease Record page stuck on "Loading
-// stage data..."): neither fetch() call below had a timeout — a slow or
-// unresponsive Accounts API (already seen failing with "Too many attempts"
-// this same week) could hang the ENTIRE container-detail request
-// indefinitely, since getOutstandingForContainer is awaited directly in that
-// chain with nothing else to time it out. 8s matches this file's own
-// existing "this is a nice-to-have enrichment, not core data" posture (every
-// call site already wraps this in try/catch and treats failure as
-// out.error, never blocking the rest of the page).
+const BASE = (env.accountsApiUrl || 'https://collections.crystalgrp.xyz').replace(/\/+$/, '');
+const V1 = `${BASE}/api/v1`;
+/** The API caps `limit` at 1000 per page; nothing we query here (one
+ *  container's months, or one client's) comes anywhere near that. */
+const PAGE_LIMIT = 1000;
+
+/* Unchanged from the previous implementation, and for the same reason
+   (Off-Lease Record page once hung on "Loading stage data..." because a slow
+   Accounts API had nothing to time it out): this is nice-to-have enrichment,
+   never core data, and every call site treats failure as out.error. */
 const FETCH_TIMEOUT_MS = 8000;
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();
@@ -41,38 +61,26 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-let cached = { token: '', at: 0 };
-
-async function getToken(force = false) {
-  if (!force && cached.token && Date.now() - cached.at < TOKEN_TTL_MS) return cached.token;
-  if (!env.accountsApiEmpId || !env.accountsApiPassword) {
-    throw new Error('ACCOUNTS_API_EMP_ID / ACCOUNTS_API_PASSWORD are not set in backend/.env');
+/** GET a /api/v1 path and return its `data` payload (the envelope is
+ *  always { data, pagination?, meta }). */
+async function apiGet(path) {
+  if (!env.accountsApiKey) {
+    throw new Error('ACCOUNTS_API_KEY is not set in backend/.env');
   }
-  const res = await fetchWithTimeout(`${BASE}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ empId: env.accountsApiEmpId, password: env.accountsApiPassword })
+  const res = await fetchWithTimeout(`${V1}${path}`, {
+    headers: { 'X-API-Key': env.accountsApiKey, Accept: 'application/json' }
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body?.token) throw new Error(`Accounts API login failed (${res.status}): ${body?.error || 'no token'}`);
-  cached = { token: body.token, at: Date.now() };
-  logger.info(`[ACCOUNTS-API] logged in as ${body.name || env.accountsApiEmpId}`);
-  return cached.token;
-}
-
-/** GET with the cached token; one silent retry after a fresh login on 401. */
-async function apiGet(path, retry = true) {
-  const token = await getToken();
-  const res = await fetchWithTimeout(`${BASE}${path}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
-  });
-  if (res.status === 401 && retry) { cached = { token: '', at: 0 }; return apiGet(path, false); }
-  if (!res.ok) throw new Error(`Accounts API ${path} -> ${res.status}`);
-  return res.json();
+  if (!res.ok) {
+    throw new Error(`Accounts API ${path} -> ${res.status}${body?.error ? `: ${body.error}` : ''}`);
+  }
+  return body?.data;
 }
 
 /** Party names differ in punctuation/suffix between systems, e.g.
- *  "63Ideas Infolabs Pvt Ltd" vs "63Ideas Infolabs Private Limited". */
+ *  "63Ideas Infolabs Pvt Ltd" vs "63Ideas Infolabs Private Limited".
+ *  /api/v1/clients/:client resolves known aliases on its own, so this is
+ *  only needed to pick between candidates from a ?q= search. */
 function normName(s) {
   return String(s || '')
     .toLowerCase()
@@ -82,23 +90,62 @@ function normName(s) {
 
 const num = (v) => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; };
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** The API returns period as either "Apr 2026" or "4 2026" — normalise the
- *  numeric form so the column reads consistently. */
-function fmtPeriod(v) {
-  const s = String(v ?? '').trim();
-  const m = s.match(/^(\d{1,2})\s+(\d{4})$/);
-  return m && MONTHS[Number(m[1]) - 1] ? `${MONTHS[Number(m[1]) - 1]} ${m[2]}` : s;
+/** "Dec" + "2025" -> "Dec 2025"; either half may be missing. */
+function fmtPeriod(month, year) {
+  return [String(month ?? '').trim(), String(year ?? '').trim()].filter(Boolean).join(' ');
+}
+
+/**
+ * Resolve the Accounts-side client for a container.
+ *
+ * The lease schedule is the precise signal — it is per container, and names
+ * the client that container is actually billed to. The Off-Lease record's own
+ * client field is only the fallback, for a container the schedule does not
+ * carry (it covers the receivables sheet, ~350 containers, not every one).
+ * Same precedence the previous implementation used, for the same reason: one
+ * legal entity can appear as several Tally parties, and the container's own
+ * billing says which.
+ */
+async function resolveClientKey(schedRows, clientName) {
+  const fromSchedule = schedRows.find((r) => r.clientKey || r.clientName);
+  if (fromSchedule) return fromSchedule.clientKey || fromSchedule.clientName;
+  if (!clientName) return '';
+
+  /* Try the record's name directly first: /clients/:client matches on the
+     client's `aliases` too, so "Takshavi Private Limited" finds "Takshavi"
+     without any fuzzy matching on our side. */
+  try {
+    const direct = await apiGet(`/clients/${encodeURIComponent(clientName)}`);
+    if (direct?.clientKey) return direct.clientKey;
+  } catch (e) {
+    // 404 for an unknown name is expected — fall through to the search.
+  }
+
+  const want = normName(clientName);
+  const list = await apiGet(`/clients?q=${encodeURIComponent(clientName)}&limit=50`).catch(() => []);
+  const candidates = Array.isArray(list) ? list : [];
+  /* Exact before fuzzy, so a suffixed party ("... - Odisha") can never
+     shadow the exact one. */
+  const exact = candidates.find((c) => normName(c.client) === want
+    || (c.aliases || []).some((a) => normName(a) === want));
+  const fuzzy = candidates.find((c) => {
+    const n = normName(c.client);
+    return n && (n.includes(want) || want.includes(n));
+  });
+  return (exact || fuzzy)?.clientKey || '';
 }
 
 /**
  * Outstanding for one container, keyed on container number AND client name.
  *
- *  - /api/search?q=<container> gives the container's own invoices
- *  - /api/tally/outstanding gives party-level Tally outstanding and bills
+ *  - /api/v1/lease-schedule?container=  the container's own billed months
+ *  - /api/v1/clients/:client            party-level Tally outstanding + every invoice
+ *  - /api/v1/lease-schedule?client=     which containers each invoice covers
  *
- * Both are used: the container view is precise, the party view carries the
- * Tally figure the user wants shown.
+ * All three are used: the schedule is precise per container, the client
+ * record carries the Tally figure the user wants shown, and the client-wide
+ * schedule is what lets an invoice list the containers it bills for (153 of
+ * them cover more than one).
  */
 export async function getOutstandingForContainer(containerNo, clientName) {
   const out = {
@@ -111,225 +158,222 @@ export async function getOutstandingForContainer(containerNo, clientName) {
     error: ''
   };
 
+  /* This container's own billed months. */
+  let schedRows = [];
   try {
-    /* &limit is REQUIRED: /api/search caps at 6 rows by default, which silently
-       dropped containers from multi-container invoices — QUA/APR137/26-27 has 7
-       but returned 5, omitting TRLU8190780 itself. Only `limit` works;
-       pageSize/size/max/all are ignored. */
-    const search = await apiGet(`/api/search?q=${encodeURIComponent(containerNo)}&limit=${SEARCH_LIMIT}`);
-    out.invoices = (search?.invoices || []).map((i) => ({
-      invoiceNo: i.invoiceNo || '',
-      containerNo: i.containerNo || '',
-      clientName: i.clientName || '',
-      amount: num(i.amount),
-      outstanding: num(i.outstanding),
-      overdueDays: num(i.overdueDays),
-      band: i.band || '',
-      period: i.period || ''
-    }));
+    const rows = await apiGet(`/lease-schedule?container=${encodeURIComponent(containerNo)}&limit=${PAGE_LIMIT}`);
+    schedRows = Array.isArray(rows) ? rows : [];
   } catch (e) {
     out.error = e.message;
-    logger.error('[ACCOUNTS-API] search failed:', e.message);
+    logger.error('[ACCOUNTS-API] lease-schedule (container) failed:', e.message);
   }
 
+  let client = null;
   try {
-    const tally = await apiGet('/api/tally/outstanding');
-    const parties = tally?.parties || [];
-
-    /* Party selection, most reliable signal first.
-     *
-     * The container's OWN invoices name their client, so that beats the
-     * Off-Lease client field: one legal entity can appear as several Tally
-     * parties ("Hatsun Agro Product Limited" and "... - Odisha"), and a loose
-     * name match picked whichever came first — which was the wrong one, with
-     * the wrong invoices and total.
-     *
-     * Falling back to the record's client only when the container's invoices
-     * name nobody. Exact match is tried before any fuzzy containment so a
-     * suffixed party can never shadow the exact one. */
-    const fromInvoices = normName(out.invoices.find((i) => i.clientName)?.clientName);
-    const fromRecord = normName(clientName);
-
-    const exact = (want) => want && parties.find((p) => normName(p.name) === want);
-    const fuzzy = (want) => want && parties.find((p) => {
-      const n = normName(p.name);
-      return n.includes(want) || want.includes(n);
-    });
-
-    /* The container's invoice refs are the decisive tiebreak: the right party
-     * is the one whose bills actually contain them. */
-    const refs = new Set(out.invoices.map((i) => String(i.invoiceNo).trim()).filter(Boolean));
-    const byRefs = refs.size
-      ? parties.find((p) => (p.bills || []).some((b) => refs.has(String(b.ref).trim())))
-      : null;
-
-    const party = byRefs
-      || exact(fromInvoices) || exact(fromRecord)
-      || fuzzy(fromInvoices) || fuzzy(fromRecord);
-    if (party) {
-      out.matchedParty = party.name;
-      out.tallyOutstanding = num(party.outstanding);
-      out.bills = (party.bills || []).map((b) => ({
-        ref: b.ref || '',
-        pending: num(b.pending),
-        overdueDays: num(b.overdueDays),
-        isReceipt: !!b.isReceipt
-      }));
-    }
+    const clientKey = await resolveClientKey(schedRows, clientName);
+    if (clientKey) client = await apiGet(`/clients/${encodeURIComponent(clientKey)}`);
   } catch (e) {
     if (!out.error) out.error = e.message;
-    logger.error('[ACCOUNTS-API] tally failed:', e.message);
+    logger.error('[ACCOUNTS-API] client lookup failed:', e.message);
+  }
+
+  const clientInvoices = Array.isArray(client?.invoices) ? client.invoices : [];
+  /* Invoice -> its ageing/overdue, so the container's own rows below can show
+     the same age the invoice table does rather than nothing. */
+  const invByNo = new Map(clientInvoices.map((i) => [String(i.invoiceNo).trim(), i]));
+
+  out.invoices = schedRows.map((r) => {
+    const inv = invByNo.get(String(r.invoiceNo).trim());
+    return {
+      invoiceNo: r.invoiceNo || '',
+      containerNo: r.containerNo || '',
+      clientName: r.clientName || '',
+      amount: num(r.due),
+      outstanding: num(r.open),
+      overdueDays: num(inv?.overdueDays),
+      band: inv?.ageingBucket || '',
+      period: String(r.month || '')
+    };
+  });
+
+  if (client) {
+    /* The Tally party name, not our client label — that is what the panel
+       prints as "Tally party:", and what the figure below is measured on. */
+    out.matchedParty = client.tally?.parties?.[0] || client.client || '';
+    out.tallyOutstanding = num(client.tally?.outstanding ?? client.outstanding);
+    /* `bills` kept for shape compatibility. A v1 invoice carries amount,
+       received and outstanding separately, so a credit is no longer a
+       negative "pending" the way a raw Tally bill was — a settled invoice is
+       simply one with nothing left open. */
+    out.bills = clientInvoices.map((i) => ({
+      ref: i.invoiceNo || '',
+      pending: num(i.outstanding),
+      overdueDays: num(i.overdueDays),
+      isReceipt: num(i.amount) < 0
+    }));
   }
 
   out.containerShare = out.invoices.reduce((s, i) => s + i.amount, 0);
   out.containerOutstanding = out.invoices.reduce((s, i) => s + i.outstanding, 0);
 
-  /* Per-invoice document link, containers and bill date.
+  /* Which containers each of this client's invoices bills for.
    *
-   * /api/payment-advice/party-ledger is the ONLY endpoint that carries these:
-   * it returns, per bill ref, `invoiceCopyUrl` (a distinct Drive file per
-   * invoice), `containers` (the real list, not just the searched one) and
-   * `billDate`. It is the source behind the ↗ icons in the Accounts &
-   * Collection ledger modal.
+   * BUG FOUND AND FIXED 2026-11-17 ("TCKU2842760 yah container ke bhi sath
+   * mai ho gye hai" — Luthra Projects has TWO containers, TCKU2842760 and a
+   * site-cabin lease nicknamed "Site Cabin 52", and viewing either one's
+   * Off-Lease record showed the OTHER's invoices too). Two things were
+   * wrong:
    *
-   * Not from /api/search (no URL field at all), not from our own Billing Sales
-   * sheet — that has a row for only one of Takshavi's six invoices, so five
-   * would have shown no link while the ledger has a real file for each. */
-  const ledgerByRef = new Map();
-  if (out.matchedParty) {
+   *  1. This map was built ONLY from /lease-schedule?client=, which for
+   *     Luthra has just 2 rows total (one per container, both Apr 2026-27) —
+   *     none of the 12 older FY25-26 invoices that actually carry the
+   *     outstanding. It ignored a second, more complete source: the client
+   *     invoice's OWN `containerNo` field (confirmed populated on 22 of
+   *     63Ideas Infolabs's 28 invoices, where the schedule alone covered only
+   *     19) — folded in below.
+   *  2. Below, any invoice NEITHER source named a container for got the
+   *     container currently being viewed rubber-stamped onto it
+   *     unconditionally. For a client with only one container that guess is
+   *     harmless (there is nothing else it could be) — for Luthra's two, it
+   *     meant BOTH containers' unattributed invoices got double-counted
+   *     under whichever one you happened to open. Now gated on
+   *     `client.containerCount <= 1`: the API's own count of how many
+   *     containers this client has, so the guess only ever fires when there
+   *     is no second container to confuse it with. An invoice this client
+   *     has multiple containers for, that neither source attributes, is
+   *     excluded from every container's view rather than guessed into one —
+   *     wrong-but-plausible is worse here than visibly incomplete. */
+  const containersByInvoice = new Map();
+  const addContainer = (ref, cn) => {
+    ref = String(ref || '').trim();
+    cn = String(cn || '').trim();
+    if (!ref || !cn) return;
+    if (!containersByInvoice.has(ref)) containersByInvoice.set(ref, new Set());
+    containersByInvoice.get(ref).add(cn);
+  };
+  for (const i of clientInvoices) addContainer(i.invoiceNo, i.containerNo);
+  if (client?.clientKey) {
     try {
-      const led = await apiGet(`/api/payment-advice/party-ledger?party=${encodeURIComponent(out.matchedParty)}`);
-      for (const b of [...(led?.invoices || []), ...(led?.openBills || []), ...(led?.receipts || [])]) {
-        const ref = String(b?.ref || '').trim();
-        if (!ref || ledgerByRef.has(ref)) continue;
-        ledgerByRef.set(ref, {
-          containers: (Array.isArray(b.containers) ? b.containers : [])
-            .map((c) => String(c || '').trim()).filter(Boolean),
-          invoiceUrl: String(b.invoiceCopyUrl || '').trim(),
-          invoiceDate: String(b.billDate || '').trim()
-        });
-      }
+      const rows = await apiGet(`/lease-schedule?client=${encodeURIComponent(client.clientKey)}&limit=${PAGE_LIMIT}`);
+      for (const r of (Array.isArray(rows) ? rows : [])) addContainer(r.invoiceNo, r.containerNo);
     } catch (e) {
-      // Links are an enhancement: the table still renders without them.
-      logger.error('[ACCOUNTS-API] party-ledger failed:', e.message);
+      // The invoice table still renders without multi-container splits.
+      logger.error('[ACCOUNTS-API] lease-schedule (client) failed:', e.message);
     }
   }
 
-  /* INVOICE-WISE totals.
-   *
-   * One invoice covers several containers, and /api/search returns BOTH a
-   * consolidated header row (containerNo empty, the full invoice value) and a
-   * per-container split row. Summing everything would double-count, so the
-   * header row is the invoice total and the splits are ignored.
-   *
-   * Searching by container only ever returns that container's split, so each
-   * invoice is re-fetched by its own number to get the consolidated figure. */
-  /* The invoice SET comes from the matched Tally party's own bills — the same
-     source the /tally-outstanding modal renders — so this table shows every
-     invoice that modal does, not just the ones naming this container.
-     Receipts (isReceipt, negative) are payments, not invoices, so excluded.
-     Falls back to the container's invoices only when no party matched. */
-  /* Receipts are excluded two ways: the isReceipt flag, and a non-positive
-     pending. A journal voucher like JV/1171/25-26 is a credit that carries no
-     flag but a negative pending — it belongs under RECEIPTS (CR), not in the
-     invoice list, and including it inflated the grand total. */
-  const partyRefs = out.bills
-    .filter((b) => !b.isReceipt && b.pending > 0)
-    .map((b) => b.ref)
-    .filter(Boolean);
-  const invoiceNos = partyRefs.length
-    ? [...new Set(partyRefs)]
-    : [...new Set(out.invoices.map((i) => i.invoiceNo).filter(Boolean))];
-  out.invoiceTotals = [];
-  const billByRef = new Map(out.bills.map((b) => [String(b.ref).trim(), b]));
-  try {
-    const fetched = await Promise.all(invoiceNos.map(async (no) => {
-      const j = await apiGet(`/api/search?q=${encodeURIComponent(no)}&limit=${SEARCH_LIMIT}`);
-      const rows = (j?.invoices || []).filter((i) => String(i.invoiceNo).trim() === no);
-      // The consolidated row is the one with no container against it.
-      const header = rows.find((i) => !String(i.containerNo || '').trim());
-      if (!rows.length && !billByRef.get(no)) return null;
-      /* Invoice total: the consolidated header row when the API supplies one,
-         otherwise the SUM of the container splits — an invoice covering two
-         containers at 69,502 each is 139,004, not 69,502. Taking rows[0] here
-         reported one container's share as the whole invoice. */
-      const splits = rows.filter((i) => String(i.containerNo || '').trim());
-      const src = header || {
-        amount: splits.reduce((s, i) => s + num(i.amount), 0),
-        outstanding: splits.reduce((s, i) => s + num(i.outstanding), 0),
-        overdueDays: splits[0]?.overdueDays,
-        period: splits[0]?.period
-      };
-      /* Containers billed on this invoice. Searching by invoice number does
-         not always return the split rows — when it doesn't, this container is
-         still on the invoice (the party matched it), so it is used rather than
-         leaving the cell blank. That mirrors the modal's own
-         "Container no. matched on N of N invoice(s)". */
-      const led = ledgerByRef.get(no) || {};
-      const fromSearch = [...new Set(
-        rows.map((i) => String(i.containerNo || '').trim()).filter(Boolean)
-      )].sort();
-      /* The ledger's list wins: it is per-invoice and complete, where
-         /api/search returns only splits it happens to hold. */
-      const containers = led.containers?.length ? [...new Set(led.containers)].sort() : fromSearch;
-      /* When the API returns no split rows for an invoice, fall back to the
-         container we searched.
-         The party was matched BY that container's invoices, so the container
-         is genuinely on this invoice — /api/search simply returns one
-         consolidated row with an empty containerNo when queried by invoice
-         number. Takshavi's six monthly rentals are all SEGU9511192, and
-         blanking them lost real information.
-         `partial` marks the case where the invoice may cover further
-         containers the API did not return, so the UI can say so rather than
-         imply the list is complete. */
-      const partial = !containers.length && !!containerNo;
-      if (partial) containers.push(String(containerNo).trim());
-      /* Amount and age come from the PARTY BILL, which is what the
-         /tally-outstanding modal renders — /api/search reports a per-container
-         slice for some invoices (AUG31 showed 69,384 against the modal's
-         76,818, and -19d against 0d). Search is used only to enrich the
-         container list and period, which bills do not carry. */
-      const bill = billByRef.get(no);
+  const normId = (s) => String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  const wantId = normId(containerNo);
+  /* 0 containers (a client billed with nothing tied to any container) and 1
+     both mean "no second container to confuse this with" — the field is
+     missing on no client sampled, but a stale/missing value defaults to 0 via
+     num(), which is deliberately on the safe (guess-allowed) side only
+     because 0 carries the same "nothing else it could be" guarantee as 1. */
+  const singleContainerClient = num(client?.containerCount) <= 1;
+
+  /* Every client invoice, tagged with which container(s) it is actually for
+     — real attribution first, the single-container guess only as a last
+     resort — then kept ONLY if the container being viewed is one of them. */
+  const scoped = clientInvoices
+    .map((i) => {
+      const ref = String(i.invoiceNo).trim();
+      const known = containersByInvoice.get(ref);
+      let containers = known ? [...known].sort() : [];
+      /* No real attribution anywhere, but this client has only one
+         container to begin with, so there is no ambiguity to resolve. */
+      const partial = !containers.length && !!containerNo && singleContainerClient;
+      if (partial) containers = [String(containerNo).trim()];
+      return { invoice: i, containers, partial };
+    })
+    .filter((row) => row.containers.some((c) => normId(c) === wantId));
+
+  /* INVOICE-WISE table — every one of THIS container's invoices with
+     something still open, which is the set the Accounts & Collection app's
+     own outstanding view shows for it. `amount` is the OPEN figure, not the
+     billed one — Grand Total below sums this column. */
+  out.invoiceTotals = scoped
+    .filter((row) => num(row.invoice.outstanding) > 0)
+    .map((row) => {
+      const i = row.invoice;
       return {
-        invoiceNo: no,
-        amount: bill ? num(bill.pending) : num(src.amount),
-        outstanding: bill ? num(bill.pending) : num(src.outstanding),
-        overdueDays: bill ? num(bill.overdueDays) : num(src.overdueDays),
-        period: fmtPeriod(src.period),
-        invoiceDate: led.invoiceDate || '',
-        /* Empty string, never another invoice's URL — the UI shows a disabled
-           icon for these rather than hiding the invoice. */
-        invoiceUrl: led.invoiceUrl || '',
-        containers,
-        containerCount: containers.length,
-        consolidated: !!header
+        invoiceNo: String(i.invoiceNo).trim(),
+        amount: num(i.outstanding),
+        outstanding: num(i.outstanding),
+        overdueDays: num(i.overdueDays),
+        period: fmtPeriod(i.month, i.year),
+        invoiceDate: String(i.billingDate || '').trim(),
+        /* Always '' — /api/v1 publishes no document URL (see the file header).
+           Both consumers fall back to the LMS's own Billing Sales file map. */
+        invoiceUrl: '',
+        containers: row.containers,
+        containerCount: row.containers.length,
+        consolidated: row.containers.length > 1,
+        partial: row.partial
       };
-    }));
-    out.invoiceTotals = fetched.filter(Boolean);
-  } catch (e) {
-    if (!out.error) out.error = e.message;
-    logger.error('[ACCOUNTS-API] invoice totals failed:', e.message);
-  }
+    });
 
-  /* CLIENT-WIDE position, not just the invoices this container appears on —
-     the same DR / CR / Net summary the Accounts & Collection modal shows.
-     Receipts are the party's credits: they carry isReceipt, or a non-positive
-     pending (a journal voucher credit carries no flag). */
-  out.receipts = out.bills
-    .filter((b) => b.isReceipt || b.pending < 0)
-    .map((b) => ({
-      ref: b.ref,
-      amount: Math.abs(num(b.pending)),
-      invoiceUrl: ledgerByRef.get(String(b.ref).trim())?.invoiceUrl || ''
-    }));
+  /* THIS CONTAINER'S position — DR / CR / Net, summed only over the
+     invoices just scoped to it. Deliberately NOT client.billed/received/
+     outstanding any more: those are client-WIDE (confirmed they also include
+     stray, invoice-untied receipts — Luthra Projects has a ₹23,320 receipt,
+     RPT/584/23-24, attached to no invoice at all, which is exactly why
+     summing this client's own invoices undershoots client.received by that
+     same ₹23,320) and summing them was the other half of the same mixing
+     bug this whole block fixes. A per-invoice-untied receipt cannot be
+     credited to one container over another, so it is left out of every
+     container's Net Balance rather than guessed into one. */
+  out.receipts = scoped
+    .filter((row) => num(row.invoice.amount) < 0)
+    .map((row) => ({ ref: row.invoice.invoiceNo || '', amount: Math.abs(num(row.invoice.amount)), invoiceUrl: '' }));
 
-  out.totalDr = out.bills.filter((b) => !b.isReceipt && b.pending > 0)
-    .reduce((s, b) => s + num(b.pending), 0);
-  out.totalCr = out.receipts.reduce((s, r) => s + r.amount, 0);
+  out.totalDr = scoped.reduce((s, row) => s + num(row.invoice.amount), 0);
+  out.totalCr = scoped.reduce((s, row) => s + num(row.invoice.received), 0);
   out.netBalance = out.totalDr - out.totalCr;
 
   out.invoiceCount = out.invoiceTotals.length;
   out.grandTotal = out.invoiceTotals.reduce((s, i) => s + i.amount, 0);
   out.grandOutstanding = out.invoiceTotals.reduce((s, i) => s + i.outstanding, 0);
+
+  /* Real money the fix above now deliberately leaves out: an open invoice for
+     a multi-container client that NEITHER source (its own containerNo, nor
+     the client-wide lease schedule) names a container for. Excluding it from
+     every container's own view is the correct fix for the mixing bug (see
+     the big comment above) — but silently excluding it would hide genuinely
+     outstanding money with no trace. Surfaced instead as a plain count/total
+     so the UI can say so, rather than implying this container's Grand Total
+     is the client's whole picture. Always 0 for a single-container client —
+     there, every open invoice was just attributed by the (safe) guess above. */
+  if (!singleContainerClient) {
+    const unattributed = clientInvoices.filter((i) => {
+      const ref = String(i.invoiceNo).trim();
+      return num(i.outstanding) > 0 && !containersByInvoice.has(ref);
+    });
+    /* The rows themselves, same shape as invoiceTotals (minus `containers` —
+       there is, by construction, none to show), so the UI can render a real
+       table here instead of a single summary line. "Explained in one
+       sentence" was the first cut; the follow-up ask ("all data not show
+       table format") was for the actual rows. */
+    out.clientUnattributedInvoices = unattributed.map((i) => ({
+      invoiceNo: String(i.invoiceNo).trim(),
+      amount: num(i.outstanding),
+      outstanding: num(i.outstanding),
+      overdueDays: num(i.overdueDays),
+      period: fmtPeriod(i.month, i.year),
+      invoiceDate: String(i.billingDate || '').trim()
+    }));
+    out.clientUnattributedCount = unattributed.length;
+    out.clientUnattributedOutstanding = unattributed.reduce((s, i) => s + num(i.outstanding), 0);
+  } else {
+    out.clientUnattributedInvoices = [];
+    out.clientUnattributedCount = 0;
+    out.clientUnattributedOutstanding = 0;
+  }
+
+  /* A container the schedule does not carry, for a client we could not match,
+     is not an error worth showing — but a total blank with no explanation is
+     worse than saying so. */
+  if (!client && !out.error) {
+    out.error = `No matching client in Accounts & Collection for "${clientName || containerNo}"`;
+  }
   return out;
 }

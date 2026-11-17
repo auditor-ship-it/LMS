@@ -1,8 +1,17 @@
 .form { display: flex; flex-direction: column; gap: 14px; }
+/* Horizontal layout — explicit request 2026-11-16 ("vertical format
+   horizontal format kardo"): several short fields side by side instead of
+   one per row, for forms with many plain text/select/date fields
+   (NewLeaseFormModal.jsx). */
+.formGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 18px; }
+@media (max-width: 520px) { .formGrid { grid-template-columns: 1fr; } }
+
+.oldDeploymentToggle { background: none; border: none; padding: 0; margin: 0; text-align: left; cursor: pointer; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-3); }
 .field input,
-.field textarea {
+.field textarea,
+.field select {
   width: 100%;
   padding: 10px 12px;
   border: 1.5px solid var(--line);
@@ -17,7 +26,8 @@
 }
 .field input:disabled { background: var(--surface-2); color: var(--text-2); }
 .field input:focus,
-.field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field textarea:focus,
+.field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
 .bulkList {
   padding: 10px 12px;
@@ -30,6 +40,9 @@
   max-height: 110px;
   overflow-y: auto;
 }
+
+.checkboxField { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.checkboxField input { margin-top: 2px; }
 
 .error { color: var(--error); font-size: 12px; font-weight: 600; margin: 0; }
 

@@ -652,11 +652,11 @@ export async function deleteRemark(req, res) {
 /* ---- Tracking-sheet bootstrap ---- */
 
 export async function addToTracking(req, res) {
-  const { containerNo, deployedRow, remarks, personName } = req.body;
+  const { containerNo, deployedRow, remarks, personName, emailConfirmationUrl, locationChange } = req.body;
   // Mongo-first — explicit report 2026-11-05 ("Google Sheets API rate limit
   // was hit" blocking this exact submission). See
   // addToOffLeaseTrackingFast's own doc comment in offlease.service.js.
-  const message = await offLeaseService.addToOffLeaseTrackingFast(containerNo, deployedRow, remarks, personName, req.user?.email);
+  const message = await offLeaseService.addToOffLeaseTrackingFast(containerNo, deployedRow, remarks, personName, req.user?.email, emailConfirmationUrl, !!locationChange);
   res.json({ message });
 }
 

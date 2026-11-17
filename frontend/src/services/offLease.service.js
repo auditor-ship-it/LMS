@@ -41,8 +41,8 @@ export async function decideClientToClient(containerNo, clientName, remarks, row
 export async function lookupContainer(containerNo, leaseId, row) {
   return getOffLeaseContainerDetail(containerNo, leaseId, row);
 }
-export async function trackContainer(containerNo, deployedRow, remarks, personName) {
-  const res = await addToOffLeaseTracking(containerNo, deployedRow, remarks, personName);
+export async function trackContainer(containerNo, deployedRow, remarks, personName, emailConfirmationUrl, locationChange) {
+  const res = await addToOffLeaseTracking(containerNo, deployedRow, remarks, personName, emailConfirmationUrl, locationChange);
   invalidate('off-lease');
   return res;
 }

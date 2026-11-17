@@ -349,40 +349,15 @@ export const BILLING_HEAD = ['#', 'Container No', 'Client Name', 'Invoice No', '
  * the order returned — no month filter, no grouping, no deduplication, no
  * truncation. The Google Sheet is never consulted here.
  */
-export const INVOICE_HEAD = ['Invoice No.', 'Container No(s).', 'Month', 'Total Amount', 'Age', 'Invoice'];
-
-/**
- * Invoice number -> its attachment link, from the Billing Sales sheet.
- *
- * FALLBACK ONLY. The primary source is the Accounts & Collection ledger's
- * per-invoice `invoiceCopyUrl` (see accountsApi.service.js), which has a file
- * for every open invoice. This sheet join covers the reverse case: Billing
- * Sales holds a row the ledger does not.
- */
-const normInvoiceNo = (v) => cellText(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-function attachmentsByInvoice(result) {
-  const map = new Map();
-  /* Keyed on the invoice number, matched on alphanumerics only so separator
-     and case differences between the two systems do not miss. */
-  for (const [no, link] of Object.entries(result.invoiceAttachments || {})) {
-    if (no && link) map.set(normInvoiceNo(no), link);
-  }
-  // Billing records are a secondary source — they only match when the
-  // container AND client agree, which is often not the case.
-  for (const r of result.billing?.records || []) {
-    const no = normInvoiceNo(r.invoiceNo);
-    const link = cellText(r.attachment).trim();
-    if (no && link && !map.has(no)) map.set(no, link);
-  }
-  return map;
-}
+/* 'Invoice' (the per-invoice document link) was dropped 2026-11-17 — /api/v1
+   publishes no document URL (see accountsApi.service.js's header), so that
+   column rendered "No file" on every single row. */
+export const INVOICE_HEAD = ['Invoice No.', 'Container No(s).', 'Month', 'Total Amount', 'Age'];
 
 export function buildInvoices(result) {
   const o = result.outstanding;
   const list = o?.invoiceTotals || [];
   if (!list.length) return null;
-  const files = attachmentsByInvoice(result);
   return {
     count: list.length,
     party: cellText(o.matchedParty),
@@ -391,13 +366,7 @@ export function buildInvoices(result) {
       (i.containers || []).join(', ') || '—',
       cellText(i.period) || '—',
       money(i.amount) || '—',
-      i.overdueDays ? `${i.overdueDays}d` : '—',
-      /* The invoice's OWN document, from the Accounts & Collection ledger
-         (`invoiceCopyUrl`) — one distinct file per invoice number. The Billing
-         Sales join stays as a fallback for invoices that sheet happens to
-         carry and the ledger does not. Empty string, never a neighbouring
-         invoice's file: the cell renders as "No file" instead. */
-      cellText(i.invoiceUrl) || files.get(normInvoiceNo(i.invoiceNo)) || ''
+      i.overdueDays ? `${i.overdueDays}d` : '—'
     ]),
     grandTotal: money(o.grandTotal),
     grandOutstanding: money(o.grandOutstanding)

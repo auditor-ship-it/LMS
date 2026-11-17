@@ -7,7 +7,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch-path=./src --watch-path=./.env src/server.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.9",

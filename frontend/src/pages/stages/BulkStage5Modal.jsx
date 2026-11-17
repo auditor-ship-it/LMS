@@ -70,7 +70,7 @@ export function BulkStage5Modal({ open, items, submitting, error, onClose, onSub
               key={f.key}
               field={f}
               value={values[f.key]}
-              pendingFileName={pendingFiles[f.key]?.fileName}
+              pendingFile={pendingFiles[f.key]}
               onChange={(v) => setField(f.key, v)}
               onFile={(payload) => { setPendingFiles((p) => ({ ...p, [f.key]: payload })); setField(f.key, payload.fileName); }}
               disabled={submitting}

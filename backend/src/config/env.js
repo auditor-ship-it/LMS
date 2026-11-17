@@ -46,9 +46,15 @@ export const env = {
 
   /* Accounts & Collection app — Tally outstanding shown on Off-Lease Stage 1.
      Server-side only: these credentials must never reach the browser. */
-  accountsApiUrl: process.env.ACCOUNTS_API_URL || 'https://accounts-collection.vercel.app',
-  accountsApiEmpId: process.env.ACCOUNTS_API_EMP_ID || '',
-  accountsApiPassword: process.env.ACCOUNTS_API_PASSWORD || '',
+  /* Default moved off accounts-collection.vercel.app 2026-11-17 — that
+     deployment is disabled and answers 402 on every route, including
+     /api/auth/login, which surfaced as "Accounts API login failed (402):
+     no token" on Off-Lease Stage 1. */
+  accountsApiUrl: process.env.ACCOUNTS_API_URL || 'https://collections.crystalgrp.xyz',
+  /* Replaced the Employee-ID/password service account 2026-11-17: that login
+     no longer exists on the new host, and /api/v1 (the supported read API) is
+     API-key-only. See accountsApi.service.js's header. */
+  accountsApiKey: process.env.ACCOUNTS_API_KEY || '',
 
   /* SMTP. MAIL_PASS must be a Gmail APP PASSWORD (2-Step Verification on, then
      Security > App passwords) — an account password is rejected by Google. */

@@ -81,6 +81,7 @@ import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { checkActionPermission, userHasAction } from './permissions.service.js';
 import { sendMail } from './email.service.js';
+import { extractFileId, downloadFromDrive } from './googleDrive.service.js';
 import { runAutoApproval } from './approve.service.js';
 import { getCollection } from './mongo.service.js';
 import { getSheetDataFromMongo, getMongoRowsWithKeys, appendMongoMirrorRow } from './mongoSheetData.service.js';
@@ -95,6 +96,7 @@ import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientM
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
+import { addToNewLeaseQueue } from './newLeaseQueue.service.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
@@ -1587,6 +1589,12 @@ async function _lookupDeployedForOffLease(containerNo, preFetched, targetRow, cl
  *  the off-lease or why. */
 const OL_TRACKING_REMARKS_COL = 303;
 const OL_TRACKING_PERSON_NAME_COL = 304;
+/* Explicit request 2026-11-16 ("add the one emails confirmation upload"):
+ * the client's email confirming this off-lease, required on the same
+ * OffLeaseModal (Lease Expiry) form as Person Name/Remarks above, captured
+ * at the same moment. New column — see olHeaders.generated.js's own doc
+ * comment on index 398. */
+const OL_EMAIL_CONFIRMATION_COL = 398;
 
 /** `deployedRow`: optional, the specific Deployed sheet row (1-based) to
  *  off-lease — see _lookupDeployedForOffLease's doc comment for why this
@@ -1596,7 +1604,7 @@ const OL_TRACKING_PERSON_NAME_COL = 304;
  *  the authenticated caller (req.user.email), recorded on the Deployed
  *  sheet's Email ID column — explicit request 2026-10-01, distinct from
  *  `personName` above (free text, not necessarily this caller at all). */
-export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = '', personName = '', userEmail = '') {
+export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = '', personName = '', userEmail = '', emailConfirmationUrl = '') {
   return withSheetLock(OL_SHEET, async () => {
     await _ensureOffLeaseSheet();
 
@@ -1654,10 +1662,12 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
     // — a targeted cell update against the row appendRow just returned.
     const rmk = safeStr(remarks).trim();
     const person = safeStr(personName).trim();
+    const emailConfirmation = safeStr(emailConfirmationUrl).trim();
     if (rowNum) {
       await batchUpdateValues([
         { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_REMARKS_COL)}${rowNum}`, values: [[rmk]] },
-        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_PERSON_NAME_COL)}${rowNum}`, values: [[person]] }
+        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_PERSON_NAME_COL)}${rowNum}`, values: [[person]] },
+        { range: `'${OL_SHEET}'!${colLetter(OL_EMAIL_CONFIRMATION_COL)}${rowNum}`, values: [[emailConfirmation]] }
       ]);
     }
 
@@ -1688,6 +1698,7 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
         const mirrorRow = [...newRow];
         mirrorRow[OL_TRACKING_REMARKS_COL] = rmk;
         mirrorRow[OL_TRACKING_PERSON_NAME_COL] = person;
+        mirrorRow[OL_EMAIL_CONFIRMATION_COL] = emailConfirmation;
         await getCollection(OL_SHEET).updateOne(
           { key: `row_${rowNum - 2}` },
           { $set: { key: `row_${rowNum - 2}`, row: mirrorRow } },
@@ -1747,7 +1758,7 @@ export async function addToOffLeaseTracking(containerNo, deployedRow, remarks = 
  * contrast, target an ALREADY-KNOWN row (deployedTargetRow, resolved above)
  * — patched directly by that row's own real key, safe to do immediately.
  */
-export async function addToOffLeaseTrackingFast(containerNo, deployedRow, remarks = '', personName = '', userEmail = '') {
+export async function addToOffLeaseTrackingFast(containerNo, deployedRow, remarks = '', personName = '', userEmail = '', emailConfirmationUrl = '', locationChange = false) {
   const [{ headers: dHeaders }, sortedDeployed, { rows: existingOl }] = await Promise.all([
     getSheetDataFromMongo(SHEETS.DEPLOYED),
     getMongoRowsWithKeys(SHEETS.DEPLOYED),
@@ -1779,9 +1790,11 @@ export async function addToOffLeaseTrackingFast(containerNo, deployedRow, remark
 
   const rmk = safeStr(remarks).trim();
   const person = safeStr(personName).trim();
+  const emailConfirmation = safeStr(emailConfirmationUrl).trim();
   const mirrorRow = [...newRow];
   mirrorRow[OL_TRACKING_REMARKS_COL] = rmk;
   mirrorRow[OL_TRACKING_PERSON_NAME_COL] = person;
+  mirrorRow[OL_EMAIL_CONFIRMATION_COL] = emailConfirmation;
   await appendMongoMirrorRow(OL_SHEET, mirrorRow);
 
   const stamp = dmyTime(new Date());
@@ -1792,9 +1805,32 @@ export async function addToOffLeaseTrackingFast(containerNo, deployedRow, remark
 
   await enqueueSheetReplay(
     'offlease.addToOffLeaseTrackingSheetWrite',
-    [containerNo, newRow, rmk, person, deployedTargetRow, userEmail, stamp],
+    [containerNo, newRow, rmk, person, deployedTargetRow, userEmail, stamp, emailConfirmation],
     { actor: userEmail }
   );
+
+  /* Explicit request 2026-11-16 ("location change click check box agar yah
+     click karuga tabhi new lease navigatio add karo"): the OLD Deployed row
+     is left exactly as the two writes above already leave it (marked
+     Off-Lease) — this only queues a reference snapshot for the "New Lease"
+     page, never edits anything itself. Best-effort: a queue-insert failure
+     must never fail an off-lease that already succeeded. */
+  if (locationChange) {
+    try {
+      await addToNewLeaseQueue(containerNo, {
+        clientName: safeStr(found[colMap.clientName]),
+        clientCode: safeStr(found[colMap.clientCode]),
+        size: safeStr(found[colMap.size]),
+        type: safeStr(found[colMap.type]),
+        location: safeStr(found[colMap.location]),
+        deployedDate: fmtCell(found[colMap.deployedDate]),
+        validUpto: fmtCell(found[colMap.validUpto]),
+        rate: rateVal
+      }, userEmail);
+    } catch (e) {
+      console.error('[OL-ADD] New Lease queue insert failed (non-fatal):', e?.message || e);
+    }
+  }
 
   return 'OK';
 }
@@ -1810,14 +1846,15 @@ export async function addToOffLeaseTrackingFast(containerNo, deployedRow, remark
  *  guessing the wrong Mongo doc if the two have drifted apart (the next
  *  scheduled reconcile cycle is what reliably corrects that, same as
  *  poAgreementHistory.service.js's writeHistoryRowToSheet). */
-export async function addToOffLeaseTrackingSheetWrite(containerNo, newRow, remarks, personName, deployedTargetRow, userEmail, stamp) {
+export async function addToOffLeaseTrackingSheetWrite(containerNo, newRow, remarks, personName, deployedTargetRow, userEmail, stamp, emailConfirmationUrl = '') {
   return withSheetLock(OL_SHEET, async () => {
     await _ensureOffLeaseSheet();
     const { rowNum } = await appendRow(OL_SHEET, newRow);
     if (rowNum) {
       await batchUpdateValues([
         { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_REMARKS_COL)}${rowNum}`, values: [[remarks]] },
-        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_PERSON_NAME_COL)}${rowNum}`, values: [[personName]] }
+        { range: `'${OL_SHEET}'!${colLetter(OL_TRACKING_PERSON_NAME_COL)}${rowNum}`, values: [[personName]] },
+        { range: `'${OL_SHEET}'!${colLetter(OL_EMAIL_CONFIRMATION_COL)}${rowNum}`, values: [[emailConfirmationUrl]] }
       ]);
     }
     await _ensureDeployedEmailIdHeader();
@@ -5204,29 +5241,21 @@ export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
 
   const th = (s) => `<th style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-size:12.5px;text-align:left;white-space:nowrap;">${s}</th>`;
   const td = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;">${s || '-'}</td>`;
-  const tdLink = (url) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;">${url ? `<a href="${url}" target="_blank">View</a>` : '-'}</td>`;
 
   /* Container Inspection / Machine Check — one row per point that has ANY
      value recorded, same filter getOffLeaseStageDetail's own readPoints()
      uses, so a point nobody touched doesn't pad the email with blank rows. */
-  const pointSection = (title, points) => {
-    const pointRows = points
-      .map((p) => ({
-        n: p.n, item: p.item,
-        status: safeStr(mergedRow[p.status]).trim(),
-        estimate: fmtNumCell(mergedRow[p.estimate]),
-        photo: safeStr(mergedRow[p.photo]).trim(),
-        remark: safeStr(mergedRow[p.remark]).trim()
-      }))
-      .filter((p) => p.status || p.estimate || p.photo || p.remark);
-    if (!pointRows.length) return '';
-    return `
-      <h4 style="font-family:Arial,sans-serif;margin:16px 0 6px;">${title}</h4>
-      <table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;">
-        <tr>${th('#')}${th('Item')}${th('Condition')}${th('Estimate')}${th('Photo')}${th('Remark')}</tr>
-        ${pointRows.map((p) => `<tr>${td(p.n)}${td(p.item)}${td(p.status)}${td(p.estimate)}${tdLink(p.photo)}${td(p.remark)}</tr>`).join('')}
-      </table>`;
-  };
+  const pointRows = (points) => points
+    .map((p) => ({
+      n: p.n, item: p.item,
+      status: safeStr(mergedRow[p.status]).trim(),
+      estimate: fmtNumCell(mergedRow[p.estimate]),
+      photo: safeStr(mergedRow[p.photo]).trim(),
+      remark: safeStr(mergedRow[p.remark]).trim()
+    }))
+    .filter((p) => p.status || p.estimate || p.photo || p.remark);
+  const inspectionRows = pointRows(OL_INSPECTION_POINTS);
+  const machineRows = pointRows(OL_MACHINE_POINTS);
 
   // Site Cabin Fittings — only present at all for a Site Cabin container
   // (see OL_CABIN_ITEMS), same shape as the Condition/Photo/Remark table
@@ -5241,11 +5270,57 @@ export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
       remark: safeStr(mergedRow[c.remarkCol]).trim()
     }))
     .filter((c) => c.available !== '');
+
+  /* Damage photos EMBEDDED in the email itself, not just a "View" link —
+     explicit request 2026-11-17 ("jab inspection ka mail jata hai na tho
+     mails pe bhi jana chhaiye hai"). Every photo URL across all three
+     tables, downloaded ONCE in parallel and attached as a cid: inline
+     image — nodemailer's own mechanism for this, and the one
+     downloadFromDrive/extractFileId (googleDrive.service.js) were already
+     written for but never wired up until now. A unique cid per row (not
+     per photo URL) even though two rows could theoretically share a file —
+     simpler, and the cost is at most one duplicate download in a case that
+     essentially never happens. Any download failure (deleted file, a
+     permissions change) falls back to the plain "View" link rather than
+     breaking the whole notification — matches downloadFromDrive's own
+     documented contract. */
+  const photoJobs = [];
+  for (const [rows, prefix] of [[inspectionRows, 'insp'], [machineRows, 'mach'], [cabinRows, 'cabin']]) {
+    for (const r of rows) {
+      if (!r.photo) continue;
+      photoJobs.push({ cid: `${prefix}-photo-${r.n}`, url: r.photo });
+    }
+  }
+  const attachments = [];
+  await Promise.all(photoJobs.map(async (job) => {
+    const fileId = extractFileId(job.url);
+    const buffer = fileId ? await downloadFromDrive(fileId) : null;
+    if (buffer) attachments.push({ filename: `${job.cid}.jpg`, content: buffer, cid: job.cid });
+  }));
+  const embeddedCids = new Set(attachments.map((a) => a.cid));
+  const tdPhoto = (prefix, n, url) => {
+    const cid = `${prefix}-photo-${n}`;
+    if (!url) return `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;">-</td>`;
+    if (embeddedCids.has(cid)) {
+      return `<td style="padding:6px 10px;border:1px solid #ddd;"><img src="cid:${cid}" alt="Damage photo" style="max-width:120px;max-height:90px;border-radius:4px;display:block;" /></td>`;
+    }
+    return `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;"><a href="${url}" target="_blank">View</a></td>`;
+  };
+
+  const pointTable = (title, rows, prefix) => {
+    if (!rows.length) return '';
+    return `
+      <h4 style="font-family:Arial,sans-serif;margin:16px 0 6px;">${title}</h4>
+      <table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;">
+        <tr>${th('#')}${th('Item')}${th('Condition')}${th('Estimate')}${th('Photo')}${th('Remark')}</tr>
+        ${rows.map((p) => `<tr>${td(p.n)}${td(p.item)}${td(p.status)}${td(p.estimate)}${tdPhoto(prefix, p.n, p.photo)}${td(p.remark)}</tr>`).join('')}
+      </table>`;
+  };
   const cabinSection = cabinRows.length ? `
     <h4 style="font-family:Arial,sans-serif;margin:16px 0 6px;">Site Cabin Fittings</h4>
     <table style="border-collapse:collapse;font-family:Arial,sans-serif;width:100%;">
       <tr>${th('#')}${th('Item')}${th('Qty')}${th('Available')}${th('Condition')}${th('Photo')}${th('Remark')}</tr>
-      ${cabinRows.map((c) => `<tr>${td(c.n)}${td(c.item)}${td(c.qty)}${td(c.available)}${td(c.status)}${tdLink(c.photo)}${td(c.remark)}</tr>`).join('')}
+      ${cabinRows.map((c) => `<tr>${td(c.n)}${td(c.item)}${td(c.qty)}${td(c.available)}${td(c.status)}${tdPhoto('cabin', c.n, c.photo)}${td(c.remark)}</tr>`).join('')}
     </table>` : '';
 
   const hours = fmtNumCell(mergedRow[OL_TECHNICIAN_HOURS_COL]);
@@ -5295,8 +5370,8 @@ export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
       <tr>${th('Inspection Report Total Billing')}${td(totalBilling)}</tr>
     </table>
     ${costSection}
-    ${pointSection('Container Inspection Checklist', OL_INSPECTION_POINTS)}
-    ${pointSection('Machine Check', OL_MACHINE_POINTS)}
+    ${pointTable('Container Inspection Checklist', inspectionRows, 'insp')}
+    ${pointTable('Machine Check', machineRows, 'mach')}
     ${technicianLine}
     ${cabinSection}
   `;
@@ -5309,7 +5384,7 @@ export async function _sendOffLeaseInspectionEmail(mergedRow, row, toOverride) {
     'Full checklist details (per-point condition, estimate, photo, remark) are in the HTML version of this email.'
   ].join('\n');
 
-  await sendMail({ to, cc: OL_STAGE3_EMAIL_CC.join(','), subject, body, html });
+  await sendMail({ to, cc: OL_STAGE3_EMAIL_CC.join(','), subject, body, html, attachments });
   console.log(`[OL-STAGE3-INSPECTION-EMAIL] sent to ${to} for ${containerNo}`);
 }
 
@@ -6522,7 +6597,16 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
       ...(inspection ? { inspection } : {}),
       ...(machine ? { machine } : {}),
       ...(cabin ? { cabin } : {}),
-      ...(technician ? { technician } : {})
+      ...(technician ? { technician } : {}),
+      /* Stage 1's own Remark (col_14) — explicit request 2026-11-16 ("remaks
+         send back stage and emails show for inside"): this endpoint never
+         exposed col_14 at all before, so the record detail page had nothing
+         to show a sent-back note from, even though the Dashboard list
+         already shows it (getOffLeaseDashboardData's own _classifyOffLeaseStages
+         puts every stage's remark on its `stages[]` entry the same way).
+         Added only for s===1, where the col_14 send-back invariant lives —
+         see getOffLeaseData's own doc comment on that same invariant. */
+      ...(s === 1 ? { remark: safeStr(row[14]).trim() } : {})
     });
   }
   res.stages = stages;

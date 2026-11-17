@@ -456,6 +456,21 @@
 .drop_done .dropIcon { color: var(--success); }
 .drop_pending .dropIcon { color: var(--warn); }
 
+/* ---- inline damage-photo preview (ImageFieldInput) ---- */
+.imageField { display: flex; flex-direction: column; gap: 6px; }
+.imagePreview {
+  display: block;
+  max-width: 140px;
+  max-height: 100px;
+  width: auto;
+  height: auto;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  object-fit: cover;
+  cursor: pointer;
+}
+.inspDamageCol .imagePreview { max-width: 90px; max-height: 70px; }
+
 .dropText { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .dropName {
   font-size: 12px;

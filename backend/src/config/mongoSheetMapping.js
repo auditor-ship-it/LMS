@@ -40,6 +40,12 @@ export const MONGO_SHEET_MAPPING = {
   // after it in the sheet. Switched to fullRefresh (position-keyed
   // `row_N`), same fix and same reasoning as those other sheets.
   [SHEETS.NEW_LEASE]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true },
+  // Append-only log, same posture as SHEETS.REFUNDS above (own doc comment
+  // there) — writes go straight to Sheets via newLeaseQueue.service.js's
+  // completeNewLeaseEntry, then appendMongoMirrorRow patches this mirror
+  // instantly; this registration lets the periodic reconcile cron also
+  // pick up anything entered directly into the live sheet by hand.
+  [SHEETS.NEW_LEASE_REQUEST]: { naturalKeyColumn: null, appendOnly: true, fullRefresh: true, allowEmpty: true },
   [SHEETS.OPERATION]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true },
   [SHEETS.DEPLOYED]: { naturalKeyColumn: null, appendOnly: false, fullRefresh: true },
   // Off-Lease Tracking's container-no uniqueness hasn't been verified against

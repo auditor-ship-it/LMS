@@ -18,6 +18,14 @@ import { getOutstanding, getOffLeaseContainerDetail } from '../../api/offlease.a
 import { usePermission } from '../../hooks/usePermission.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { useAsync } from '../../hooks/useAsync.js';
+import { lazy, Suspense } from 'react';
+
+/* Lazy, not a static import — Three.js alone is ~600KB minified, and a
+   static import pulled it into THIS file's own chunk, which every Off-Lease
+   page loads (StageDetailModal is shared by every stage, not just this
+   one). Deferred so that weight only downloads the moment Stage 4 is
+   actually opened. */
+const Inspection3DView = lazy(() => import('./Inspection3DView.jsx').then((m) => ({ default: m.Inspection3DView })));
 import { BASE_FIELDS, STAGE_FIELDS, cabinExpectedQty, normaliseSize, sanitizeCabinAvailable, isFaultStatus, SOUND_STATUSES } from './stageFields.js';
 import { stageCaption } from '../../constants/stages.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
@@ -409,7 +417,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
 
     for (const f of visibleFields) {
       if (!f.required) continue;
-      const hasValue = f.type === 'file' ? (values[f.key] || pendingFiles[f.key]) : String(values[f.key] ?? '').trim();
+      const hasValue = (f.type === 'file' || f.type === 'image') ? (values[f.key] || pendingFiles[f.key]) : String(values[f.key] ?? '').trim();
       if (!hasValue) {
         setSaveError(`"${f.label}" is required`);
         return;
@@ -837,13 +845,27 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                     key={f.key}
                     field={f}
                     value={values[f.key]}
-                    pendingFileName={pendingFiles[f.key]?.fileName}
+                    pendingFile={pendingFiles[f.key]}
                     onChange={(v) => setField(f.key, v)}
                     onFile={(payload) => { setPendingFiles((p) => ({ ...p, [f.key]: payload })); setField(f.key, payload.fileName); }}
                     disabled={readOnly || busy}
                   />
                 ))}
               </div>
+              )}
+
+              {/* The real, live-data 3D model — explicit request 2026-11-17
+                  ("mera dry and refer ka woh jana chahiye hai... stage 4 mai
+                  details jaise hi file karenge na tho"). Container type comes
+                  from this record's own col_3 (Type); marker colours come
+                  from `values` and update live as the form below is filled
+                  in. Gated on checklists.length — nothing to show for a
+                  record with no inspection fields at all (e.g. identityOnly,
+                  already excluded above). */}
+              {!identityOnly && !data?._skipped && stageNumber === INSPECTION_CHECKLIST_STAGE && checklists.length > 0 && (
+                <Suspense fallback={<p className={styles.sectionHint}>Loading 3D view…</p>}>
+                  <Inspection3DView containerType={data?.col_3} checklists={checklists} values={values} />
+                </Suspense>
               )}
 
               {!identityOnly && !data?._skipped && checklists.map((c) => (
@@ -1013,6 +1035,9 @@ const GATE_IN_STAGE = 7;
  *  _isCeoRequired (REWORKED 2026-10-07: HOD -> Accounts -> CEO, CEO
  *  conditional on the SD Amount to be Refunded). */
 const SD_REFUNDS_STAGE = 11;
+/** Inspection Checklist, displayed as "Stage 4" — the only stage that gets
+ *  the live 3D model (see Inspection3DView.jsx). */
+const INSPECTION_CHECKLIST_STAGE = 3;
 
 /** True once this refund has cleared every approval its OWN amount bracket
  *  requires — Accounts, when CEO doesn't apply; CEO, when it does. Must be
@@ -1117,6 +1142,55 @@ function OutstandingPanel({ data, loading }) {
      with no document renders as "No file" and stays in the table. */
   const fileFor = (i) => i.invoiceUrl || invoiceFiles[normInvoiceNo(i.invoiceNo)] || '';
 
+  /* Same real money the main table excludes (an open invoice for a
+     multi-container client that neither source names a container for — see
+     accountsApi.service.js's 2026-11-17 fix) — but as an actual table, not a
+     single summary line. Explicit follow-up ("all data not show table
+     format"): a sentence saying "10 invoices, ₹7,48,329" with no rows behind
+     it reads as a vague total nobody can check; this is every one of them,
+     same columns as the main table except Container No(s), which by
+     definition none of these carries. */
+  const unattributedTable = data.clientUnattributedInvoices?.length > 0 && (
+    <>
+      <p className={styles.sectionHint} style={{ marginTop: 16 }}>
+        {`Other invoices for this client — container not identified (${inr(data.clientUnattributedOutstanding)} across ${data.clientUnattributedCount}):`}
+      </p>
+      <table className={styles.invTable}>
+        <colgroup>
+          <col className={styles.colInvoice} />
+          <col className={styles.colMonth} />
+          <col className={styles.colAmount} />
+          <col className={styles.colAge} />
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">Invoice No.</th>
+            <th scope="col" className={styles.tCenter}>Month</th>
+            <th scope="col" className={styles.tRight}>Total Amount</th>
+            <th scope="col" className={styles.tCenter}>Age</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.clientUnattributedInvoices.map((i, k) => (
+            <tr key={`${i.invoiceNo}-${k}`}>
+              <td className={styles.invNo}>{i.invoiceNo || '—'}</td>
+              <td className={styles.tCenter}>{i.period || '—'}</td>
+              <td className={styles.tRight}>{inr(i.amount)}</td>
+              <td className={styles.tCenter}>{i.overdueDays ? `${i.overdueDays}d` : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={2}>Total</td>
+            <td className={styles.tRight}>{inr(data.clientUnattributedOutstanding)}</td>
+            <td />
+          </tr>
+        </tfoot>
+      </table>
+    </>
+  );
+
   /* The API is the only source. An empty response says so plainly rather than
      falling back to any other data — there is no sheet fallback by design. */
   if (!data.invoiceTotals?.length) {
@@ -1128,6 +1202,7 @@ function OutstandingPanel({ data, loading }) {
             ? `Could not reach Accounts & Collection — ${data.error}`
             : 'No invoices found.'}
         </p>
+        {unattributedTable}
       </>
     );
   }
@@ -1162,7 +1237,6 @@ function OutstandingPanel({ data, loading }) {
             <col className={styles.colMonth} />
             <col className={styles.colAmount} />
             <col className={styles.colAge} />
-            <col className={styles.colAttachment} />
           </colgroup>
           <thead>
             <tr>
@@ -1171,7 +1245,6 @@ function OutstandingPanel({ data, loading }) {
               <th scope="col" className={styles.tCenter}>Month</th>
               <th scope="col" className={styles.tRight}>Total Amount</th>
               <th scope="col" className={styles.tCenter}>Age</th>
-              <th scope="col" className={styles.tCenter}>Invoice</th>
             </tr>
           </thead>
           <tbody>
@@ -1208,24 +1281,6 @@ function OutstandingPanel({ data, loading }) {
                 <td className={styles.tCenter}>{i.period || '—'}</td>
                 <td className={styles.tRight}>{inr(i.amount)}</td>
                 <td className={styles.tCenter}>{i.overdueDays ? `${i.overdueDays}d` : '—'}</td>
-                {/* That invoice's own document. Disabled marker, not a hidden
-                    row, when the invoice genuinely has no file. */}
-                <td className={styles.tCenter}>
-                  {fileFor(i)
-                    ? (
-                      <a
-                        className={styles.invFileBtn}
-                        href={fileFor(i)}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={`Open invoice ${i.invoiceNo}`}
-                        aria-label={`Open invoice ${i.invoiceNo}`}
-                      >
-                        <Icon name="external" />
-                      </a>
-                    )
-                    : <span className={styles.invNoFile} title="No invoice file">No file</span>}
-                </td>
               </tr>
             ))}
           </tbody>
@@ -1233,7 +1288,7 @@ function OutstandingPanel({ data, loading }) {
             <tr>
               <td colSpan={3}>Grand Total</td>
               <td className={styles.tRight}>{inr(data.grandTotal)}</td>
-              <td colSpan={2} />
+              <td />
             </tr>
           </tfoot>
         </table>
@@ -1267,6 +1322,8 @@ function OutstandingPanel({ data, loading }) {
           )}
         </div>
       )}
+
+      {unattributedTable}
     </>
   );
 }
@@ -1708,7 +1765,7 @@ function FormSections({ fields, values, pendingFiles, disabled, onChange, onFile
                 key={f.key}
                 field={f}
                 value={values[f.key]}
-                pendingFileName={pendingFiles[f.key]?.fileName}
+                pendingFile={pendingFiles[f.key]}
                 onChange={(v) => onChange(f.key, v)}
                 onFile={(payload) => onFile(f.key, payload)}
                 disabled={disabled}
@@ -2132,7 +2189,7 @@ function MoveToStageSection({ containerNo, rowNum, canMove, fmsChecked, fmsFound
             <Field
               field={{ key: 'proofFile', label: 'Proof (Invoice / Sale Confirmation)', type: 'file', required: true }}
               value=""
-              pendingFileName={proofFile?.fileName}
+              pendingFile={proofFile}
               onFile={setProofFile}
               onChange={() => {}}
               disabled={locked}
@@ -2391,7 +2448,10 @@ function ChecklistTable({ title, columnLabel, rows, footer = [], values, pending
             const damaged = isFaultStatus(selected);
 
             return (
-              <tr key={row.n}>
+              // id: Inspection3DView's marker click scrolls here (jsx on
+              // row.status.key, unique across both the inspection and
+              // machine tables — no column-number overlap between them).
+              <tr key={row.n} id={`insp3d-row-${statusField.key}`}>
                 <td className={styles.inspPoint}>
                   <span className={styles.inspNum}>{row.n}.</span>{row.item}
                 </td>
@@ -2419,7 +2479,7 @@ function ChecklistTable({ title, columnLabel, rows, footer = [], values, pending
                       <Field
                         field={{ ...f, label: '' }}
                         value={values[f.key]}
-                        pendingFileName={pendingFiles[f.key]?.fileName}
+                        pendingFile={pendingFiles[f.key]}
                         onChange={(v) => onChange(f.key, v)}
                         onFile={(payload) => onFile(f.key, payload)}
                         disabled={disabled}
@@ -2543,7 +2603,7 @@ function CabinTable({ rows, size, values, pendingFiles, disabled, onChange, onFi
                       <Field
                         field={{ ...f, label: '' }}
                         value={values[f.key]}
-                        pendingFileName={pendingFiles[f.key]?.fileName}
+                        pendingFile={pendingFiles[f.key]}
                         onChange={(v) => onChange(f.key, v)}
                         onFile={(payload) => onFile(f.key, payload)}
                         disabled={disabled}
@@ -2701,8 +2761,9 @@ function StageRemarks({ containerNo, leaseId, stageNumber }) {
   );
 }
 
-export function Field({ field, value, pendingFileName, onChange, onFile, disabled }) {
+export function Field({ field, value, pendingFile, onChange, onFile, disabled }) {
   const { label, type, options = [], required } = field;
+  const pendingFileName = pendingFile?.fileName;
 
   if (type === 'text') {
     return (
@@ -2812,6 +2873,13 @@ export function Field({ field, value, pendingFileName, onChange, onFile, disable
       </Labeled>
     );
   }
+  if (type === 'image') {
+    return (
+      <Labeled label={label} required={required}>
+        <ImageFieldInput value={value} pendingFile={pendingFile} onFile={onFile} disabled={disabled} />
+      </Labeled>
+    );
+  }
   if (type === 'imagesToPdf') {
     return (
       <Labeled label={label} required={required}>
@@ -2903,6 +2971,68 @@ function FileFieldInput({ value, pendingFileName, onFile, disabled }) {
 
       {!disabled && <input type="file" onChange={handleChange} disabled={busy} hidden />}
     </label>
+  );
+}
+
+/**
+ * Same drop-zone as FileFieldInput, PLUS an inline thumbnail — for the
+ * inspection/machine-check/cabin checklist's own damage photo fields only
+ * (stageFields.js's `type: 'image'`, not the generic `'file'` every other
+ * upload still uses). Explicit request 2026-11-17 ("damage raha tho image
+ * woh hai na mujhe mere iske niche dikhne chahiye hai" — a damaged point's
+ * photo should show right there, not just a "View" link one click away).
+ *
+ * Pending (just chosen, not yet saved) previews straight from the base64
+ * payload already held in `pendingFiles` state — accept converts it to that
+ * exact data URI before onFile is even called, so no extra read/object-URL
+ * bookkeeping is needed here. Saved (value is the real uploaded URL) renders
+ * that URL directly.
+ */
+function ImageFieldInput({ value, pendingFile, onFile, disabled }) {
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+
+  const take = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const base64Data = await readFileAsBase64(file);
+      onFile({ base64Data, mimeType: file.type || 'application/octet-stream', fileName: file.name });
+    } finally { setBusy(false); }
+  };
+  const handleChange = async (e) => { await take(e.target.files?.[0]); e.target.value = ''; };
+
+  const uploaded = value && /^https?:\/\//.test(value);
+  const pendingSrc = pendingFile ? `data:${pendingFile.mimeType || 'application/octet-stream'};base64,${pendingFile.base64Data}` : '';
+  const previewSrc = pendingSrc || (uploaded ? value : '');
+  const state = busy ? 'busy' : pendingFile ? 'pending' : uploaded ? 'done' : 'empty';
+
+  return (
+    <div className={styles.imageField}>
+      <label
+        className={`${styles.drop} ${styles[`drop_${state}`]} ${dragging ? styles.dropOver : ''}`}
+        onDragOver={(e) => { if (!disabled) { e.preventDefault(); setDragging(true); } }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => { if (disabled) return; e.preventDefault(); setDragging(false); take(e.dataTransfer.files?.[0]); }}
+      >
+        <Icon name={state === 'done' ? 'check' : 'upload'} className={styles.dropIcon} />
+        <span className={styles.dropText}>
+          {state === 'busy' && 'Reading…'}
+          {state === 'pending' && (<><span className={styles.dropName}>{pendingFile.fileName}</span><span className={styles.dropHint}>Not saved yet</span></>)}
+          {state === 'done' && (<><span className={styles.dropName}>Photo attached</span><span className={styles.dropHint}>Click to replace</span></>)}
+          {state === 'empty' && (<><span className={styles.dropName}>Upload</span><span className={styles.dropHint}>or drop a photo</span></>)}
+        </span>
+        {!disabled && <input type="file" accept="image/*" onChange={handleChange} disabled={busy} hidden />}
+      </label>
+      {/* The point of this component: the photo itself, right here, not just
+          a link to click through to. Clicking it still opens the full-size
+          original in a new tab. */}
+      {previewSrc && (
+        <a href={previewSrc} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+          <img src={previewSrc} alt="Damage photo" className={styles.imagePreview} />
+        </a>
+      )}
+    </div>
   );
 }
 

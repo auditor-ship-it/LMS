@@ -36,6 +36,12 @@
 .rail { display: flex; flex-direction: column; gap: 14px; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .panelTitle { margin: 0; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); }
+/* Explicit request 2026-11-16: the Dashboard list only shows a compact
+   "Sent Back" chip — the full remark is surfaced here instead, inside the
+   record. Same red/warn tone the chip itself uses. */
+.sentBackPanel { background: var(--error-bg); border-color: var(--error); }
+.sentBackPanel .panelTitle { color: var(--error); }
+.sentBackText { margin: 0; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .empty { margin: 0; font-size: 12.5px; color: var(--text-3); }
 .agreementRow { display: flex; flex-wrap: wrap; gap: 24px; margin-bottom: 14px; }

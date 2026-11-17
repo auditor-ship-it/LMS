@@ -133,6 +133,21 @@
 .danger { background: var(--error-bg); color: var(--error); }
 .success { background: var(--success-bg); color: var(--success); }
 
+/* Sent Back chip — explicit follow-up 2026-11-16 ("send back chip small
+   show"): plain .status was wrapping onto two lines here (the warning icon
+   + "Sent Back" at 11px/3px-10px padding was too wide for this row's
+   remaining space once the TAT/delay text already sits beside it). Smaller
+   font/padding and a hard nowrap keeps it one compact line. */
+.sentBackChip {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  font-size: 9.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  flex: none;
+}
+
 /* Visible Entry/TAT/Delay for the current stage — sits beside the client
    name (.clientRow) now; see currentTatStage's own doc comment in
    OrderBookView.jsx. */

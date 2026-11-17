@@ -228,7 +228,7 @@ const CABIN_FIELDS = CABIN_ITEMS.flatMap((c, i) => {
   return [
     { key: availKey, label: c.item, type: 'number', showIf: isSiteCabin, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'available' } },
     { key: statusKey, label: `${c.item} — Condition`, type: 'radio', options: CABIN_STATUS, showIf: shortfall, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'status' } },
-    { key: `col_${c.photoCol}`, label: `${c.item} — Photo`, type: 'file', showIf: needsDetail, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'photo' } },
+    { key: `col_${c.photoCol}`, label: `${c.item} — Photo`, type: 'image', showIf: needsDetail, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'photo' } },
     { key: `col_${c.remarkCol}`, label: `${c.item} — Remark`, type: 'text', showIf: needsDetail, cabin: { n: i + 1, item: c.item, qty: c.qty, role: 'remark' } }
   ];
 });
@@ -256,7 +256,13 @@ function checklistFields({ group, n, item, base, remarkCol, options, reeferOnly 
   return [
     { key: statusKey, label: item, type: 'radio', options, showIf: reeferOnly ? applies : undefined, inspection: meta('status') },
     { key: `col_${base + 1}`, label: `${item} — Estimate Value`, type: 'number', showIf: needsDetail, inspection: meta('estimate') },
-    { key: `col_${base + 2}`, label: `${item} — Photo`, type: 'file', showIf: needsDetail, inspection: meta('photo') },
+    /* type 'image', not plain 'file' — explicit request 2026-11-17 ("damage
+       raha tho image woh hai na mujhe mere iske niche dikhne chahiye hai"):
+       this renders an inline thumbnail (ImageFieldInput in
+       StageDetailModal.jsx) instead of just a "View" link. Covers BOTH the
+       Container Inspection Checklist and Machine Check tables — both build
+       their points through this same function. */
+    { key: `col_${base + 2}`, label: `${item} — Photo`, type: 'image', showIf: needsDetail, inspection: meta('photo') },
     { key: `col_${remarkCol}`, label: `${item} — Remarks`, type: 'text', showIf: needsDetail, inspection: meta('remark') }
   ];
 }

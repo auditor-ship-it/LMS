@@ -265,18 +265,40 @@ export function PipelineDashboard({ onOpenTab }) {
      extraction; see the per-branch comments that used to sit inline here for
      the full reasoning (pendingStages vs currentStageNum; the hod/accounts/
      ceo composite-key fix for a container with two off-lease rows). */
+  /* BUG FOUND AND FIXED 2026-11-17 ("one pending par data nahi show kar raha
+   * hai" — the Stage 6B card read 1, but the filtered list under it showed
+   * 0 records): a bulk "Fill one SD Refund form for all" submission
+   * (BulkRefundModal) writes ONE Offlease Bills row covering SEVERAL
+   * containers — Container No and Off-Lease ID both land as one comma/
+   * newline-joined cell (e.g. "TRIU6681671,MYRU4519115\nGESU9563904\n
+   * SZLU9915829"), exactly like every other multi-container cell in this
+   * app (see backend's own splitContainers, same [,;\n]+ convention). This
+   * block was comparing that WHOLE joined string against one container's
+   * own plain number — never equal, so a bulk-submitted row's own
+   * containers could never match here, no matter how many were on it.
+   * Single-container rows (the overwhelming majority) were never affected —
+   * splitting a string with no separator just returns the same one string.
+   */
+  const splitMulti = (raw) => String(raw || '').split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
   const refundWaitingSets = useMemo(() => {
     const sets = {};
     for (const stage of ['hod', 'accounts', 'ceo']) {
       const matching = refundRows.filter((r) => r.currentStage === stage);
-      sets[stage] = {
-        composite: new Set(
-          matching
-            .filter((r) => String(r.offLeaseId || '').trim())
-            .map((r) => `${String(r.containerNo || '').trim().toUpperCase()}|${String(r.offLeaseId || '').trim().toUpperCase()}`)
-        ),
-        containerOnly: new Set(matching.map((r) => String(r.containerNo || '').trim().toUpperCase()))
-      };
+      const composite = new Set();
+      const containerOnly = new Set();
+      for (const r of matching) {
+        const containers = splitMulti(r.containerNo);
+        const leaseIds = splitMulti(r.offLeaseId);
+        containers.forEach((c, i) => {
+          const cUpper = c.toUpperCase();
+          containerOnly.add(cUpper);
+          // Paired positionally — container i's own Off-Lease ID is leaseIds[i].
+          // A row with fewer lease IDs than containers (data drift) still gets
+          // every container into containerOnly; it just has no composite key.
+          if (leaseIds[i]) composite.add(`${cUpper}|${leaseIds[i].toUpperCase()}`);
+        });
+      }
+      sets[stage] = { composite, containerOnly };
     }
     return sets;
   }, [refundRows]);

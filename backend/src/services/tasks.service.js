@@ -20,6 +20,7 @@ import { getExpiryDataByFilter } from './expiry.service.js';
 import { getVerifyData } from './verify.service.js';
 import { getOffLeaseStageCounts, getOffLeaseData } from './offlease.service.js';
 import { getRefundStageCounts } from './refunds.service.js';
+import { countNewLeaseQueuePending } from './newLeaseQueue.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { salePersonScopeFor, scopeCacheKey } from './salePersonAccess.service.js';
 
@@ -45,6 +46,8 @@ const MY_TASK_KEY_META = {
   receivables: ['Pending Receivables', 'receivablesPending'],
   renewPending: ['Renew Pending', 'renewPending'],
   renewApprovalPending: ['Renew Approval Pending', 'renewApprovalPending'],
+  // Added 2026-11-16 — "New Lease" sidebar badge (newLeaseQueue.service.js).
+  newLeasePending: ['New Lease Pending', 'newLeasePending'],
   /* Labels only, updated 2026-08-18 to match the live workflow order in
    * frontend/src/constants/stages.js (WORKFLOW = [1,6,7,3,5,8]) — see the
    * identical fix and full explanation in permissions.config.js's
@@ -107,7 +110,7 @@ export async function getMyTasks(user, force) {
   return cacheGetOrLoad(cacheKey, 90, async () => {
     const out = {
       pendingVerify: 0, pendingApprovals: 0, offleaseApproval: 0,
-      expiring7: 0, expired: 0, renewPending: 0, renewApprovalPending: 0,
+      expiring7: 0, expired: 0, renewPending: 0, renewApprovalPending: 0, newLeasePending: 0,
       olStage1: 0, olStage1Hold: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
       olStage11: 0, sdRefundsHod: 0, sdRefundsAccounts: 0, sdRefundsCeo: 0,
       /* Which cards the caller should see, or null for "show everything" (the
@@ -148,6 +151,9 @@ export async function getMyTasks(user, force) {
        Same source (filter: 'approval') the ApprovalPendingPage.jsx list
        itself reads, so the badge always matches the page it links to. */
     try { out.renewApprovalPending = ((await getExpiryDataByFilter('approval', user)).data || []).length; } catch (e) { /* noop */ }
+
+    /* "New Lease" sidebar badge — explicit request 2026-11-16. */
+    try { out.newLeasePending = await countNewLeaseQueuePending(); } catch (e) { /* noop */ }
 
     /* olStageN keys map 1:1 to INTERNAL stage numbers — see the mapping comment
        on MY_TASK_KEY_META above. Stages 2 and 4 are retired (no active queue,
