@@ -30,6 +30,8 @@ import { sendMail } from './email.service.js';
 import { signJwt, verifyJwt } from '../utils/jwtLite.js';
 import { env } from '../config/env.js';
 import { markOffLeaseSdRefundApproved, markOffLeaseSdRefundRejected, markOffLeaseSdRefundSubmitted } from './offlease.service.js';
+import { isCentral } from './centralSheets.service.js';
+import { enqueueSheetReplay } from './outbox.service.js';
 
 const REFUNDS_SHEET = SHEETS.REFUNDS;
 
@@ -609,6 +611,80 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
 }
 
 /**
+ * MONGO-FIRST — explicit report 2026-11-18 ("this issue I am facing again
+ * and again... the user should not be able to see this error, they can
+ * submit and move ahead... whatever sheets whenever sheets API is hit for
+ * any other feature as well... it should add the data afterwards"), live on
+ * an HOD decision hitting a Sheets quota error. Same Mongo-first + outbox-
+ * replay pattern this codebase already uses elsewhere (e.g. offlease
+ * .service.js's saveOffLeaseApprovalActionFast, offleaseRemarks.service.js's
+ * addOffLeaseRemark — see outbox.service.js's own header comment for the
+ * design) — an HOD/Accounts/CEO decision was the one Refunds action that
+ * never got it; see the new functions below.
+ *
+ * Re-derives the EXACT SAME `updates` array decideRefundApproval builds —
+ * not a second guess at it — from the Mongo mirror row instead of a live
+ * read, patches that mirror directly, and queues a replay of the real,
+ * unchanged decideRefundApproval to do the actual live-Sheets write (plus
+ * its own email notification and Off-Lease Stage 6 unlock) once Sheets is
+ * reachable. The guard check (`currentStage !== stage` -> INVALID_STATE)
+ * runs against the Mongo row here; the replay re-validates against the LIVE
+ * row when it actually runs, same double-check the Off-Lease Fast functions
+ * already rely on — the Mongo-ahead state here never short-circuits that.
+ */
+export async function decideRefundApprovalFast(rowNum, stage, decision, remarks, callerEmail, opts = {}) {
+  const cfg = STAGES[stage];
+  if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
+  if (decision !== 'approved' && decision !== 'rejected') throw new AppError('decision must be "approved" or "rejected"');
+  if (!safeStr(remarks).trim()) throw new AppError('Remarks are required.');
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return decideRefundApproval(rowNum, stage, decision, remarks, callerEmail, opts);
+  if (!opts.skipPermissionCheck) await checkActionPermission(cfg.permission, callerEmail);
+
+  const docs = await getMongoRowsWithKeys(REFUNDS_SHEET);
+  const found = docs.find((d) => d.key === `row_${rowNum - 2}`);
+  if (!found) throw notFound(`Refund entry row ${rowNum} not found`);
+  const row = found.row;
+  if (_mapRow(row, rowNum).currentStage !== stage) return 'INVALID_STATE';
+
+  const nextStage = (stage === 'accounts' && !_isCeoRequired(row[8])) ? null : cfg.next;
+  const stamp = dmyTime(new Date());
+  const status = decision === 'approved' ? 'Approved' : 'Rejected';
+  const updates = [
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.statusCol)}${rowNum}`, values: [[status]] },
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.remarksCol)}${rowNum}`, values: [[remarks || '']] },
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.dateCol)}${rowNum}`, values: [[stamp]] },
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.approverCol)}${rowNum}`, values: [[callerEmail || '']] }
+  ];
+  // Same CEO-skip/next-stage-unlock bookkeeping decideRefundApproval writes
+  // — see that function's own doc comment for why. Review links are minted
+  // by the REPLAY instead of here: _mintRefundReviewLink's token is only as
+  // good as env.refundReviewSecret being set, and the live sheet cell is
+  // what the email notification (also sent by the replay) actually points
+  // to — nothing reads this one from Mongo before the replay runs anyway.
+  const CEO_SKIP_REMARK = `CEO approval automatically skipped because Amount to Pay is ₹${CEO_APPROVAL_THRESHOLD.toLocaleString('en-IN')} or below.`;
+  const isCeoSkip = stage === 'accounts' && decision === 'approved' && !nextStage;
+  if (decision === 'approved' && nextStage) {
+    updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES[nextStage].statusCol)}${rowNum}`, values: [['Pending']] });
+  } else if (isCeoSkip) {
+    updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.statusCol)}${rowNum}`, values: [['Skipped']] });
+    updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.remarksCol)}${rowNum}`, values: [[CEO_SKIP_REMARK]] });
+    updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.dateCol)}${rowNum}`, values: [[stamp]] });
+    updates.push({ range: `'${REFUNDS_SHEET}'!${colLetter(STAGES.ceo.approverCol)}${rowNum}`, values: [['System']] });
+  }
+
+  // MONGO FIRST — the decision is durable the instant this line completes,
+  // regardless of Sheets' own quota state. Every reader of this entry
+  // (RefundsPage, the Off-Lease Stage 6A/6B/6C panels) already reads the
+  // Mongo mirror, not live Sheets, so this is already the real answer for
+  // them from here on.
+  await patchMongoMirrorRow(REFUNDS_SHEET, rowNum, updates);
+  await enqueueSheetReplay('refunds.decideRefundApproval', [rowNum, stage, decision, remarks, callerEmail, opts], { actor: callerEmail });
+
+  return 'OK';
+}
+
+/**
  * "Send Back" — explicit request 2026-11-13, a separate action from Reject:
  * Reject is final/closed (this bill stays rejected, no resubmission path).
  * Send Back ends THIS bill the same way (status 'Sent Back', terminal — see
@@ -659,6 +735,35 @@ export async function decideRefundSendBack(rowNum, stage, remarks, callerEmail, 
 
     return 'OK';
   });
+}
+
+/** MONGO-FIRST counterpart of decideRefundSendBack — same pattern and same
+ *  reasoning as decideRefundApprovalFast above; this one has no CEO-skip or
+ *  next-stage branching to re-derive, just the 4-field status/remarks/date/
+ *  approver write. */
+export async function decideRefundSendBackFast(rowNum, stage, remarks, callerEmail, opts = {}) {
+  const cfg = STAGES[stage];
+  if (!cfg) throw new AppError(`stage must be one of: ${Object.keys(STAGES).join(', ')}`);
+  if (!safeStr(remarks).trim()) throw new AppError('Remarks are required.');
+  if (isCentral()) return decideRefundSendBack(rowNum, stage, remarks, callerEmail, opts);
+  if (!opts.skipPermissionCheck) await checkActionPermission(cfg.permission, callerEmail);
+
+  const docs = await getMongoRowsWithKeys(REFUNDS_SHEET);
+  const found = docs.find((d) => d.key === `row_${rowNum - 2}`);
+  if (!found) throw notFound(`Refund entry row ${rowNum} not found`);
+  if (_mapRow(found.row, rowNum).currentStage !== stage) return 'INVALID_STATE';
+
+  const stamp = dmyTime(new Date());
+  const updates = [
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.statusCol)}${rowNum}`, values: [['Sent Back']] },
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.remarksCol)}${rowNum}`, values: [[remarks]] },
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.dateCol)}${rowNum}`, values: [[stamp]] },
+    { range: `'${REFUNDS_SHEET}'!${colLetter(cfg.approverCol)}${rowNum}`, values: [[callerEmail || '']] }
+  ];
+  await patchMongoMirrorRow(REFUNDS_SHEET, rowNum, updates);
+  await enqueueSheetReplay('refunds.decideRefundSendBack', [rowNum, stage, remarks, callerEmail, opts], { actor: callerEmail });
+
+  return 'OK';
 }
 
 /**
