@@ -127,27 +127,39 @@
 .viewTab:hover { color: var(--text); }
 .viewTabActive { color: var(--text); border-bottom-color: var(--warn, #e0a800); }
 
+/* Explicit request 2026-11-18 ("scrolling mat do, thoda font chota karo...
+   one view table dikhe"): View 2 grew to 8 columns and needed horizontal
+   scroll to see "With" at all. table-layout: fixed + explicit column widths
+   (below) + a smaller font/tighter padding are what actually fit it in one
+   view — overflow-x stays as a safety net for a narrow window, not the
+   normal case any more. */
 .tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
 
-.table { width: 100%; border-collapse: collapse; font-size: 13px; white-space: nowrap; }
+.table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11.5px; }
 
 .table thead th {
   text-align: left;
-  padding: 9px 14px;
+  padding: 7px 9px;
   background: var(--surface-2);
   color: var(--text-2);
   font-family: var(--f-display);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table tbody td {
-  padding: 10px 14px;
+  padding: 7px 9px;
   border-bottom: 1px solid var(--line);
   color: var(--text);
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table tbody tr:last-child td { border-bottom: none; }
@@ -157,9 +169,43 @@
 .leaseId { font-family: var(--f-mono); color: var(--text-2); }
 .container { font-family: var(--f-mono); font-weight: 600; }
 
-.actionCell { text-align: right; white-space: nowrap; }
-.doneTag { color: var(--success); font-weight: 600; font-size: 12.5px; }
-.rejectedTag { color: var(--error); font-weight: 600; font-size: 12.5px; }
+.actionCell { text-align: right; white-space: nowrap; overflow: visible; }
+.doneTag { color: var(--success); font-weight: 600; font-size: 11px; }
+.rejectedTag { color: var(--error); font-weight: 600; font-size: 11px; }
+
+/* View 2's Status/Delay/Main hold-up/With columns — explicit request
+   2026-11-18 (reference order-tracker table). Same tone palette OrderBookView's
+   own status pill already uses (.info/.warn/.danger/.success there), so a
+   record reads the same status colour in either view — a status colour is
+   never invented fresh for one presentation only. */
+.statusPill {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.info { background: var(--accent-soft); color: var(--accent); }
+.warn { background: var(--warn-bg, #fdf0d0); color: var(--warn, #8a6100); }
+.danger { background: var(--error-bg); color: var(--error); }
+.success { background: var(--success-bg); color: var(--success); }
+
+.delayLate { color: var(--error); font-weight: 800; white-space: nowrap; }
+.delayOk { color: var(--success); font-weight: 800; white-space: nowrap; }
+
+/* Main hold-up — real running commentary (a remark, or the current stage's
+   own name as a fallback), which runs long; clipped to one line with the
+   full text on hover rather than wrapping the row tall or truncating with
+   no way to read the rest. */
+/* Width/ellipsis now come from the shared .table td rule + this column's own
+   <col> width (colgroup, JSX) under table-layout: fixed — only the colour is
+   this column's own. */
+.holdUp { color: var(--text-2); }
 
 /* Compact inline stepper — 9 numbered nodes (Stage 1, Approval gate "A",
    Stage 2..8) joined by a thin connector line, same status language (done/

@@ -21,7 +21,7 @@ import { settleSequentially, describeBulkFailures } from '../../utils/bulkRenewa
 import { STAGE_FIELDS } from '../stages/stageFields.js';
 import { BulkStage5Modal } from '../stages/BulkStage5Modal.jsx';
 import { Highlight } from './Highlight.jsx';
-import { OrderBookView, ChipStrip, matchRefundAndTat } from './OrderBookView.jsx';
+import { OrderBookView, matchRefundAndTat, statusOf, currentTatStage } from './OrderBookView.jsx';
 import { BulkRefundModal } from './BulkRefundModal.jsx';
 import styles from './PipelineDashboard.module.css';
 
@@ -36,6 +36,47 @@ const SD_REFUNDS_STAGE_KEY = 11;
 const FINAL_BILLING_STAGE_KEY = 5;
 
 const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
+
+/* View 2's own "With" column — explicit request 2026-11-18 (reference
+ * screenshot showing a dark order-tracker table with "With: Logistics B /
+ * Trans" / "QA B" columns, "mere data ke according bana, jo mere data mai
+ * hai wese" — build it off THIS app's own real data, not invented fields).
+ * statusOf's own `tab` already distinguishes every stage AND the SD Refund
+ * sub-stages precisely — these owner names are the exact same literals the
+ * KPI cards above already show as each card's own footnote (StatCard
+ * `footnote` props elsewhere in this file); kept in one place here so both
+ * stay in sync by construction rather than by two people remembering to
+ * update two spots. 'stage${N}' keys mirror statusOf's own tab format. */
+const OWNER_BY_TAB = {
+  stage1: 'Christopher', approval: 'Pushpalata', stage6: 'Kshirod Khatua',
+  stage7: 'Nikhil', stage3: 'Sitaram', stage5: 'Shivani', stage11: 'Christopher',
+  sdRefundsHod: 'Pushpalata', sdRefundsAccounts: 'Shivani', sdRefundsCeo: 'Akash Sir',
+  stage8: 'FMS Done'
+};
+
+/** Plain text from a remark's stored HTML (RichTextEditor output) — same
+ *  "Main hold-up" column, one line, no markup. */
+function stripHtml(html) {
+  if (!html) return '';
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return (div.textContent || '').trim();
+}
+
+/** "Main hold-up" — the record's own running remark (RemarkCell's data,
+ *  already bulk-loaded on every dashboard item) when there is one; the Sent
+ *  Back note when there isn't but this record has one; otherwise just the
+ *  current stage's own name, so the column is never blank even for a record
+ *  nobody has written anything about yet. Real data only — no invented
+ *  "hold-up reason" field exists in Off-Lease, unlike the reference table's
+ *  own app. */
+function holdUpFor(it, status) {
+  const remark = stripHtml(it.remarkHtml);
+  if (remark) return remark;
+  const stage1 = it.stages?.find((s) => s.stage === 1);
+  if (!stage1?.done && stage1?.remark) return stage1.remark;
+  return status.label;
+}
 
 /* The fixed per-stage TAT budget (target, not a computed average) — mirrors
    offLeaseTatTracking.service.js's own TAT_BUDGETS_MS exactly (1 Day / 3
@@ -314,6 +355,18 @@ export function PipelineDashboard({ onOpenTab }) {
     if (key === 'approval') return it.stageClass === 'approval';
     if (key === 'done') return it.stageClass === 'done';
     if (key === 'hold') return !!it.onHold;
+    // "Stage 4.5 · Billing Send Back" — see that StatCard's own doc comment.
+    const isBillingSendBack = !!it.billingSendBackNote && it.currentStageNum === 1;
+    if (key === 'billingSendBack') return isBillingSendBack;
+    /* Explicit follow-up 2026-11-18 ("stage 1 mai fir stage 5 ke send back
+       nahi dikhne chahiye hai"): now that Billing Send Back has its own card
+       above, the plain Stage 1 card/list must not ALSO show the same
+       records — they'd double-count across the two cards, and a reader
+       filtering "Stage 1" would see the "⚠ Final Billing Send Back" badge
+       mixed in right after being told that has its own dedicated place.
+       Scoped to key === 1 specifically (not pendingStages generally) so
+       nothing else that reads pendingStages elsewhere is affected. */
+    if (key === 1 && isBillingSendBack) return false;
     if (key === 'hod' || key === 'accounts' || key === 'ceo') {
       const { composite, containerOnly } = refundWaitingSets[key];
       const container = String(it.container || '').trim().toUpperCase();
@@ -362,10 +415,14 @@ export function PipelineDashboard({ onOpenTab }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, debouncedSearch, stageFilter, groupFilter, monthFilter, salePersonFilter, refundWaitingSets, itemsByContainerCount]);
 
-  /* View 2's own chip strip (ChipStrip, same chips View 1's cards show) needs
-     each row's matched refundEntry/tatRecord — OrderBookView.jsx's own
-     exported matchRefundAndTat does the same composite container+Lease-ID
-     matching that component's internal useMemos use, just standalone. */
+  /* View 2's own Status/Delay/Main hold-up columns need each row's matched
+     refundEntry/tatRecord (statusOf/currentTatStage both take one) —
+     OrderBookView.jsx's own exported matchRefundAndTat does the same
+     composite container+Lease-ID matching that component's internal
+     useMemos use, just standalone. (View 2 showed the full chip strip here
+     too until 2026-11-18 — explicit request to drop it once the Status
+     column already said the one thing that mattered, "where is it
+     pending".) */
   const fmsMatch = useMemo(() => matchRefundAndTat(filtered, refundRows, tatRecords), [filtered, refundRows, tatRecords]);
 
   /* Group totals for the 3 STAGE_GROUPS cards — a distinct count of items
@@ -459,6 +516,7 @@ export function PipelineDashboard({ onOpenTab }) {
     key === 'approval' ? 'Pending approval'
       : key === 'done' ? 'Completed'
         : key === 'hold' ? 'On hold'
+          : key === 'billingSendBack' ? 'Stage 4.5 · Billing Send Back'
           : key === 'hod' ? 'Stage 6A · HOD approval pending'
             : key === 'accounts' ? 'Stage 6B · Accounts approval pending'
               : key === 'ceo' ? 'Stage 6C · CEO approval pending'
@@ -534,7 +592,9 @@ export function PipelineDashboard({ onOpenTab }) {
           active={stageFilter === 'hold'} onClick={() => toggleFilter('hold')}
         />
         <StatCard size="sm"
-          icon={STAGE_ICONS[1]} label="Stage 1 · Off-Lease Intimation" value={kpis.byStage?.[1] ?? '—'} loading={loading} tint="info"
+          icon={STAGE_ICONS[1]} label="Stage 1 · Off-Lease Intimation"
+          value={kpis.byStage?.[1] != null ? kpis.byStage[1] - (kpis.billingSendBackPending ?? 0) : '—'}
+          loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 1)?.owner}
           active={stageFilter === 1} onClick={() => toggleFilter(1)}
         />
@@ -557,6 +617,21 @@ export function PipelineDashboard({ onOpenTab }) {
           icon={STAGE_ICONS[3]} label="Stage 4 · Inspection Checklist" value={kpis.byStage?.[3] ?? '—'} loading={loading} tint="info"
           footnote={STAGES.find((s) => s.number === 3)?.owner}
           active={stageFilter === 3} onClick={() => toggleFilter(3)}
+        />
+        {/* Explicit request 2026-11-18 ("yah dono ek bich mai ek stage add
+            karo 4.5 billing send back... stage 1 ke form ka edit kar ke waps
+            send kare"): NOT a real new pipeline stage — these records are
+            genuinely still at Stage 1, same form, same owner, same column
+            data. This is a second, overlapping way to find the subset of
+            Stage 1's own queue that's sitting there specifically because
+            Final Billing sent it back for a correction, rather than a fresh
+            intimation — which the plain "Stage 1" card's 38 buries almost
+            entirely (20 of its 38 are these, confirmed live 2026-11-18).
+            Stage 1's own card/count is deliberately untouched. */}
+        <StatCard size="sm"
+          icon="refresh" label="Stage 4.5 · Billing Send Back" value={kpis.billingSendBackPending ?? '—'} loading={loading} tint="hold"
+          footnote={STAGES.find((s) => s.number === 1)?.owner}
+          active={stageFilter === 'billingSendBack'} onClick={() => toggleFilter('billingSendBack')}
         />
         <StatCard size="sm"
           icon={STAGE_ICONS[5]} label="Stage 5 · Final Billing" value={kpis.byStage?.[5] ?? '—'} loading={loading} tint="info"
@@ -722,7 +797,7 @@ export function PipelineDashboard({ onOpenTab }) {
           />
         )}
 
-        {view === 'table' && loading && <SkeletonTable columns={5} rows={8} />}
+        {view === 'table' && loading && <SkeletonTable columns={8} rows={8} />}
         {view === 'table' && !loading && error && <ErrorState message={error} onRetry={reload} />}
         {view === 'table' && !loading && !error && filtered.length === 0 && (
           <EmptyState message="No active off-lease containers" hint={search ? 'Try a different search' : undefined} />
@@ -731,13 +806,32 @@ export function PipelineDashboard({ onOpenTab }) {
         {view === 'table' && !loading && !error && filtered.length > 0 && (
           <div className={styles.tableWrap}>
             <table className={styles.table}>
+              {/* table-layout: fixed needs explicit widths to actually fit
+                  8 columns in one view without horizontal scroll (the ask
+                  this whole pass is for) — percentages of the table's own
+                  width, not literal px, same proportional approach
+                  LeaseExpiryPage.jsx's own colWidths already uses. */}
+              <colgroup>
+                {showSelectCol && <col style={{ width: '28px' }} />}
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '22%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
+              </colgroup>
               <thead>
                 <tr>
                   {showSelectCol && <th className={styles.selectCol} />}
                   <th>Lease ID</th>
                   <th>Container</th>
                   <th>Client</th>
-                  <th>Stage</th>
+                  <th>Status</th>
+                  <th>Delay</th>
+                  <th>Main hold-up</th>
+                  <th>With</th>
                   <th />
                 </tr>
               </thead>
@@ -750,6 +844,16 @@ export function PipelineDashboard({ onOpenTab }) {
                   const { refundEntry, tatRecord } = fmsMatch.get(it) || {};
                   const rowKey = `${it.leaseId || i}-${it.container}`;
                   const selectKey = `${it.leaseId || ''}-${it.container}`;
+                  /* Explicit request 2026-11-18 (reference order-tracker
+                     table — Status pill, Days-late, Main hold-up, With
+                     columns): status/currentTat are the exact same
+                     computations View 1's own cards already make per row
+                     (OrderBookView.jsx), reused here rather than
+                     reimplemented, so the two views can never disagree about
+                     what's going on with a given record. */
+                  const status = statusOf(it, refundEntry);
+                  const currentTat = currentTatStage(tatRecord, status.tatKey);
+                  const owner = status.tab ? (OWNER_BY_TAB[status.tab] || '—') : '—';
                   return (
                   /* Row itself opens the full record page (same destination
                      View 1's cards already use, openRecord) — explicit
@@ -773,7 +877,12 @@ export function PipelineDashboard({ onOpenTab }) {
                     <td className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={debouncedSearch} /></td>
                     <td className={styles.container}><Highlight text={it.container} query={debouncedSearch} /></td>
                     <td><Highlight text={it.clientName || '—'} query={debouncedSearch} /></td>
-                    <td><ChipStrip item={it} refundEntry={refundEntry} tatRecord={tatRecord} /></td>
+                    <td><span className={`${styles.statusPill} ${styles[status.tone]}`}>{status.label}</span></td>
+                    <td className={currentTat?.status === 'Delayed' ? styles.delayLate : styles.delayOk}>
+                      {currentTat?.delayLabel || '—'}
+                    </td>
+                    <td className={styles.holdUp} title={holdUpFor(it, status)}>{holdUpFor(it, status)}</td>
+                    <td>{owner}</td>
                     <td className={styles.actionCell}>
                       {it.stageClass === 'approval' ? (
                         <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); onOpenTab?.('approval'); }}>Approve</Button>

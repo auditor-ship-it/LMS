@@ -9,7 +9,7 @@
  * SHEETS.DEPLOYED, so it has no such dependency.
  */
 import { safeStr, parseDate } from '../utils/format.js';
-import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap, _resolveRenewalColumns } from './expiry.service.js';
+import { _expiryOrderNoMap, _resolveOrderNo, _deployedRawValues, getExpiryDataByFilter, _agreementStartDateMap, _resolveRenewalColumns, _stage1AddressMap } from './expiry.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { getPoAgreementHistoryByContainer } from './poAgreementHistory.service.js';
@@ -221,6 +221,10 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
   // Lease Expiry does, via the cached container -> Order No map built from
   // Operation sheet / New Lease (see expiry.service.js).
   const ordMap = await _expiryOrderNoMap();
+  // Billing Address / Dispatch Address — explicit request 2026-11-18, joined
+  // by the SAME Order No this table already resolves per row below (see
+  // _stage1AddressMap's own doc comment for the exact sheet/columns).
+  const addressMap = await _stage1AddressMap();
   // PO No / PO Validity — explicit request 2026-10-27 ("po no show for this
   // and po vaild show" / follow-up "PO Validity this is not shpoe for
   // deployed"): the exported "Deployed Containers" sheet had PO PDF (a
@@ -288,9 +292,18 @@ export async function getDeployedDetailData(monthLabel, category, typeFilter, si
       .filter(Boolean)
       .sort((a, b) => b.getTime() - a.getTime())[0] || null;
 
+    const orderNo = _resolveOrderNo(ordMap, row[0], row[1]); // client-disambiguated — see expiry.service.js's own doc comment
+    const address = addressMap[orderNo];
+
     containers.push({
       container: safeStr(row[0]),   // A = Container
-      orderNo: _resolveOrderNo(ordMap, row[0], row[1]), // client-disambiguated — see expiry.service.js's own doc comment
+      orderNo,
+      // Billing Address / Dispatch Address — explicit request 2026-11-18,
+      // from the Stage 1 order form, joined by Order No just above. Blank
+      // for any container whose Order No never resolved, or whose Stage 1
+      // form row never had an address filled in (no fabricated fallback).
+      billingAddress: address?.billingAddress || '',
+      dispatchAddress: address?.dispatchAddress || '',
       clientCode: safeStr(row[15]),  // P = Client Code
       clientName: safeStr(row[1]),   // B = Client Name
       size: safeStr(row[2]),         // C = Size

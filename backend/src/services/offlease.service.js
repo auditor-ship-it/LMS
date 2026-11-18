@@ -5758,7 +5758,10 @@ export async function getOffLeaseDashboardData(user) {
   const kpis = {
     active: 0, pendingApproval: 0, byStage: { ...byStageQueueCounts }, completedThisMonth: 0,
     /* Added for the dashboard's Hold/Outstanding scorecards — 2026-09-04. */
-    holdStage1: 0, outstandingCount: 0, outstandingWithDamageCount: 0
+    holdStage1: 0, outstandingCount: 0, outstandingWithDamageCount: 0,
+    // "Stage 4.5 · Billing Send Back" card — explicit request 2026-11-18, see
+    // the billingSendBackNote doc comment below for what it counts.
+    billingSendBackPending: 0
   };
 
   for (let i = 0; i < rows.length; i++) {
@@ -5813,6 +5816,12 @@ export async function getOffLeaseDashboardData(user) {
       || OL_MACHINE_POINTS.some((p) => _olIsFaultStatus(row[p.status]))
     );
 
+    /* See the item.billingSendBackNote doc comment below for what this is
+       and its known limitation. Declared here (not inline in the push below)
+       so the kpis.billingSendBackPending tally just past it can read the
+       same value. */
+    const billingSendBackNote = safeStr(row[316]).trim();
+
     items.push({
       /* BUG FOUND AND FIXED 2026-11-13: this item never carried its own sheet
        * row number, so every caller that opens a specific record from this
@@ -5857,6 +5866,28 @@ export async function getOffLeaseDashboardData(user) {
       raisedBy: safeStr(row[OL_STAGE_INFO[1].statusCol - 1]),
       stages: c.stages,
       approvalStatus: c.approvalStatus,
+      /* Explicit request 2026-11-18 ("final billing send back critopher ko
+       * jo bhi send back hua hai stage 5 se woh 1 pe jata hai na... stage
+       * final billing send back 5.0 mai dikhe"): the dashboard's existing
+       * "⚠ Sent Back" badge (OrderBookView.jsx) doesn't say WHICH stage sent
+       * the record back — Stage 1A (Approval) and Stage 5 (Final Billing)
+       * both route back to Stage 1, and 1A's own send-back already marks
+       * itself distinctly (approvalStatus === 'Sent Back', above). Billing's
+       * own saveOffLeaseSendBackFromBilling has no dedicated marker of its
+       * own — it reuses Stage 5's ordinary "Remark" form field (col_316) to
+       * carry its audit note. Reading it here, so the frontend can label a
+       * Stage-1-pending record as sent back from Final Billing specifically.
+       * Known limitation: if Stage 5 was reached, a plain remark typed there
+       * on an ordinary (non-send-back) run, and the record was LATER sent
+       * back via the SEPARATE Approval path instead, this would show a
+       * stale Billing remark that isn't actually what sent it back — a
+       * narrow case (Approval's own send-back already requires Stage 1
+       * already done, well before Billing is normally reached) accepted
+       * rather than adding a brand-new dedicated column for it. Only
+       * meaningful at all while Stage 1 itself reads pending (not done) —
+       * blank once Stage 1 is resubmitted, same window the Sent Back badge
+       * itself is shown in. */
+      billingSendBackNote,
       currentStage,
       stageClass,
       currentStageNum,
@@ -5888,6 +5919,18 @@ export async function getOffLeaseDashboardData(user) {
     // not accumulated here, see that comment for why.
     if (completed && _completedThisMonth(c.stages[7])) kpis.completedThisMonth++;
     if (onHold) kpis.holdStage1++;
+    /* Explicit request 2026-11-18 ("yah dono ek bich mai ek stage add karo
+       4.5 billing send back... stage 1 ke form ka edit kar ke waps send
+       kare"): a dedicated card/filter between Inspection (4) and Final
+       Billing (5) for records sitting at Stage 1 specifically BECAUSE Final
+       Billing sent them back (billingSendBackNote, above) — not a real new
+       pipeline stage with its own data/columns (it reuses Stage 1's own
+       form, same as every other Stage 1 record), just a way to find these
+       without it being lost inside the much larger, mostly-unrelated Stage 1
+       "Off-Lease Intimation" queue. Stage 1's own card/count is intentionally
+       UNCHANGED — this is an additional, overlapping view of the same
+       underlying queue, not a split/partition of it. */
+    if (billingSendBackNote && currentStageNum === 1) kpis.billingSendBackPending++;
     if (hasOutstanding) {
       kpis.outstandingCount++;
       if (hasDamage) kpis.outstandingWithDamageCount++;
