@@ -781,8 +781,10 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                   pipeline status instead. FMS Closed (Stage 7) won't complete
                   until this clears its final required approval for the
                   bill's amount bracket — see sdFinalApproved. */}
-              {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
-                <Stage5DataNote data={data?._stage5Data} />
+              {!identityOnly && stageNumber === SD_REFUNDS_STAGE && data?._stage5Data && (
+                <CollapsibleSection title="Stage 5 Data">
+                  <Stage5DataNote data={data._stage5Data} />
+                </CollapsibleSection>
               )}
 
               {!identityOnly && stageNumber === SD_REFUNDS_STAGE && (
@@ -1585,32 +1587,28 @@ export function Stage1DataNote({ data }) {
  */
 function Stage5DataNote({ data }) {
   if (!data) return null;
+  const rows = [
+    ['Status', data.status],
+    ['Rentals Billed Till Date', data.rentalsBilledTillDate],
+    ['Outstanding Amount', data.outstandingAmount],
+    ['Date - Billed Till', data.dateBilledTill],
+    ['Repair Charges Billed', data.repairChargesBilled],
+    ['Transport Cost Billed', data.transportCostBilled],
+    ['Adjust Security Deposit', data.adjustSecurityDeposit],
+    ['Final Payable Amount', data.finalPayableAmount],
+    ['Security Deposit Amount', data.securityDepositAmount],
+    ['Reconcile Entire Cycle', data.reconcileEntireCycle],
+    ['Ledger', data.ledgerFileUrl ? renderCellValue(data.ledgerFileUrl) : null],
+    ['Remark', data.remark]
+  ];
   return (
-    <div className={styles.outstandingRow}>
-      <div className={styles.outstandingCard}>
-        <span className={styles.outstandingLabel}>Outstanding Amount (Stage 5)</span>
-        <span className={styles.outstandingValue}>{data.outstandingAmount || '—'}</span>
-      </div>
-      <div className={styles.outstandingCard}>
-        <span className={styles.outstandingLabel}>Date - Billed Till (Stage 5)</span>
-        <span className={styles.outstandingValue}>{data.dateBilledTill || '—'}</span>
-      </div>
-      <div className={styles.outstandingCard}>
-        <span className={styles.outstandingLabel}>Final Payable Amount (Stage 5)</span>
-        <span className={styles.outstandingValue}>{data.finalPayableAmount || '—'}</span>
-      </div>
-      <div className={styles.outstandingCard}>
-        <span className={styles.outstandingLabel}>Security Deposit Amount (Stage 5)</span>
-        <span className={styles.outstandingValue}>{data.securityDepositAmount || '—'}</span>
-      </div>
-      <div className={styles.outstandingCard}>
-        <span className={styles.outstandingLabel}>Ledger (Stage 5)</span>
-        <span className={styles.outstandingValue}>{data.ledgerFileUrl ? renderCellValue(data.ledgerFileUrl) : '—'}</span>
-      </div>
-      <div className={styles.outstandingCard}>
-        <span className={styles.outstandingLabel}>Remark (Stage 5)</span>
-        <span className={styles.outstandingValue}>{data.remark || '—'}</span>
-      </div>
+    <div className={styles.plainFieldList}>
+      {rows.map(([label, value]) => (
+        <div className={styles.plainFieldRow} key={label}>
+          <span className={styles.plainFieldLabel}>{label}</span>
+          <span className={styles.plainFieldValue}>{value || '—'}</span>
+        </div>
+      ))}
     </div>
   );
 }
