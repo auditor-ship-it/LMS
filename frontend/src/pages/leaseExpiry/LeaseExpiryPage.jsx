@@ -10,7 +10,7 @@ import { usePermission } from '../../hooks/usePermission.js';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh.js';
 import { invalidate } from '../../shared/dataBus.js';
 import { apiErrorMessage, useAuth } from '../../shared/auth/index.js';
-import { fetchExpiryList, actionExpiryRowSync, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
+import { fetchExpiryList, actionExpiryRow, syncSalePersons, saveExpiryRowRemark } from '../../services/expiry.service.js';
 import { trackContainer } from '../../services/offLease.service.js';
 import { submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
@@ -412,16 +412,31 @@ export function LeaseExpiryPage() {
      buildDocPayload does. ALREADY_PROCESSED (a second Save on the same
      draft, once the status is already set) is expected and harmless here,
      not an error — only a genuine failure result should stop the save.
-     actionExpiryRowSync, not actionExpiryRow — BUG FOUND AND FIXED
-     2026-10-01: the plain (Fast) action writes Mongo immediately and the
-     real Sheets write ~7s later via the outbox, but saveRenewalDraft/
-     completeDocStage right below do their own LIVE Sheets read to confirm
-     this status — called back-to-back with no delay (confirmed live via
-     Sales OS's embed), that read still saw the OLD status and failed with
-     "Could not save — try again." The _sync variant waits for the real
-     Sheets write before returning, so the read after it is guaranteed to
-     see it — same fix already applied to the Sales OS SSO wizard's own
-     equivalent flow (salesOsRenewal.service.js). */
+     actionExpiryRow (plain, Mongo-first), NOT actionExpiryRowSync —
+     REVERTED 2026-11-18 (explicit report, "this issue I am facing again
+     and again... whatever sheets whenever sheets API is hit... it should
+     add the data afterwards", live on this exact Update Agreement form
+     hitting "Google Sheets API rate limit was hit"). The _sync call was the
+     one remaining LIVE Sheets write in this whole flow — everything else
+     (saveRenewalDraftFast/completeDocStageFast) was already Mongo-first.
+     ORIGINAL BUG FOUND 2026-10-01: back then, the plain (Fast) action wrote
+     Mongo immediately while the real Sheets write landed ~7s later via the
+     outbox, but saveRenewalDraft/completeDocStage right below did their own
+     LIVE Sheets read to confirm this status — called back-to-back with no
+     delay (confirmed live via Sales OS's embed), that read still saw the
+     OLD status and failed with "Could not save — try again." The _sync
+     variant waited for the real Sheets write before returning so the read
+     after it was guaranteed to see it.
+     WHY THE FIX ABOVE IS SAFE NOW: saveRenewalDraft/completeDocStage were
+     THEMSELVES switched to Mongo-first (saveRenewalDraftFast/
+     completeDocStageFast, 2026-10-23) after this comment was first written
+     — they now read the SAME Mongo mirror (getMongoRowsWithKeys) this call
+     just wrote to (same collection, same row key, same process), not a live
+     Sheets read. The race this _sync call existed to dodge no longer
+     exists; keeping it synchronous bought nothing but a live Sheets call
+     this whole flow didn't need. Sales OS's own equivalent wizard
+     (salesOsRenewal.service.js) had the identical "fix" applied for the
+     identical, now-stale reason — check whether it needs the same revert. */
   /* BUG FOUND AND FIXED 2026-11-04 ("data save nahi ho raha hai... Draft
      Agreement Value, Draft PO Renew Date, Draft PO Value pls chcek" — live
      on HNKU6097218): this function builds the same payload shape
@@ -434,7 +449,7 @@ export function LeaseExpiryPage() {
      dropped before it ever reached the backend — not a save failure, a
      field that was never sent in the first place. */
   const buildRenewPayload = async (containerNo, rowNum, payload) => {
-    const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', rowNum);
+    const statusResult = await actionExpiryRow(containerNo, new Date().toISOString(), 'Documents Pending', rowNum);
     if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
       throw new Error('Could not mark this container for renewal — try again.');
     }
@@ -528,7 +543,7 @@ export function LeaseExpiryPage() {
       ]);
       const results = await settleSequentially(selectedItems, async (it) => {
         const containerNo = it.row?.[0];
-        const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', it._rowNum);
+        const statusResult = await actionExpiryRow(containerNo, new Date().toISOString(), 'Documents Pending', it._rowNum);
         if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
           throw new Error('Could not mark this container for renewal — try again.');
         }
@@ -585,7 +600,7 @@ export function LeaseExpiryPage() {
       ]);
       const results = await settleSequentially(selectedItems, async (it) => {
         const containerNo = it.row?.[0];
-        const statusResult = await actionExpiryRowSync(containerNo, new Date().toISOString(), 'Documents Pending', it._rowNum);
+        const statusResult = await actionExpiryRow(containerNo, new Date().toISOString(), 'Documents Pending', it._rowNum);
         if (statusResult !== 'OK' && statusResult !== 'ALREADY_PROCESSED') {
           throw new Error('Could not mark this container for renewal — try again.');
         }

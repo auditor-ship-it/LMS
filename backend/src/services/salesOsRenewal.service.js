@@ -48,7 +48,7 @@ import { logger } from '../utils/logger.js';
 import { safeStr } from '../utils/format.js';
 import { normClientName } from '../utils/normalize.js';
 import {
-  _deployedRawValues, findHeaderCol, saveExpiryAction, completeDocStage, saveRenewalDraft,
+  _deployedRawValues, findHeaderCol, saveExpiryActionFast, completeDocStageFast, saveRenewalDraftFast,
   getExpiryDataByFilter, getRenewalLogReport
 } from './expiry.service.js';
 import { getCompanyContainers } from './renewalHandoff.service.js';
@@ -291,17 +291,31 @@ export async function confirmCompany(existingLeadId, companyName) {
 
 /**
  * Runs ONE container through the exact same sequence a human does manually:
- * Lease Expiry's "Renew" button (saveExpiryAction(..., 'Documents Pending',
- * ...)) IF it isn't already in that state, then Renew & Document's "Update
- * Agreement" form — either "Submit" (completeDocStage) or "Save" (draft,
- * saveRenewalDraft), per `mode`. Both write paths are called SYNCHRONOUSLY
- * against live Google Sheets (not the "Fast" Mongo-first variants the
- * internal routes use) deliberately: they each do their own live Sheets
- * read, and if saveExpiryAction had taken the Fast/outbox path, that read
- * could still see the OLD status for several seconds (env.outboxPollMs) and
- * fail with INVALID_STATE even though the transition "already happened."
- * Calling the plain versions back-to-back means the second call is
- * guaranteed to see the first call's write.
+ * Lease Expiry's "Renew" button (saveExpiryActionFast(..., 'Documents
+ * Pending', ...)) IF it isn't already in that state, then Renew & Document's
+ * "Update Agreement" form — either "Submit" (completeDocStageFast) or "Save"
+ * (draft, saveRenewalDraftFast), per `mode`.
+ *
+ * SWITCHED TO THE FAST (Mongo-first) VARIANTS 2026-11-18 (explicit report,
+ * "this issue I am facing again and again... whatever sheets whenever
+ * sheets API is hit... it should add the data afterwards" — the matching
+ * frontend flow, LeaseExpiryPage.jsx's buildRenewPayload, had the identical
+ * live-Sheets exposure and got the identical revert the same day; see that
+ * function's own doc comment for the full before/after). ORIGINAL REASONING
+ * (2026-10-01, now stale): these were called SYNCHRONOUSLY against live
+ * Google Sheets deliberately, because saveRenewalDraft/completeDocStage each
+ * did their own LIVE Sheets read, and if the step before had taken the
+ * Fast/outbox path, that read could still see the OLD status for several
+ * seconds (env.outboxPollMs) and fail with INVALID_STATE even though the
+ * transition "already happened." WHY THAT NO LONGER APPLIES: saveRenewalDraft/
+ * completeDocStage were themselves switched to Mongo-first
+ * (saveRenewalDraftFast/completeDocStageFast, 2026-10-23) — they now read the
+ * SAME Mongo mirror the step before just wrote to (same collection, same row
+ * key), not a live Sheets read, so the two Fast calls back-to-back see each
+ * other's writes immediately, same-process, no race. Running a whole batch of
+ * containers through this (runRenewalContainers below) used to mean one live
+ * Sheets write PER container with no safety net — exactly the shape most
+ * likely to exhaust the shared Sheets quota mid-batch.
  *
  * SUBMIT NO LONGER FINALIZES A RENEWAL (approval workflow, 2026-09-29):
  * completeDocStage now only stages the request and hands it to Pushpa
@@ -338,7 +352,7 @@ async function runContainerAction(user, valid, form, mode) {
   const currentStatus = safeStr(valid.status).trim().toLowerCase();
   if (currentStatus === '') {
     const nowIso = new Date().toISOString();
-    const moveResult = await saveExpiryAction(containerNo, nowIso, 'Documents Pending', user.email, valid.rowNum);
+    const moveResult = await saveExpiryActionFast(containerNo, nowIso, 'Documents Pending', user.email, valid.rowNum);
     if (moveResult === 'ALREADY_PROCESSED') {
       throw new AppError(`"${containerNo}" already has an action pending in Lease — refresh and try again.`);
     }
@@ -350,11 +364,11 @@ async function runContainerAction(user, valid, form, mode) {
   // to the Save/Submit call below.
 
   const result = mode === 'submit'
-    ? await completeDocStage(
+    ? await completeDocStageFast(
         containerNo, form.renewedDate, form.validTill, form.signedCopyUrl || '', form.remarks || '',
         user.email, form.poNo || '', form.poFileUrl || '', form.billingCycle || '', user.email, form.poValidity || '', valid.rowNum
       )
-    : await saveRenewalDraft(
+    : await saveRenewalDraftFast(
         containerNo, form.renewedDate || '', form.validTill || '', form.signedCopyUrl || '', form.remarks || '',
         form.poNo || '', form.poFileUrl || '', form.billingCycle || '', user.email, form.poValidity || '', valid.rowNum
       );
