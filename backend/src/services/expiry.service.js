@@ -275,6 +275,41 @@ export async function _agreementStartDateMap() {
   });
 }
 
+const STAGE1_ADDRESS_CACHE_KEY = 'stage1_address_map_v1';
+const STAGE1_ADDRESS_TTL_SECS = 300;
+
+/**
+ * Order No -> { billingAddress, dispatchAddress }, from the Stage 1 sales
+ * order-intake form (SHEETS.STAGE1_ORDER_FORM — already mirrored into Mongo,
+ * see mongoSheetMapping.js's own entry for it). Explicit request 2026-11-18
+ * (pointed at this exact sheet's external-workbook URL, gid 914322806,
+ * tab "STAGE1" — confirmed live via spreadsheets.get to be the SAME form
+ * data this app already mirrors under SHEETS.STAGE1_ORDER_FORM: identical
+ * header row, col 3 "Order Received Number", col 44 "Billing Address", col
+ * 47 "Dispatch Address" — so this reads the existing mirror rather than
+ * adding a second, redundant external-sheet sync for data already flowing
+ * in). Same "first non-blank wins" convention as _agreementStartDateMap
+ * above, keyed by the exact Order No string, untrimmed case (Order Nos are
+ * written consistently uppercase at source, same as every other Order No
+ * join in this file).
+ */
+export async function _stage1AddressMap() {
+  return cacheGetOrLoad(STAGE1_ADDRESS_CACHE_KEY, STAGE1_ADDRESS_TTL_SECS, async () => {
+    const map = {};
+    try {
+      const { rows } = await getSheetDataFromMongo(SHEETS.STAGE1_ORDER_FORM);
+      for (const row of rows) {
+        const orderNo = safeStr(row[3]).trim(); // Order Received Number
+        if (!orderNo || map[orderNo]) continue; // first non-blank wins
+        const billingAddress = safeStr(row[44]).trim();
+        const dispatchAddress = safeStr(row[47]).trim();
+        if (billingAddress || dispatchAddress) map[orderNo] = { billingAddress, dispatchAddress };
+      }
+    } catch (e) { /* never break Deployed Summary — falls back to blank for every row */ }
+    return map;
+  });
+}
+
 export const DEPLOYED_RAW_CACHE_KEY = 'deployed_raw_v1';
 const DEPLOYED_RAW_TTL_SECS = 30;
 

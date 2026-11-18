@@ -62,7 +62,7 @@ function tatSuffix(tatRecord, tatKey) {
  *  data's own entry/actual pattern (which can disagree when a stage's TAT
  *  sourcing — e.g. Stage 2's FMS match — never resolved even though the
  *  real pipeline moved past it). */
-function currentTatStage(tatRecord, tatKey) {
+export function currentTatStage(tatRecord, tatKey) {
   if (!tatKey) return null;
   return tatRecord?.stages?.find((s) => s.key === tatKey) || null;
 }
@@ -763,8 +763,29 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     }
     const status = statusOf(it, refundEntry);
     const stage1 = it.stages?.find((s) => s.stage === 1);
-    const sentBackNote = !stage1?.done && stage1?.remark ? stage1.remark : '';
-    return { it, chips: buildChips(it, refundEntry, tatRecord), status, currentTat: currentTatStage(tatRecord, status.tatKey), sentBackNote };
+    const pendingAtStage1 = !stage1?.done;
+    const sentBackNote = pendingAtStage1 && stage1?.remark ? stage1.remark : '';
+    /* Explicit request 2026-11-18 ("final billing send back... stage 5 se
+       woh 1 pe jata hai... final billing send back 5.0 mai dikhe"): a plain
+       "⚠ Sent Back" badge didn't say WHICH stage sent it back — Stage 1A
+       (Approval) and Stage 5 (Final Billing) both route back to Stage 1.
+       See getOffLeaseDashboardData's own billingSendBackNote doc comment for
+       the signal and its one known limitation. */
+    const sentBackFromBilling = pendingAtStage1 && !!it.billingSendBackNote;
+    /* Explicit follow-up 2026-11-18 ("stage 1A ke send back hai tho approval
+       send back dikhe"): same idea as Billing's own label, for the OTHER
+       send-back source — saveOffLeaseSendBackFromApproval marks itself
+       distinctly, via the Intimation Approval Status column (approvalStatus
+       here), unlike Billing's own send-back which only has the col_316
+       signal above. Mutually exclusive with sentBackFromBilling by
+       construction (a record sent back from Approval was never reached
+       Final Billing in the first place). */
+    const sentBackFromApproval = pendingAtStage1 && !sentBackFromBilling
+      && String(it.approvalStatus || '').trim().toLowerCase() === 'sent back';
+    return {
+      it, chips: buildChips(it, refundEntry, tatRecord), status,
+      currentTat: currentTatStage(tatRecord, status.tatKey), sentBackNote, sentBackFromBilling, sentBackFromApproval
+    };
   }), [items, refundByContainer, itemsByContainerCount, tatByContainer]);
 
   if (loading) return <SkeletonCards count={6} />;
@@ -776,7 +797,7 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
   return (
     <>
       <div className={styles.book}>
-      {rows.map(({ it, chips, status, currentTat, sentBackNote }) => (
+      {rows.map(({ it, chips, status, currentTat, sentBackNote, sentBackFromBilling, sentBackFromApproval }) => (
         <div
           className={styles.row}
           key={`${it.leaseId || ''}-${it.container}`}
@@ -842,7 +863,9 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
                   true while Stage 1 is genuinely still pending (same col_14
                   invariant the Stage 5 queue-gating fix relies on). */}
               {sentBackNote && (
-                <span className={`${styles.sentBackChip} ${styles.danger}`} title={sentBackNote}>⚠ Sent Back</span>
+                <span className={`${styles.sentBackChip} ${styles.danger}`} title={sentBackNote}>
+                  {sentBackFromBilling ? '⚠ Final Billing Send Back' : sentBackFromApproval ? '⚠ Approval Send Back' : '⚠ Sent Back'}
+                </span>
               )}
             </div>
             {/* Spec, code and location on one line — three short values on
