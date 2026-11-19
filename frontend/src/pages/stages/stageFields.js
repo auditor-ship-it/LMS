@@ -417,20 +417,20 @@ export const STAGE_FIELDS = {
      removed from the form but left dormant on the backend, same as Move To
      Stage's Arrival Date — see that column's own comment). */
   5: [
-    { key: 'col_305', label: 'Check if rentals are billed up to the last date', type: 'radio', options: YES_NO },
-    { key: 'col_306', label: 'Outstanding Amount', type: 'number' },
-    { key: 'col_307', label: 'Date - Billed Till', type: 'date' },
-    { key: 'col_308', label: 'Estimated repair charges billed', type: 'text' },
-    { key: 'col_309', label: 'Transport cost is billed', type: 'radio', options: YES_NO },
-    { key: 'col_310', label: 'Adjust Security Deposit if applicable', type: 'radio', options: YES_NO },
-    { key: 'col_311', label: 'Security Deposit Amount', type: 'number' },
-    { key: 'col_315', label: 'Reconcile entire billing cycle', type: 'radio', options: YES_NO },
-    { key: 'col_316', label: 'Remark', type: 'text' },
+    { key: 'col_305', label: 'Check if rentals are billed up to the last date', type: 'radio', options: YES_NO, required: true },
+    { key: 'col_306', label: 'Outstanding Amount', type: 'number', required: true },
+    { key: 'col_307', label: 'Date - Billed Till', type: 'date', required: true },
+    { key: 'col_308', label: 'Estimated repair charges billed', type: 'text', required: true },
+    { key: 'col_309', label: 'Transport cost is billed', type: 'radio', options: YES_NO, required: true },
+    { key: 'col_310', label: 'Adjust Security Deposit if applicable', type: 'radio', options: YES_NO, required: true },
+    { key: 'col_311', label: 'Security Deposit Amount', type: 'number', required: true },
+    { key: 'col_315', label: 'Reconcile entire billing cycle', type: 'radio', options: YES_NO, required: true },
+    { key: 'col_316', label: 'Remark', type: 'text', required: true },
     // col_356/357, not 317/318 — outside this stage's own 305-316 range,
     // see OL_BILLING_LEDGER_COL/OL_FINAL_PAYABLE_AMOUNT_COL's doc comments
     // in offlease.service.js.
-    { key: 'col_356', label: 'Ledger', type: 'file' },
-    { key: 'col_357', label: 'Final Payable Amount (post adjustment, if any)', type: 'number' }
+    { key: 'col_356', label: 'Ledger', type: 'file', required: true },
+    { key: 'col_357', label: 'Final Payable Amount (post adjustment, if any)', type: 'number', required: true }
   ],
 
   6: [

@@ -354,7 +354,16 @@ export async function getRefundEntriesForContainer(containerNo) {
     const idx = containers.findIndex((c) => c.toUpperCase() === want);
     if (idx === -1) return;
     const leaseIds = splitContainers(mapped.offLeaseId).map((l) => l.trim());
-    out.push({ ...mapped, containerNo: containers[idx], offLeaseId: leaseIds[idx] || mapped.offLeaseId });
+    // allContainerNos/allOffLeaseIds carry the ORIGINAL, unsplit joined cells
+    // (every container/lease on this bulk bill, not just this one) —
+    // explicit request 2026-11-19 ("4 container ke liye yah approval hai tho
+    // 4 container and offlease id dikh na chhaiye hai"): the approver needs
+    // to see every container this one decision covers, not just the single
+    // container whose page they opened it from.
+    out.push({
+      ...mapped, containerNo: containers[idx], offLeaseId: leaseIds[idx] || mapped.offLeaseId,
+      allContainerNos: mapped.containerNo, allOffLeaseIds: mapped.offLeaseId
+    });
   });
   return out.reverse();
 }
