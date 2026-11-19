@@ -234,11 +234,24 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      simply never wired it up. Self-fetch here whenever the caller didn't
      supply it, rather than requiring every future caller to remember to. */
   const suppliedFms = movement !== undefined || transport !== undefined || delivery !== undefined;
+  /* BUG FOUND AND FIXED 2026-11-19 (explicit report, live on CICU3876539/
+   * OF0110 — Transportation's own "Client & Container" FMS panel showed
+   * "Hetero BioPharma Ltd SEZ Unit-1" while the record's real client, shown
+   * right above it, is "Hunger Inc Hospitality"): this self-fetch call left
+   * out leaseId/row entirely, even though `rowNum` is already a prop here —
+   * getOffLeaseContainerDetail('CICU3876539') alone can only ever pick its
+   * FIRST matching Off-Lease Tracking row (the exact "same container number,
+   * different client" ambiguity its own doc comment describes, e.g.
+   * TRIU6681671), silently returning whichever client happened to match
+   * first instead of the record actually on screen. Passing rowNum through
+   * (same knownRow param fetchStageDetail above already uses) pins it to
+   * THIS exact row, same fix class as every other "container number alone is
+   * never a safe join key" bug already found elsewhere in this file. */
   const { data: ownFms, loading: fmsLoading, reload: reloadOwnFms } = useAsync(
     () => (identityOnly && !suppliedFms && containerNo
-      ? getOffLeaseContainerDetail(containerNo).then((d) => d?.fms || null)
+      ? getOffLeaseContainerDetail(containerNo, undefined, rowNum).then((d) => d?.fms || null)
       : Promise.resolve(null)),
-    [identityOnly, suppliedFms, containerNo]
+    [identityOnly, suppliedFms, containerNo, rowNum]
   );
   const fmsMovement = suppliedFms ? movement : ownFms?.movement;
   const fmsTransport = suppliedFms ? transport : ownFms?.transport;
