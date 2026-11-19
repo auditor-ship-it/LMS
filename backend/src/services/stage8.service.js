@@ -421,7 +421,36 @@ function matchByContainer(rows, containerNo, sinceMs, dateField = 'timestamp', c
   if (!key) return null;
   const matches = rows.filter((r) => r.containerKeys.includes(key));
   if (!matches.length) return null;
-  if (sinceMs == null) return matches[matches.length - 1];
+  /* BUG FOUND AND FIXED 2026-11-19 (explicit report, live on CICU3876539/
+   * OF0110 — the container's real, and ONLY, Off-Lease Tracking client is
+   * "Hunger Inc Hospitality" (confirmed: just the one row for this
+   * container, OF0110), but Stage 2's FMS panel showed "Hetero BioPharma Ltd
+   * SEZ Unit-1"'s movement/transport/delivery instead): no caller of
+   * getFmsForContainer passes `cycleStartMs`, so `sinceMs` is ALWAYS null on
+   * this path, and this used to return "last row overall" unconditionally —
+   * ignoring `clientName` completely, even to the point of attaching a
+   * genuinely different, unrelated client's STAGE-8/9/10 record (confirmed:
+   * CICU3876539 has no Hunger Inc Hospitality row in STAGE-8 at all, only
+   * Hetero's). That is the exact cross-client misattribution the 2026-08-27
+   * fix two blocks below exists to prevent, just reached via this
+   * `sinceMs == null` branch instead of a missing date window.
+   *
+   * Fixed the same way, with the same already-accepted principle this
+   * function's own sinceMs-known branch already applies ("no in-window row
+   * returns null — correct, and better than showing a stale one"): prefer a
+   * client match when one exists; when clientName IS known but genuinely
+   * matches nothing here, return null (never "last row overall", which can
+   * only ever be a DIFFERENT client's data at that point) instead of
+   * silently misattributing it. "Last row overall" survives only for the
+   * caller that has no clientName to check at all — unchanged, since there
+   * is nothing more specific to prefer in that case. */
+  if (sinceMs == null) {
+    if (clientName) {
+      const clientMatch = matches.filter((r) => clientMatches(r.clientName, clientName));
+      return clientMatch.length ? clientMatch[clientMatch.length - 1] : null;
+    }
+    return matches[matches.length - 1];
+  }
 
   const inCycle = matches.filter((r) => {
     const ts = parseStamp(r[dateField]);
