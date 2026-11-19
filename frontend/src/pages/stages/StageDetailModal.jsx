@@ -1058,6 +1058,7 @@ function sdFinalApproved(entry) {
    are skipped; URLs render as links via renderCellValue. */
 const SD_REFUND_DETAIL_FIELDS = [
   ['Submitted on', 'timestamp'], ['Submitted by', 'user'],
+  ['Container No', 'containerNo'], ['Off-Lease ID', 'offLeaseId'],
   ['Vendor / Client', 'vendorName'], ['Invoice number', 'invoiceNumber'], ['Invoice date', 'invoiceDate'],
   ['Invoice amount', 'invoiceAmount'], ['Amount to pay', 'amountToPay'], ['SD amount to be refunded', 'sdAmountToBeRefunded'],
   ['SD calculation', 'sdCalculation'], ['Payment due date', 'paymentDueDate'], ['Payment type', 'paymentType'],
@@ -1070,20 +1071,43 @@ const SD_REFUND_DETAIL_FIELDS = [
   ['CEO status', 'ceoStatus'], ['CEO approver email', 'ceoApprover'], ['CEO timestamp', 'ceoDate'], ['CEO remarks', 'ceoRemarks']
 ];
 
+const splitMultiSd = (raw) => String(raw || '').split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
+
 /* `always`: keys shown even when blank (as a dash) — the record page's CEO
    panel uses it so HOD's decision fields are visible before anyone has decided.
    `hide`: keys never shown (the HOD panel leaves out HOD / CEO decision fields). */
 export function SdRefundDetails({ entry, always = [], hide = [] }) {
   const rows = SD_REFUND_DETAIL_FIELDS.filter(([, key]) => !hide.includes(key) && (always.includes(key) || String(entry[key] ?? '').trim() !== ''));
   if (!rows.length) return null;
+  /* entry.containerNo/offLeaseId are narrowed, by design, to just the ONE
+     container whose page this was opened from (getRefundEntriesForContainer's
+     own doc comment) — but a bulk-submitted bill's decision covers every
+     container on it. allContainerNos/allOffLeaseIds carry that bill's full,
+     unsplit list; explicit request 2026-11-19 ("4 container ke liye yah
+     approval hai tho 4 container and offlease id dikh na chhaiye hai"): show
+     the FULL list here whenever there's more than one, instead of the single
+     container the page happens to be scoped to. A single-container bill is
+     unaffected — splitMultiSd on an unjoined cell returns that one value. */
+  const allContainers = splitMultiSd(entry.allContainerNos);
+  const allLeaseIds = splitMultiSd(entry.allOffLeaseIds);
+  const isBulk = allContainers.length > 1;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, textAlign: 'left', marginTop: 12 }}>
-      {rows.map(([label, key]) => (
-        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>{label}</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-word' }}>{String(entry[key] ?? '').trim() === '' ? '—' : renderCellValue(entry[key])}</span>
-        </div>
-      ))}
+      {rows.map(([label, key]) => {
+        const isContainerKey = key === 'containerNo' || key === 'offLeaseId';
+        const displayLabel = isBulk && isContainerKey
+          ? (key === 'containerNo' ? `All Containers on this Bill (${allContainers.length})` : `All Off-Lease IDs on this Bill (${allLeaseIds.length})`)
+          : label;
+        const displayValue = isBulk && isContainerKey
+          ? (key === 'containerNo' ? allContainers.join(', ') : allLeaseIds.join(', '))
+          : (String(entry[key] ?? '').trim() === '' ? '—' : null);
+        return (
+          <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>{displayLabel}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', wordBreak: 'break-word' }}>{displayValue != null ? displayValue : renderCellValue(entry[key])}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

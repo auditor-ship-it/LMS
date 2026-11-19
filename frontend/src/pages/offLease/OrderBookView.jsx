@@ -784,9 +784,37 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
       && String(it.approvalStatus || '').trim().toLowerCase() === 'sent back';
     return {
       it, chips: buildChips(it, refundEntry, tatRecord), status,
-      currentTat: currentTatStage(tatRecord, status.tatKey), sentBackNote, sentBackFromBilling, sentBackFromApproval
+      currentTat: currentTatStage(tatRecord, status.tatKey), sentBackNote, sentBackFromBilling, sentBackFromApproval,
+      refundEntry
     };
   }), [items, refundByContainer, itemsByContainerCount, tatByContainer]);
+
+  /* Explicit request 2026-11-19 ("maine sab ka form ek saath select kar ke
+     fill kiya hai tho yaha marge karo na... 4 entry nahi dikh ne chhaiye
+     hai"): a bulk "Fill one SD Refund form for all" submission
+     (BulkRefundModal) is ONE bill covering several containers — showing it
+     as N separate, near-identical cards (same bill, same HOD/Accounts/CEO
+     status) reads as N different bills. Rows that resolve to the exact same
+     refundEntry object (see refundByContainer above — one shared Offlease
+     Bills row) are grouped into one merged card; every other row (no refund
+     filed yet, or a refund covering just that one container) renders
+     exactly as before. Grouped at first-occurrence position, not by
+     re-sorting, so the list's own order (newest-first etc.) is unchanged. */
+  const cardGroups = useMemo(() => {
+    const groups = [];
+    const indexByRefund = new Map();
+    for (const row of rows) {
+      if (row.refundEntry) {
+        if (indexByRefund.has(row.refundEntry)) {
+          groups[indexByRefund.get(row.refundEntry)].push(row);
+          continue;
+        }
+        indexByRefund.set(row.refundEntry, groups.length);
+      }
+      groups.push([row]);
+    }
+    return groups;
+  }, [rows]);
 
   if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;
@@ -797,7 +825,10 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
   return (
     <>
       <div className={styles.book}>
-      {rows.map(({ it, chips, status, currentTat, sentBackNote, sentBackFromBilling, sentBackFromApproval }) => (
+      {cardGroups.map((group) => {
+        const { it, chips, status, currentTat, sentBackNote, sentBackFromBilling, sentBackFromApproval } = group[0];
+        const groupExtra = group.slice(1); // the other containers on this SAME bill, if any
+        return (
         <div
           className={styles.row}
           key={`${it.leaseId || ''}-${it.container}`}
@@ -816,8 +847,13 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
         >
           <div className={styles.idCol}>
             <div className={styles.date}><Highlight text={it.deployedDate || '—'} query={highlight} /></div>
-            <div className={styles.leaseId}><Highlight text={it.leaseId || '—'} query={highlight} /></div>
-            <div className={styles.kind}>LEASE</div>
+            <div className={styles.leaseId}>
+              <Highlight text={it.leaseId || '—'} query={highlight} />
+              {groupExtra.map((r) => (
+                <span key={r.it.leaseId || r.it.container}>, <Highlight text={r.it.leaseId || '—'} query={highlight} /></span>
+              ))}
+            </div>
+            <div className={styles.kind}>{groupExtra.length ? `LEASE · 1 BILL, ${group.length} CONTAINERS` : 'LEASE'}</div>
             {it.raisedBy && <div className={styles.owner}><Highlight text={it.raisedBy} query={highlight} /></div>}
           </div>
 
@@ -951,16 +987,35 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
                 <span>Select</span>
               </label>
             )}
-            <div className={styles.sideLabel}>Container</div>
+            <div className={styles.sideLabel}>{groupExtra.length ? `Containers (${group.length})` : 'Container'}</div>
             <div className={styles.containerNo}>
               <Icon name="container" className={styles.containerIcon} />
               <span><Highlight text={it.container} query={highlight} /></span>
             </div>
+            {/* The other containers on this SAME bulk-submitted bill — each
+                still opens ITS OWN record (not the first item's), so the
+                merge never hides which stage any one of them is individually
+                at. stopPropagation keeps the card's own onClick (above) from
+                also firing and reopening the first item. */}
+            {groupExtra.map((r) => (
+              <div
+                key={r.it.container}
+                className={styles.containerNo}
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); onOpenRecord?.(r.it); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onOpenRecord?.(r.it); } }}
+              >
+                <Icon name="container" className={styles.containerIcon} />
+                <span><Highlight text={r.it.container} query={highlight} /></span>
+              </div>
+            ))}
             <div className={styles.sideLabel}>Valid upto</div>
             <div className={styles.sideValue}><Highlight text={it.validUpto || '—'} query={highlight} /></div>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
 
       {stageForm && (

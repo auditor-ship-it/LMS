@@ -107,9 +107,31 @@ function exactKey(name) {
   return canonicalName(name).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+/** Strips a trailing "-<site/branch marker>" segment (no parens) — the CRM's
+ *  OTHER common way of recording a site-level lead, alongside the
+ *  parenthetical "(SEZ)"/"(Unit VI)" form stripInitialism/exactKey already
+ *  keep distinct. Fuzzy-key ONLY, never exactKey — exactKey must still tell
+ *  "DHL SUPPLY CHAIN INDIA PRIVATE LIMITED-Bangalore" apart from its other
+ *  sites. Safe to drop here because fuzzyKey already only survives into the
+ *  usable index when every lead collapsing to it shares ONE owner
+ *  (buildIndex's `owners.size === 1` check below) — a company whose several
+ *  dash-suffixed sites currently have DIFFERENT owners (none observed yet,
+ *  but DHL/Coldman each have multiple sites, so it's a real possibility)
+ *  still correctly drops as ambiguous instead of guessing; a company with
+ *  just the one dash-suffixed lead (confirmed live 2026-11-19, explicit
+ *  report "yah client KAM ko jana chahiye tha... sync kiya tho nahi aaya":
+ *  "APL Healthcare Limited-SEZ" never matched the Deployed sheet's plain
+ *  "APL HEALTHCARE LIMITED", so Sale Person kept showing the sheet's stale
+ *  "Pushpa Shetty" instead of the CRM's real current owner, Sagar) now
+ *  resolves correctly instead of silently falling back to the stale sheet
+ *  value forever. */
+function stripSiteSuffix(name) {
+  return String(name).replace(/-\s*[A-Za-z][A-Za-z0-9 ]*$/, '').trim();
+}
+
 /** Looser key for pass 2 — see the MATCHING note in the file header. */
 function fuzzyKey(name) {
-  return normClientName(canonicalName(name));
+  return normClientName(stripSiteSuffix(canonicalName(name)));
 }
 
 /**
