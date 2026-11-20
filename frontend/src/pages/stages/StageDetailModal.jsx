@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import { Button } from '../../components/ui/Button.jsx';
 import { renderCellValue } from '../../components/ui/CellValue.jsx';
@@ -8,7 +8,7 @@ import { LoadingState } from '../../components/ui/LoadingState.jsx';
 import { ErrorState } from '../../components/ui/ErrorState.jsx';
 import { RichTextEditor } from '../../components/ui/RichTextEditor.jsx';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised, submitHold } from '../../services/stage.service.js';
+import { fetchStageDetail, fetchCardEnrichment, fetchAgreementPoPdf, fetchNextLeaseId, fetchSdRefundsForContainer, submitStage, submitMoveToStage, submitMoveToStageClientToClientPending, submitSendBack, submitSendBackFromBilling, submitVoucherRaised, submitPaymentDone, submitHold } from '../../services/stage.service.js';
 import { lookupContainer, fetchRemarkThread, postRemark, editRemark, removeRemark } from '../../services/offLease.service.js';
 import { RejectModal } from '../offLease/RejectModal.jsx';
 import { HoldModal } from './HoldModal.jsx';
@@ -190,23 +190,115 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
   })();
 
   /* Stage 7 (Payment Status)'s "Voucher Raised" — explicit request
-     2026-10-03. No field of its own (see PAYMENT_STATUS_STAGE's doc
-     comment): a plain button that stamps VR done, same
-     busy/error-handling shape as the Hold/Send Back actions elsewhere in
-     this file. `reload` (not reloadSdRefunds) because VR lives on OL_SHEET's
-     own row (`data`), not the Refunds sheet. */
+     2026-10-03. Originally a plain button with no field of its own (see
+     PAYMENT_STATUS_STAGE's doc comment); a Voucher Number was added
+     2026-11-19 ("vr no show hone chhaiye hai" — VR showed "Completed" with
+     no number next to it, unlike UTR's own real number right below it) —
+     same busy/error-handling shape as the Hold/Send Back actions elsewhere
+     in this file. `reload` (not reloadSdRefunds) because VR lives on
+     OL_SHEET's own row (`data`), not the Refunds sheet. A record marked VR
+     Completed BEFORE this field existed has no number on file — shows "—",
+     same as any other blank historical field, not re-askable after the fact.
+     SAME DAY, follow-up ("vr no bhi hai and utr bhi hai... yah vr no fetch
+     ho raha hai"): pre-fill this input from Accounts' own "A/C FMS"
+     workbook (data._acFmsVoucher.vrNumber) once it's there, same blank-only
+     pattern the col_306/col_308/col_351 effects above use — still editable
+     (Accounts may not have recorded it there yet), just no longer a blank
+     box someone has to retype a number into that's already on file
+     elsewhere. */
   const [vrBusy, setVrBusy] = useState(false);
   const [vrError, setVrError] = useState('');
+  const [vrNumberInput, setVrNumberInput] = useState('');
+  useEffect(() => {
+    const fetched = String(data?._acFmsVoucher?.vrNumber ?? '').trim();
+    if (fetched) setVrNumberInput((prev) => (prev.trim() ? prev : fetched));
+  }, [data]);
   const handleVoucherRaised = async () => {
+    const vrNo = vrNumberInput.trim();
+    if (!vrNo) { setVrError('Voucher Number is required.'); return; }
     setVrBusy(true);
     setVrError('');
     try {
-      await submitVoucherRaised(containerNo, rowNum);
+      await submitVoucherRaised(containerNo, rowNum, vrNo);
       await reload();
     } catch (err) {
       setVrError(apiErrorMessage(err));
     } finally {
       setVrBusy(false);
+    }
+  };
+
+  /* Stage 7 full auto-complete — explicit request 2026-11-19 ("vr and utr
+     fethc ho gya tho automaticlly next stage pe jayega samjhe"), confirmed
+     via AskUserQuestion ("auto-save silently the moment both are fetched"):
+     once Accounts' own A/C FMS already has BOTH a VR Number and a UTR
+     reference for this container, nobody needs to click Mark Voucher
+     Raised or Save Stage by hand — this stage completes itself the moment
+     that data is confirmed, the same two actions a person would otherwise
+     take one at a time. Runs VR first, then (once the reload after it
+     shows VR Completed) UTR, so this reuses the exact same submit calls
+     and the exact same backend guards (Stage 6 CEO-approved, etc.) manual
+     entry does — nothing about the validation path is skipped, only the
+     button clicks are.
+     autoCompleteRef (a ref, not state) stops this from re-firing on every
+     render while an attempt is in flight or has already run for this
+     record; only a genuine containerNo change resets it. */
+  const autoCompleteRef = useRef(null);
+  useEffect(() => {
+    if (stageNumber !== PAYMENT_STATUS_STAGE || !data) return;
+    if (autoCompleteRef.current === containerNo) return;
+    const fetchedVr = String(data._acFmsVoucher?.vrNumber ?? '').trim();
+    const fetchedUtr = String(data._acFmsVoucher?.utr ?? '').trim();
+    if (!fetchedVr || !fetchedUtr) return; // need BOTH known before auto-completing
+
+    if (data.col_348 !== 'Completed') {
+      autoCompleteRef.current = containerNo;
+      (async () => {
+        try {
+          await submitVoucherRaised(containerNo, rowNum, fetchedVr);
+          await reload();
+        } catch (err) {
+          setVrError(apiErrorMessage(err));
+          autoCompleteRef.current = null; // allow a retry once the error is addressed
+        }
+      })();
+      return;
+    }
+
+    if (!String(data.col_351 ?? '').trim()) {
+      autoCompleteRef.current = containerNo;
+      (async () => {
+        try {
+          const message = await submitStage(containerNo, stageNumber, { col_351: fetchedUtr }, rowNum);
+          if (message === 'ALREADY_PROCESSED') autoCompleteRef.current = null;
+          await reload();
+        } catch (err) {
+          setSaveError(apiErrorMessage(err));
+          autoCompleteRef.current = null;
+        }
+      })();
+    }
+  }, [stageNumber, data, containerNo, rowNum]);
+
+  /* Stage 8 (Payment Done) — explicit request 2026-11-19 ("add the one
+     stage add stage 8 paymnet done"), confirmed via AskUserQuestion:
+     Accounts/Finance's own confirmation that the bank transfer actually
+     cleared, after Stage 7 (internal 8, data?.col_106) is Completed. Same
+     shape as VR's own custom action above — no required field, remark is
+     optional. */
+  const [pdBusy, setPdBusy] = useState(false);
+  const [pdError, setPdError] = useState('');
+  const [pdRemark, setPdRemark] = useState('');
+  const handlePaymentDone = async () => {
+    setPdBusy(true);
+    setPdError('');
+    try {
+      await submitPaymentDone(containerNo, rowNum, pdRemark.trim());
+      await reload();
+    } catch (err) {
+      setPdError(apiErrorMessage(err));
+    } finally {
+      setPdBusy(false);
     }
   };
 
@@ -316,6 +408,21 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
     if (!m) return;
     const iso = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
     setValues((prev) => (String(prev.col_307 ?? '').trim() !== '' ? prev : { ...prev, col_307: iso }));
+  }, [stageNumber, data]);
+
+  /* Stage 7 (Payment Status)'s "UTR Number" (col_351) — explicit request
+     2026-11-19 ("vr no bhi hai and utr bhi hai... image one se utr
+     samjhe"): Accounts' own external "A/C FMS" workbook already records a
+     payment reference once a voucher is paid (data._acFmsVoucher.utr, see
+     acFmsVoucher.service.js) — pre-fill it the same blank-only way
+     col_306/col_308/col_307 above do, rather than asking for a retype of
+     something Accounts already has on file. Still editable, and never
+     overwrites a real value already saved or just typed. */
+  useEffect(() => {
+    if (stageNumber !== PAYMENT_STATUS_STAGE) return;
+    const utr = String(data?._acFmsVoucher?.utr ?? '').trim();
+    if (!utr) return;
+    setValues((prev) => (String(prev.col_351 ?? '').trim() !== '' ? prev : { ...prev, col_351: utr }));
   }, [stageNumber, data]);
 
   useEffect(() => {
@@ -730,10 +837,38 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>VR</span>
                           <StatusBadge status={data?.col_348 === 'Completed' ? 'Completed' : 'Pending'} />
+                          {/* VR Number — added 2026-11-19 ("vr no show hone
+                              chhaiye hai"), right beside the chip, same place
+                              UTR's own number is implied by its own field
+                              below (col_399 — NOT 359, which collides with
+                              OL_CABIN_ITEMS' own statusCol/photoCol/remarkCol
+                              block; fixed on the backend before this field
+                              ever shipped). BUG FOUND AND FIXED same day
+                              ("vr bhi dikhega"): this only ever read our OWN
+                              stored col_399, so a record marked Completed
+                              BEFORE that field existed (like this one)
+                              showed "no number on file" even though
+                              Accounts' A/C FMS sheet already has it — fall
+                              back to the fetched value, same number the
+                              Voucher Number input above pre-fills from when
+                              VR isn't done yet. */}
+                          {data?.col_348 === 'Completed' && (
+                            <span className={styles.approvalMeta}>
+                              {data?.col_399 || data?._acFmsVoucher?.vrNumber ? `#${data.col_399 || data._acFmsVoucher.vrNumber}` : '(no number on file)'}
+                            </span>
+                          )}
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>UTR</span>
-                          <StatusBadge status={data?.col_351 ? 'Completed' : 'Pending'} />
+                          {/* Same fallback as VR above, same day ("utr
+                              complted dikhe" — a fetched-but-not-yet-saved
+                              A/C FMS reference read as Pending, which looked
+                              wrong once the number was plainly already known
+                              and pre-filled in the field below). Still the
+                              real saved col_351 first — never a false
+                              "Completed" once a genuine value is on the
+                              sheet, only while it's merely pending Save. */}
+                          <StatusBadge status={data?.col_351 || data?._acFmsVoucher?.utr ? 'Completed' : 'Pending'} />
                         </span>
                       </div>
                       {!sdFinalApproved(scopedSdRefunds[0]) ? (
@@ -742,6 +877,23 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                         </p>
                       ) : data?.col_348 !== 'Completed' ? (
                         <>
+                          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 320, marginTop: 8 }}>
+                            <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>
+                              Voucher Number
+                            </span>
+                            <input
+                              type="text"
+                              value={vrNumberInput}
+                              onChange={(e) => { setVrNumberInput(e.target.value); if (vrError) setVrError(''); }}
+                              placeholder="Enter the voucher number…"
+                              style={{ padding: '8px 10px', border: '1.5px solid var(--line)', borderRadius: 'var(--r-md)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit' }}
+                            />
+                            {data?._acFmsVoucher?.vrNumber ? (
+                              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>Fetched from A/C FMS.</span>
+                            ) : (
+                              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>Not yet recorded in A/C FMS — enter it manually once Accounts raises it.</span>
+                            )}
+                          </label>
                           <div className={styles.actions}>
                             <Button type="button" variant="primary" loading={vrBusy} onClick={handleVoucherRaised}>
                               Mark Voucher Raised
@@ -750,10 +902,57 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                           {vrError && <div className={styles.error}>{vrError}</div>}
                         </>
                       ) : data?.col_106 === 'Completed' ? (
-                        <p className={styles.sectionHint}>Payment completed — UTR Number: {data?.col_351}.</p>
+                        <p className={styles.sectionHint}>Payment completed — Voucher Number: {data?.col_399 || data?._acFmsVoucher?.vrNumber || '—'} · UTR Number: {data?.col_351}.</p>
                       ) : (
-                        <p className={styles.sectionHint}>Voucher raised — enter the UTR Number below once the transfer is confirmed.</p>
+                        <p className={styles.sectionHint}>
+                          Voucher raised{(data?.col_399 || data?._acFmsVoucher?.vrNumber) ? ` (#${data.col_399 || data._acFmsVoucher.vrNumber})` : ''} — enter the UTR Number below once the transfer is confirmed.
+                        </p>
                       )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Stage 8 (Payment Done, internal 12) — explicit request
+                  2026-11-19 ("add the one stage add stage 8 paymnet done"),
+                  confirmed via AskUserQuestion: Accounts/Finance's own
+                  confirmation that the bank transfer actually cleared, after
+                  Stage 7 (internal 8)'s own VR+UTR pipeline is fully
+                  Completed (data.col_106 — the SAME completion signal the
+                  Payment Pipeline block above reads). No fields of its own,
+                  same custom-action shape as VR. */}
+              {stageNumber === PAYMENT_DONE_STAGE && (
+                <div className={styles.fmsWrap}>
+                  <h3 className={styles.sectionTitle}>Payment Done</h3>
+                  {data?.col_106 !== 'Completed' ? (
+                    <p className={styles.sectionHint}>
+                      Waiting for Stage 7 (Payment Status) to complete — VR and UTR Number must both be on file before payment can be confirmed done.
+                    </p>
+                  ) : data?.col_403 === 'Completed' ? (
+                    <p className={styles.sectionHint}>
+                      Payment confirmed done by {data?.col_402 || 'unknown'} on {data?.col_401 || '—'}
+                      {data?.col_400 ? ` — ${data.col_400}` : ''}.
+                    </p>
+                  ) : (
+                    <>
+                      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 420, marginTop: 8 }}>
+                        <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 700, color: 'var(--text-3)' }}>
+                          Remark (optional)
+                        </span>
+                        <textarea
+                          value={pdRemark}
+                          onChange={(e) => { setPdRemark(e.target.value); if (pdError) setPdError(''); }}
+                          rows={2}
+                          placeholder="Add a note about this confirmation…"
+                          style={{ padding: '8px 10px', border: '1.5px solid var(--line)', borderRadius: 'var(--r-md)', background: 'var(--surface)', color: 'var(--text)', font: 'inherit', resize: 'vertical' }}
+                        />
+                      </label>
+                      <div className={styles.actions}>
+                        <Button type="button" variant="primary" loading={pdBusy} onClick={handlePaymentDone}>
+                          Mark Payment Done
+                        </Button>
+                      </div>
+                      {pdError && <div className={styles.error}>{pdError}</div>}
                     </>
                   )}
                 </div>
@@ -1036,6 +1235,15 @@ const BILLING_STATUS_COL = 'col_44';
  *  OL_STAGE_INFO[8]'s own doc comment on the backend for the full history. */
 const PAYMENT_STATUS_STAGE = 8;
 
+/** Payment Done (internally stage 12, shown as Stage 8) — explicit request
+ *  2026-11-19 ("add the one stage add stage 8 paymnet done"), confirmed via
+ *  AskUserQuestion: a real new stage, Accounts/Finance confirming the bank
+ *  transfer actually cleared, after Stage 7/internal 8's own VR+UTR pipeline
+ *  completes. No form fields of its own — same "custom action" shape as VR
+ *  on Stage 7 (see PAYMENT_DONE_STAGE's block further down and backend's
+ *  OL_STAGE_INFO[12] doc comment). */
+const PAYMENT_DONE_STAGE = 12;
+
 /** Gate In (internally stage 7, shown as Stage 3) — no form of its own, see
  *  the "Waiting for Gate-In confirmation" panel's own doc comment. */
 const GATE_IN_STAGE = 7;
@@ -1073,7 +1281,12 @@ const SD_REFUND_DETAIL_FIELDS = [
   ['Submitted on', 'timestamp'], ['Submitted by', 'user'],
   ['Container No', 'containerNo'], ['Off-Lease ID', 'offLeaseId'],
   ['Vendor / Client', 'vendorName'], ['Invoice number', 'invoiceNumber'], ['Invoice date', 'invoiceDate'],
-  ['Invoice amount', 'invoiceAmount'], ['Amount to pay', 'amountToPay'], ['SD amount to be refunded', 'sdAmountToBeRefunded'],
+  /* 'Amount to pay' removed 2026-11-19 (explicit request, "amount to pay
+     kyu dikh raha hai"): it and 'SD amount to be refunded' both read the
+     exact same sheet column (refunds.service.js's _mapRow: amountToPay and
+     sdAmountToBeRefunded are both safeStr(r[8])) — a confusing duplicate
+     display of one number under two labels. Keeping the clearer-named one. */
+  ['Invoice amount', 'invoiceAmount'], ['SD amount to be refunded', 'sdAmountToBeRefunded'],
   ['SD calculation', 'sdCalculation'], ['Payment due date', 'paymentDueDate'], ['Payment type', 'paymentType'],
   ['Payment terms', 'paymentTerms'], ['Department', 'department'], ['Ledger head', 'ledgerHead'],
   ['Bill received by', 'billReceivedBy'],

@@ -70,6 +70,7 @@ router.post('/:containerNo/hold/send-back', asyncHandler(offLeaseController.save
    2026-10-03 (see saveOffLeaseVoucherRaised's doc comment in
    offlease.service.js). */
 router.post('/:containerNo/voucher-raised', asyncHandler(offLeaseController.saveVoucherRaised));
+router.post('/:containerNo/payment-done', asyncHandler(offLeaseController.savePaymentDone));
 
 /* Stage 1 (Intimation) Reject tab's own Send Back — reverses a Rejected
    approval decision AND reopens Stage 1 itself (see

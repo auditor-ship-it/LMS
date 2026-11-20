@@ -684,6 +684,62 @@ export async function getDeliveredKeys() {
 }
 
 /**
+ * Same computation as getDeliveredKeys above, but each entry also carries
+ * the row's own client name — explicit request 2026-11-20 (live on
+ * CICU3876539/OF0110, "pending show stage 2 this is not fil stage 8 9 10"):
+ * the container-only signal advanced that record to "past Transportation"
+ * off a DIFFERENT client's delivery of the same reused box, even though
+ * "Hunger Inc Hospitality" itself has no STAGE-8/9/10 record at all — its
+ * own Movement/Transport/Site Delivery panel correctly showed "No record".
+ *
+ * Confirmed live, explicitly asked for despite the documented history
+ * behind the container-only design (getDeliveredKeys' own doc comment,
+ * cases MYRU4513729/SZLU9446439/GESU9563904/CXRU1037294/CAIU5404270): this
+ * uses clientMatches (tolerant of spacing/punctuation, same fuzzy match
+ * matchRow/getFmsForContainer already use elsewhere in this file), not
+ * strict string equality — the exact-match requirement that caused those
+ * earlier regressions never existed in this codebase's current client-
+ * matching helper, so this should not reproduce them, but it is a genuine
+ * behavior change to every stage's real pending queues, not just a display
+ * fix, and should be watched for the same failure class if it resurfaces.
+ */
+export async function getDeliveredKeysWithClient() {
+  const [rows8, rows9, rows10] = await Promise.all([
+    readOffleaseRows(), readStage9OffleaseRows(), readStage10Rows()
+  ]);
+  const map = new Map();
+  const in8 = new Set(rows8.flatMap((r) => r.containerKeys));
+  const in9 = new Set(rows9.flatMap((r) => r.containerKeys));
+
+  for (const [src, dateField] of [[rows8, 'timestamp'], [rows9, 'lastUpdated']]) {
+    for (const r of src) {
+      for (const k of r.containerKeys) {
+        if (!in8.has(k) || !in9.has(k)) continue;
+        const dos = [r.deliveryOrderNo, r.bookingOrderNo, r.doNumber].filter(Boolean);
+        if (!dos.length) continue;
+        if (!matchByDo(rows10, dos)) continue;
+        const ts = parseStamp(r[dateField]);
+        if (!ts) continue;
+        if (!map.has(k)) map.set(k, []);
+        map.get(k).push({ ts: ts.getTime(), clientName: r.clientName || '' });
+      }
+    }
+  }
+  return map;
+}
+
+/** Client-aware sibling of isDeliveredSince — see getDeliveredKeysWithClient's
+ *  own doc comment for why this exists. */
+export function isDeliveredSinceForClient(deliveredMap, containerKey, clientName, sinceMs) {
+  const arr = deliveredMap?.get ? deliveredMap.get(containerKey) : null;
+  if (!arr || !arr.length) return false;
+  const matching = arr.filter((e) => clientMatches(e.clientName, clientName));
+  if (!matching.length) return false;
+  if (sinceMs == null) return true;
+  return matching.some((e) => e.ts >= sinceMs);
+}
+
+/**
  * Was this container delivered ON/AFTER `sinceMs` (its CURRENT off-lease
  * cycle's own Stage 1 completion)? `sinceMs == null` (boundary not known)
  * falls back to "ever delivered at all" — the original behaviour — so a

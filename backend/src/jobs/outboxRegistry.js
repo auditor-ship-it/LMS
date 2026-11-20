@@ -10,7 +10,7 @@
 import {
   saveOffLeaseStage, saveOffLeaseApprovalAction, saveOffLeaseMoveToStage, saveOffLeaseSendBack,
   saveOffLeaseHold, saveOffLeaseSendBackToStage1, saveOffLeaseSendRejectedToStage1, saveOffLeaseVoucherRaised,
-  saveOffLeaseSendBackFromApproval, addToOffLeaseTrackingSheetWrite
+  saveOffLeaseSendBackFromApproval, addToOffLeaseTrackingSheetWrite, saveOffLeasePaymentDone
 } from '../services/offlease.service.js';
 import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending, saveRenewalDraft, completeDocStage, decideRenewalApproval } from '../services/expiry.service.js';
 import { writeHistoryRowToSheet } from '../services/poAgreementHistory.service.js';
@@ -28,6 +28,7 @@ export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseVoucherRaised': saveOffLeaseVoucherRaised,
   'offlease.saveOffLeaseSendBackFromApproval': saveOffLeaseSendBackFromApproval,
   'offlease.addToOffLeaseTrackingSheetWrite': addToOffLeaseTrackingSheetWrite,
+  'offlease.saveOffLeasePaymentDone': saveOffLeasePaymentDone,
   'expiry.saveExpiryAction': saveExpiryAction,
   'expiry.completeDocumentStage': completeDocumentStage,
   'expiry.saveExpiryRemark': saveExpiryRemark,
