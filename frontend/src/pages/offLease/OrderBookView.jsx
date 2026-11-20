@@ -152,6 +152,12 @@ export function buildChips(item, refundEntry, tatRecord) {
 
   const chips = [chip(first), gate];
   for (const stage of rest) {
+    /* Stage 8 (Payment Done, internal 12) excluded from this per-record chip
+       strip — explicit request 2026-11-19 ("stage 8 yaha nahi dikh na
+       chhaiye hai"): the pipeline view stops at Stage 7's own chip. It still
+       has its own KPI scorecard and queue elsewhere (PipelineDashboard.jsx),
+       just not a chip here. */
+    if (stage.number === 12) continue;
     chips.push(chip(stage));
     if (stage.number === 11) chips.push(sdHod, sdAccounts, sdCeo);
   }

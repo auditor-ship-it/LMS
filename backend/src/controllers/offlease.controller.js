@@ -252,8 +252,17 @@ export async function saveHold(req, res) {
  *  custom middle step, explicit request 2026-10-03. Permission ('offlease8')
  *  is checked inside the service. */
 export async function saveVoucherRaised(req, res) {
-  const { rowNum } = req.body || {};
-  const message = await offLeaseService.saveOffLeaseVoucherRaisedFast(req.params.containerNo, req.user.email, rowNum);
+  const { rowNum, voucherNumber } = req.body || {};
+  const message = await offLeaseService.saveOffLeaseVoucherRaisedFast(req.params.containerNo, req.user.email, rowNum, voucherNumber);
+  res.json({ message });
+}
+
+/** Stage 8 (Payment Done) — Accounts/Finance confirming the bank transfer
+ *  actually cleared, explicit request 2026-11-19. Permission ('offlease12')
+ *  is checked inside the service. */
+export async function savePaymentDone(req, res) {
+  const { rowNum, remarks } = req.body || {};
+  const message = await offLeaseService.saveOffLeasePaymentDoneFast(req.params.containerNo, req.user.email, rowNum, remarks);
   res.json({ message });
 }
 

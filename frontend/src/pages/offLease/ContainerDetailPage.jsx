@@ -194,7 +194,15 @@ export function ContainerDetailPage({ isActive }) {
 
   /* Name from the app's own stage table when the API sends none (an older
      backend build had no name for SD Refunds, which left the card untitled). */
-  const stages = (data.stages || []).map((x) => (
+  /* Stage 8 (Payment Done, internal 12) excluded from this record page's own
+     progress rail/percentage — explicit request 2026-11-19 ("yah stage 7
+     tak hi rahega bas"): this page stops at Stage 7, unlike the main
+     pipeline (OrderBookView's chip strip, PipelineDashboard's KPI row),
+     which DOES include it. Scoped to this one `stages` array only — the
+     backend's own `data.stages` still includes 12 (OL_ACTIVE_STAGE_NUMS),
+     filtered out here rather than there so every other consumer of that
+     same API response is unaffected. */
+  const stages = (data.stages || []).filter((x) => x.stage !== 12).map((x) => (
     x.label ? x : { ...x, label: ALL_STAGES.find((a) => a.number === x.stage)?.label || '' }
   ));
   const doneCount = stages.filter((s) => s.done).length;

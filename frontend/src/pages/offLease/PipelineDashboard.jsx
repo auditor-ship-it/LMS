@@ -35,7 +35,7 @@ const SD_REFUNDS_STAGE_KEY = 11;
  *  SD Refund one. */
 const FINAL_BILLING_STAGE_KEY = 5;
 
-const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox' };
+const STAGE_ICONS = { 1: 'inbox', 2: 'container', 3: 'search', 4: 'edit', 5: 'list', 6: 'container', 7: 'check-circle', 8: 'lock', 11: 'inbox', 12: 'check-circle' };
 
 /* View 2's own "With" column — explicit request 2026-11-18 (reference
  * screenshot showing a dark order-tracker table with "With: Logistics B /
@@ -694,6 +694,19 @@ export function PipelineDashboard({ onOpenTab }) {
           icon={STAGE_ICONS[8]} label="Stage 7 · Payment Status" value={kpis.byStage?.[8] ?? '—'} loading={loading} tint="info"
           footnote="FMS Done"
           active={stageFilter === 8} onClick={() => toggleFilter(8)}
+        />
+        {/* ADDED 2026-11-19 (explicit request: "add the one stage add stage
+            8 paymnet done", then explicit follow-up "stage 8 mai hai na
+            scorcrad bhi dikhe rahe" — this card was missing on first ship,
+            since the KPI row here is a hand-built list per stage, not
+            generically derived from STAGES/OL_ACTIVE_STAGE_NUMS the way
+            buildChips' own chip strip is). kpis.byStage?.[12] is already
+            populated generically by getOffLeaseDashboardData's own
+            OL_ACTIVE_STAGE_NUMS.map loop — no backend change needed here,
+            only this card. */}
+        <StatCard size="sm"
+          icon={STAGE_ICONS[12]} label="Stage 8 · Payment Done" value={kpis.byStage?.[12] ?? '—'} loading={loading} tint="info"
+          active={stageFilter === 12} onClick={() => toggleFilter(12)}
         />
       </div>
 

@@ -38,6 +38,17 @@ export const ALL_STAGES = [
      purely so OffLeasePage.jsx's tab strip reads "Stage 6 (SD Refunds)"
      instead of a bare "Stage 6" — explicit request 2026-10-03. */
   { number: 11, label: 'SD Refunds', owner: 'SD Refunds' },
+  /* ADDED 2026-11-19 (explicit request: "add the one stage add stage 8
+     paymnet done"), confirmed via AskUserQuestion: a real new stage, owned
+     by Accounts/Finance, confirming the bank transfer actually cleared —
+     distinct from Stage 7 (internal 8)'s own HOD/Accounts/CEO/VR/UTR
+     pipeline. Appended to WORKFLOW after 8 below, so it displays as the new
+     "Stage 8". NOT internal number 9 — that is ALREADY a different,
+     unrelated feature (permissions.config.js's own offlease9,
+     stage9.service.js's STAGE-9 Movement Entry) on the backend, confirmed
+     live before picking 12. See OL_STAGE_INFO[12] in offlease.service.js
+     for the column layout. */
+  { number: 12, label: 'Payment Done', owner: 'Accounts/Finance' },
   /* ADDED 2026-09-18 (explicit request) as a genuinely new stage between
      Transportation and Gate In, displaying as "Stage 3" — LR details fetched
      live from FMS plus the Return Transportation PO fields. RETIRED
@@ -91,7 +102,7 @@ export const ALL_STAGES = [
  * block: FMS Closed's own saveOffLeaseStage(Fast) now refuses to complete
  * until this stage's status is 'Completed'.
  */
-const WORKFLOW = [1, 6, 7, 3, 5, 11, 8];
+const WORKFLOW = [1, 6, 7, 3, 5, 11, 8, 12];
 
 /**
  * Stages that are READ ONLY — the grid is shown (searchable, sortable,

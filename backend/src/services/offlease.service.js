@@ -92,11 +92,12 @@ import { salePersonScopeFor, matchesSalePersonScope, emailForSalePerson } from '
 import { getSalePersonResolver } from './salesCrmLeads.service.js';
 import { _deployedRawValues, _resolveRenewalColumns, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
 import { getGateFormIndexSync, pickGateFormForClient, isGatedIn, isRepairNotRequired, getGateFormForContainer } from './stage3Form.service.js';
-import { getDeliveredKeys, isDeliveredSince, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer, readStage9RawRows } from './stage8.service.js';
+import { getDeliveredKeysWithClient, isDeliveredSinceForClient, getAllOffleaseMovementRows, clientMatches, getMatchedFmsForContainer, getStage8MovementByDo, getClientToClientLeaseMovement, getFmsForContainer, readStage9RawRows } from './stage8.service.js';
 import { addMoveHistoryEntry } from './offleaseMoveHistory.service.js';
 import { sanitizeRemarkHtml } from './offleaseRemarks.service.js';
 import { cacheGetOrLoad } from '../utils/memoryCache.js';
 import { addToNewLeaseQueue } from './newLeaseQueue.service.js';
+import { getAcFmsVoucherForContainer } from './acFmsVoucher.service.js';
 
 /* =============================================
    OFF-LEASE WORKFLOW — 8 STAGES (LMS.js lines 5987-6135)
@@ -206,7 +207,30 @@ export const OL_STAGE_INFO = {
      SD Refund submission form / HOD-CEO status here instead of an editable
      form — see getOffLeaseStageDetail's stage-11 branch and
      StageDetailModal.jsx. */
-  11: { statusCol: 347, startCol: 345, endCol: 347, label: 'SD Refunds' }
+  11: { statusCol: 347, startCol: 345, endCol: 347, label: 'SD Refunds' },
+  /* ADDED 2026-11-19 (explicit request: "add the one stage add stage 8
+     paymnet done", confirmed via AskUserQuestion: a real new stage, owned by
+     Accounts/Finance, confirming the bank transfer actually cleared —
+     distinct from Stage 7/internal 8's own HOD/Accounts/CEO/VR/UTR pipeline).
+     Displayed as "Stage 8" (WORKFLOW appends internal 12 after 8 — see
+     constants/stages.js on the frontend and OL_ACTIVE_STAGE_NUMS below).
+     NOT internal number 9 — that is ALREADY a different, unrelated feature
+     (permissions.config.js's own offlease9, stage9.service.js's STAGE-9
+     Movement Entry) confirmed live before picking 12.
+     Columns 400-403, right after OL_VR_NUMBER_COL (399) — OL_HEADERS.length
+     and every *_COL constant in this file were checked to confirm nothing
+     already claims 400+ (same check OL_VR_NUMBER_COL's own doc comment
+     describes needing, after that one first shipped colliding with
+     OL_CABIN_ITEMS' 359-397 block). Remark/Timestamp/User/Status, in THAT
+     order (statusCol-3/-2/-1/itself) — the same column order every real
+     generic stage uses (e.g. Stage 1's own 14-17), unlike SD Refunds' own
+     345-347 (Timestamp/User/Status, no remark at all). Matching that order
+     here (not just picking any 4 free columns) is what lets
+     getOffLeaseDashboardData's own generic `remarkCol = info.statusCol - 3`
+     + header-text guard find this stage's remark correctly too. No form
+     fields of its own (see saveOffLeasePaymentDone below) — same "custom
+     action, not a generic Save Stage" shape as VR on Stage 7. */
+  12: { statusCol: 403, startCol: 400, endCol: 403, label: 'Payment Done' }
 };
 /* 133/134/135 deliberately excluded -- confirmed via the live sheet those
    columns are the Marked sync flag / Email ID / Mail Status feature, not
@@ -491,6 +515,108 @@ const OL_VR_STATUS_COL = 348;
 const OL_VR_TIMESTAMP_COL = 349;
 const OL_VR_USER_COL = 350;
 const OL_UTR_NUMBER_COL = 351;
+/** VR's own Voucher Number — explicit follow-up 2026-11-19 ("whrer its vr
+ *  no"): VR originally shipped (2026-10-03) as a pure status stamp with no
+ *  number of its own, by explicit design (see the doc comment above) — but
+ *  once Payment Status started showing HOD/Accounts/CEO/VR/UTR all as a
+ *  pipeline, a VR step with "Completed" and no number read as incomplete
+ *  next to UTR's own real number. col_399, not part of the 348-351 block
+ *  above (adding a 4th slot there would mean this is really a real field,
+ *  which it now is — kept visually grouped with VR on the form instead via
+ *  stageFields.js's showIf, same convention OL_UTR_NUMBER_COL already
+ *  uses). NOT 359 — BUG FOUND AND FIXED same day, before this ever shipped:
+ *  359-397 are OL_CABIN_ITEMS' own statusCol/photoCol/remarkCol block (Fan's
+ *  statusCol is literally 359), missed by the first pass's "col_359 unused"
+ *  grep because those are written as `statusCol: 359` object properties, not
+ *  a `col_359`/`COL = 359` pattern. 399 is the real first free column, right
+ *  after OL_EMAIL_CONFIRMATION_COL (398) — confirmed via a grep for every
+ *  col_N/`*COL = N`/`*Col: N` pattern in the 398-499 range, not just the
+ *  narrower patterns the first check used. */
+const OL_VR_NUMBER_COL = 399;
+
+/** Stage 8 (Payment Done, internal 12)'s own Timestamp/User/Status/Remark
+ *  quad — see OL_STAGE_INFO[12]'s own doc comment for the full history.
+ *  Named here (rather than only the raw numbers in OL_STAGE_INFO) because
+ *  saveOffLeasePaymentDone/Fast below need to address User and Remark
+ *  individually — Status/Timestamp alone wouldn't need separate constants,
+ *  but splitting only two of the four read worse than naming all four. */
+const OL_PAYMENT_DONE_REMARK_COL = 400;
+const OL_PAYMENT_DONE_TIMESTAMP_COL = 401;
+const OL_PAYMENT_DONE_USER_COL = 402;
+const OL_PAYMENT_DONE_STATUS_COL = 403;
+
+/** Columns 40/41 ("VR NO"/"UTR") on the Refunds sheet ("Offlease Bills") —
+ *  hand-added by Accounts directly in the live sheet, matching the exact
+ *  columns Accounts' own external "A/C FMS" workbook already tracks (see
+ *  acFmsVoucher.service.js's own doc comment). Explicit follow-up
+ *  2026-11-19 ("yaha utr yaha pe bhi aan chhaiye hai jab fetch hota hai
+ *  tho" — once UTR is fetched/saved here, it should also land in THIS
+ *  sheet, which is the one Accounts actually looks at): once Stage 7 here
+ *  confirms a VR Number (saveOffLeaseVoucherRaised/Fast) or a UTR Number
+ *  (saveOffLeaseStage(Fast), stage 8), write it into the MATCHING Refunds
+ *  row too — not just this sheet's own col_399/351.
+ *
+ *  Container No (37) / Off-Lease ID (39) duplicated here rather than
+ *  imported from refunds.service.js's own CONTAINER_NO_COL/OFFLEASE_ID_COL
+ *  (not exported there) — refunds.service.js already imports FROM this
+ *  file (markOffLeaseSdRefundApproved and friends), so importing back from
+ *  it here would create a circular module dependency. Confirmed matching
+ *  live: refunds.service.js's REFUNDS_HEADERS array is 40 entries (0-39,
+ *  ending at "Off-Lease ID"), so 40/41 are the first two columns genuinely
+ *  outside it — exactly where the live sheet's own "VR NO"/"UTR" headers
+ *  sit. */
+const REFUNDS_SHEET_NAME = SHEETS.REFUNDS;
+const REFUNDS_CONTAINER_NO_COL = 37;
+const REFUNDS_OFFLEASE_ID_COL = 39;
+const REFUNDS_VR_NO_COL = 40;
+const REFUNDS_UTR_COL = 41;
+
+/** Best-effort, never throws, never awaited by its callers (fire-and-forget
+ *  — the VR/UTR save that triggered this must never be slowed down or
+ *  failed by a problem writing to a DIFFERENT sheet). Finds every Refunds
+ *  row covering this container (splitContainers — same multi-container
+ *  joined-cell convention a bulk-submitted bill uses everywhere else in
+ *  this app), scoped by Off-Lease ID too when given to avoid writing a
+ *  different lease's bill. Never overwrites a value Accounts (or anything
+ *  else) already put there — blank-only, same "don't clobber real data"
+ *  rule this file uses elsewhere. */
+async function _writeVrUtrToRefundsSheet(containerNo, offLeaseId, { vrNumber, utr } = {}) {
+  if (!vrNumber && !utr) return;
+  try {
+    const { rows } = await getSheetDataFromMongo(REFUNDS_SHEET_NAME);
+    const want = normKey(containerNo);
+    const wantLease = normKey(offLeaseId);
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const containers = splitContainers(row[REFUNDS_CONTAINER_NO_COL] || '').map((c) => normKey(c));
+      if (!containers.includes(want)) continue;
+      if (wantLease) {
+        const leaseIds = splitContainers(row[REFUNDS_OFFLEASE_ID_COL] || '').map((l) => normKey(l));
+        if (leaseIds.length && !leaseIds.includes(wantLease)) continue;
+      }
+      const rn = i + 2;
+      const updates = [];
+      const mirrorPatch = {};
+      if (vrNumber && !safeStr(row[REFUNDS_VR_NO_COL]).trim()) {
+        updates.push({ range: `'${REFUNDS_SHEET_NAME}'!${colLetter(REFUNDS_VR_NO_COL)}${rn}`, values: [[vrNumber]] });
+        mirrorPatch[`row.${REFUNDS_VR_NO_COL}`] = vrNumber;
+      }
+      if (utr && !safeStr(row[REFUNDS_UTR_COL]).trim()) {
+        updates.push({ range: `'${REFUNDS_SHEET_NAME}'!${colLetter(REFUNDS_UTR_COL)}${rn}`, values: [[utr]] });
+        mirrorPatch[`row.${REFUNDS_UTR_COL}`] = utr;
+      }
+      if (!updates.length) continue;
+      await batchUpdateValues(updates);
+      try {
+        await getCollection(REFUNDS_SHEET_NAME).updateOne({ key: `row_${i}` }, { $set: { ...mirrorPatch, updatedAt: new Date() } });
+      } catch (e) {
+        console.error('[OL-VR-UTR-SYNC] Refunds mirror patch failed (reconcile will correct):', e?.message || e);
+      }
+    }
+  } catch (e) {
+    console.error('[OL-VR-UTR-SYNC] Could not write VR/UTR to Refunds sheet:', e?.message || e);
+  }
+}
 
 /** Stage 1's "Container Photos" — several photos picked at once, combined
  *  client-side into ONE PDF before upload (ImagesToPdfFieldInput in
@@ -648,7 +774,7 @@ const OL_LEASE_ID_PAD = 4;
  * before 8, displaying as the new "Stage 6" — FMS Closed (still internal 8)
  * shifts from display 6 to display 7. Must stay in sync with WORKFLOW in
  * frontend/src/constants/stages.js. */
-export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 11, 8];
+export const OL_ACTIVE_STAGE_NUMS = [1, 6, 7, 3, 5, 11, 8, 12];
 const OL_RETIRED_STAGES = new Set([2, 4, 10]);
 
 /* Internal numbers for the two stages the STAGE-10 hand-off moves between:
@@ -711,7 +837,15 @@ const stageCaption = (s) => {
 const OL_STAGE_LABELS = {
   1: 'Off-Lease Intimation', 2: 'Lifting / Arrival', 3: 'Inspection Checklist',
   4: 'Quotation / Order', 5: 'Final Billing', 6: 'Transportation', 7: 'Gate In',
-  8: 'Payment Status', 10: 'LR & Return Transportation', 11: 'SD Refunds'
+  8: 'Payment Status', 10: 'LR & Return Transportation', 11: 'SD Refunds',
+  // ADDED 2026-11-19 — BUG FOUND AND FIXED (live report "stage 8 mai ...
+  // undefined", confirmed via a direct getOffLeaseDashboardData call:
+  // currentStage came back "Stage 8 · undefined"): this is a THIRD,
+  // independent copy of the stage-label map (alongside OL_STAGE_INFO[12]'s
+  // own `.label` and frontend's ALL_STAGES), missed when Stage 12 was
+  // added. Must stay in step with both of those — see OL_STAGE_INFO[12]'s
+  // own doc comment.
+  12: 'Payment Done'
 };
 
 /* The real home of Order No and Client Name is "New Lease" only (see LMS.js
@@ -2464,21 +2598,22 @@ export async function getOffLeaseData(stage, opts = {}, user) {
       else if (held || rejected) continue;
     }
 
-    /* Has this container's site delivery been recorded in STAGE-10? Keyed on
-       container alone — see getDeliveredKeys() for why client is not used.
-       REVERTED 2026-08-28: briefly bounded to "on/after this row's own
-       Stage 1 completion" to stop an older, unrelated cycle's delivery from
-       wrongly bypassing Stage 2 (confirmed once, MYRU4513729). Reverted the
-       same day — confirmed against SZLU9446439, SZLU9915829, GESU9563904,
-       CXRU1037294 and CAIU5404270 that the OPPOSITE pattern (this app's own
-       Stage 1 completed AFTER the external FMS system's own delivery
-       timestamp — paperwork catching up to physical reality, not the other
-       way round) is the common case here, not the exception. The date bound
-       blocked real, correct progression on multiple live containers — a
-       bigger cost than the one narrow case it prevented. Passing sinceMs as
-       null restores the original "ever delivered" behaviour via
-       isDeliveredSince's own fallback. */
-    const delivered = deliveredKeys ? isDeliveredSince(deliveredKeys, containerKey, null) : false;
+    /* Has this container's site delivery been recorded in STAGE-10?
+       CHANGED 2026-11-20 (explicit request, live on CICU3876539/OF0110,
+       "pending show stage 2 this is not fil stage 8 9 10"): was keyed on
+       container alone (see getDeliveredKeys' own doc comment for that
+       history, including the MYRU4513729/SZLU9446439/GESU9563904/
+       CXRU1037294/CAIU5404270 cases that earlier, STRICTER client-matching
+       attempt broke) — a container-only match let a DIFFERENT client's real
+       delivery of the same reused box advance this record, even though its
+       own Movement/Transport/Site Delivery panel showed nothing. Now uses
+       getDeliveredKeysWithClient + isDeliveredSinceForClient, which matches
+       via clientMatches (tolerant of spacing/punctuation — the SAME fuzzy
+       match getFmsForContainer/matchRow already use elsewhere, not the
+       strict equality that caused the earlier regressions), scoped to THIS
+       row's own client (row[5]). Passing sinceMs as null keeps the original
+       "ever delivered" fallback. */
+    const delivered = deliveredKeys ? isDeliveredSinceForClient(deliveredKeys, containerKey, row[5], null) : false;
     /* Manual "Move To Stage" closeout (saveOffLeaseMoveToStage(Fast)) — the
        same completion signal as `delivered`, for containers that never go
        through the FMS-tracked transport chain at all (a direct client-to-
@@ -2638,7 +2773,7 @@ export async function getOffLeaseData(stage, opts = {}, user) {
  */
 export async function getOffLeaseStageCounts(user) {
   let deliveredKeys;
-  try { deliveredKeys = await getDeliveredKeys(); } catch (e) { deliveredKeys = undefined; }
+  try { deliveredKeys = await getDeliveredKeysWithClient(); } catch (e) { deliveredKeys = undefined; }
   const gfIndex = getGateFormIndexSync();
   // ONE read for all 6 stages + the approval count — see getOffLeaseData's
   // opts.sheetData doc comment for why this used to be 7 separate live
@@ -3026,6 +3161,20 @@ export async function getOffLeaseStageDetail(containerNo, stage, user, knownRow)
       result[`col_${OL_VR_TIMESTAMP_COL}`] = fmtCell(row[OL_VR_TIMESTAMP_COL]);
       result[`col_${OL_VR_USER_COL}`] = safeStr(row[OL_VR_USER_COL]);
       result[`col_${OL_UTR_NUMBER_COL}`] = safeStr(row[OL_UTR_NUMBER_COL]);
+      result[`col_${OL_VR_NUMBER_COL}`] = safeStr(row[OL_VR_NUMBER_COL]);
+      /* Accounts' own "A/C FMS" workbook, explicit request 2026-11-19 —
+       * see acFmsVoucher.service.js's own doc comment for the full match
+       * logic. Best-effort (never throws); null means Accounts hasn't
+       * recorded a voucher there yet for this container, same "say what's
+       * known, no more" shape every other external-sheet fetch in this app
+       * uses. Exposed regardless of whether VR is already Completed here —
+       * StageDetailModal.jsx uses it both to auto-fill the Mark Voucher
+       * Raised action AND to show the matching UTR once raised. */
+      try {
+        result._acFmsVoucher = await getAcFmsVoucherForContainer(containerNo);
+      } catch (e) {
+        result._acFmsVoucher = null;
+      }
     }
 
     /* Explicit request 2026-09-29: Stage 3's (Inspection Checklist) own
@@ -3835,6 +3984,14 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
       console.error('[OL-STAGE] mirror update failed (reconcile will correct):', e?.message || e);
     }
 
+    /* UTR Number (col_351, a real STAGE_FIELDS[8] field) -> the matching
+       Refunds sheet row's own "UTR" column — see _writeVrUtrToRefundsSheet's
+       own doc comment. `row` is the pre-save snapshot, but its own Lease ID
+       (col 1) is unaffected by this save, so it's safe to read here. */
+    if (stageNum === 8 && String(payload.col_351 || '').trim()) {
+      void _writeVrUtrToRefundsSheet(containerNo, row[1], { utr: String(payload.col_351).trim() });
+    }
+
     /* Stage 4 "Quotation Create? = Yes" -> email the client. Best-effort: a
        failed send must never fail the stage save itself. */
     if (stageNum === 4 && String(payload.col_164 || '').trim().toLowerCase() === 'yes') {
@@ -3990,6 +4147,11 @@ export async function saveOffLeaseStageFast(containerNo, stage, data, userEmail,
   // few-seconds-later Sheets write could land on two different rows.
   const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
   await enqueueSheetReplay('offlease.saveOffLeaseStage', [containerNo, stage, data, userEmail, resolvedRow], { actor: userEmail });
+
+  // Same UTR -> Refunds sheet sync as the live saveOffLeaseStage above.
+  if (stageNum === 8 && String(payload.col_351 || '').trim()) {
+    void _writeVrUtrToRefundsSheet(containerNo, found.row[1], { utr: String(payload.col_351).trim() });
+  }
 
   return 'OK';
 }
@@ -5084,10 +5246,12 @@ export async function expireOldHolds() {
  * other custom action here). Permission: 'offlease8', same actor as the rest
  * of this stage.
  */
-export async function saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow) {
+export async function saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow, voucherNumber) {
   await checkActionPermission('offlease8', userEmail);
   return withSheetLock(OL_SHEET, async () => {
     if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    const vrNo = String(voucherNumber || '').trim();
+    if (!vrNo) throw new AppError('Voucher Number is required');
     await _ensureOffLeaseSheet();
     const { rows } = await getSheetData(OL_SHEET);
     const rn = _resolveOlRow(rows, containerNo, knownRow);
@@ -5103,31 +5267,35 @@ export async function saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow
     const cellUpdates = [
       { range: `'${OL_SHEET}'!${colLetter(OL_VR_STATUS_COL)}${rn}`, values: [['Completed']] },
       { range: `'${OL_SHEET}'!${colLetter(OL_VR_TIMESTAMP_COL)}${rn}`, values: [[stamp]] },
-      { range: `'${OL_SHEET}'!${colLetter(OL_VR_USER_COL)}${rn}`, values: [[userEmail || '']] }
+      { range: `'${OL_SHEET}'!${colLetter(OL_VR_USER_COL)}${rn}`, values: [[userEmail || '']] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_VR_NUMBER_COL)}${rn}`, values: [[vrNo]] }
     ];
     await batchUpdateValues(cellUpdates);
 
     try {
       const r = await getCollection(OL_SHEET).updateOne(
         { key: `row_${rn - 2}` },
-        { $set: { [`row.${OL_VR_STATUS_COL}`]: 'Completed', [`row.${OL_VR_TIMESTAMP_COL}`]: stamp, [`row.${OL_VR_USER_COL}`]: userEmail || '' } }
+        { $set: { [`row.${OL_VR_STATUS_COL}`]: 'Completed', [`row.${OL_VR_TIMESTAMP_COL}`]: stamp, [`row.${OL_VR_USER_COL}`]: userEmail || '', [`row.${OL_VR_NUMBER_COL}`]: vrNo } }
       );
       if (!r.matchedCount) console.warn(`[OL-VR] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
     } catch (e) {
       console.error('[OL-VR] mirror update failed (reconcile will correct):', e?.message || e);
     }
 
+    void _writeVrUtrToRefundsSheet(containerNo, row[1], { vrNumber: vrNo });
     return 'OK';
   });
 }
 
 /** Mongo-first fast path for Voucher Raised — same trade-off as the other
  *  Fast paths in this file. */
-export async function saveOffLeaseVoucherRaisedFast(containerNo, userEmail, knownRow) {
+export async function saveOffLeaseVoucherRaisedFast(containerNo, userEmail, knownRow, voucherNumber) {
   // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
-  if (isCentral()) return saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow);
+  if (isCentral()) return saveOffLeaseVoucherRaised(containerNo, userEmail, knownRow, voucherNumber);
   await checkActionPermission('offlease8', userEmail);
   if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  const vrNo = String(voucherNumber || '').trim();
+  if (!vrNo) throw new AppError('Voucher Number is required');
 
   const docs = await getMongoRowsWithKeys(OL_SHEET);
   const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
@@ -5140,10 +5308,88 @@ export async function saveOffLeaseVoucherRaisedFast(containerNo, userEmail, know
   const stamp = dmyTime(new Date());
   await getCollection(OL_SHEET).updateOne(
     { key: found.key },
-    { $set: { [`row.${OL_VR_STATUS_COL}`]: 'Completed', [`row.${OL_VR_TIMESTAMP_COL}`]: stamp, [`row.${OL_VR_USER_COL}`]: userEmail || '', updatedAt: new Date() } }
+    { $set: { [`row.${OL_VR_STATUS_COL}`]: 'Completed', [`row.${OL_VR_TIMESTAMP_COL}`]: stamp, [`row.${OL_VR_USER_COL}`]: userEmail || '', [`row.${OL_VR_NUMBER_COL}`]: vrNo, updatedAt: new Date() } }
   );
   const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
-  await enqueueSheetReplay('offlease.saveOffLeaseVoucherRaised', [containerNo, userEmail, resolvedRow], { actor: userEmail });
+  await enqueueSheetReplay('offlease.saveOffLeaseVoucherRaised', [containerNo, userEmail, resolvedRow, vrNo], { actor: userEmail });
+
+  void _writeVrUtrToRefundsSheet(containerNo, found.row[1], { vrNumber: vrNo });
+  return 'OK';
+}
+
+/**
+ * Stage 8 (Payment Done, internal 12) — explicit request 2026-11-19 ("add
+ * the one stage add stage 8 paymnet done"), confirmed via AskUserQuestion:
+ * a real new stage, Accounts/Finance confirming the bank transfer actually
+ * cleared, after Stage 7 (Payment Status, internal 8 — HOD/Accounts/CEO/VR/
+ * UTR) is fully complete. Same custom-action shape as VR above (no form
+ * fields of its own — just Status/Timestamp/User/an optional Remark).
+ * Permission: 'offlease12', same `offlease${stageNum}` convention every
+ * other stage uses.
+ */
+export async function saveOffLeasePaymentDone(containerNo, userEmail, knownRow, remarks) {
+  await checkActionPermission('offlease12', userEmail);
+  return withSheetLock(OL_SHEET, async () => {
+    if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+    await _ensureOffLeaseSheet();
+    const { rows } = await getSheetData(OL_SHEET);
+    const rn = _resolveOlRow(rows, containerNo, knownRow);
+    if (rn === -1) throw new AppError(`Not found: ${containerNo}`);
+
+    const row = rows[rn - 2] || [];
+    if (safeStr(row[OL_STAGE_INFO[8].statusCol]).trim() !== 'Completed') {
+      throw new AppError('Stage 7 (Payment Status) must be completed before Payment Done can be marked.');
+    }
+    if (safeStr(row[OL_PAYMENT_DONE_STATUS_COL]).trim() !== '') return 'ALREADY_PROCESSED';
+
+    const stamp = dmyTime(new Date());
+    const remark = String(remarks || '').trim();
+    const cellUpdates = [
+      { range: `'${OL_SHEET}'!${colLetter(OL_PAYMENT_DONE_STATUS_COL)}${rn}`, values: [['Completed']] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_PAYMENT_DONE_TIMESTAMP_COL)}${rn}`, values: [[stamp]] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_PAYMENT_DONE_USER_COL)}${rn}`, values: [[userEmail || '']] },
+      { range: `'${OL_SHEET}'!${colLetter(OL_PAYMENT_DONE_REMARK_COL)}${rn}`, values: [[remark]] }
+    ];
+    await batchUpdateValues(cellUpdates);
+
+    try {
+      const r = await getCollection(OL_SHEET).updateOne(
+        { key: `row_${rn - 2}` },
+        { $set: { [`row.${OL_PAYMENT_DONE_STATUS_COL}`]: 'Completed', [`row.${OL_PAYMENT_DONE_TIMESTAMP_COL}`]: stamp, [`row.${OL_PAYMENT_DONE_USER_COL}`]: userEmail || '', [`row.${OL_PAYMENT_DONE_REMARK_COL}`]: remark } }
+      );
+      if (!r.matchedCount) console.warn(`[OL-PAYMENT-DONE] mirror row_${rn - 2} not found for ${containerNo} — next reconcile will pick it up`);
+    } catch (e) {
+      console.error('[OL-PAYMENT-DONE] mirror update failed (reconcile will correct):', e?.message || e);
+    }
+
+    return 'OK';
+  });
+}
+
+/** Mongo-first fast path for Payment Done — same trade-off as the other
+ *  Fast paths in this file. */
+export async function saveOffLeasePaymentDoneFast(containerNo, userEmail, knownRow, remarks) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveOffLeasePaymentDone(containerNo, userEmail, knownRow, remarks);
+  await checkActionPermission('offlease12', userEmail);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  const remark = String(remarks || '').trim();
+
+  const docs = await getMongoRowsWithKeys(OL_SHEET);
+  const found = _resolveOlMongoDoc(docs, containerNo, knownRow);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+  if (safeStr(found.row[OL_STAGE_INFO[8].statusCol]).trim() !== 'Completed') {
+    throw new AppError('Stage 7 (Payment Status) must be completed before Payment Done can be marked.');
+  }
+  if (safeStr(found.row[OL_PAYMENT_DONE_STATUS_COL]).trim() !== '') return 'ALREADY_PROCESSED';
+
+  const stamp = dmyTime(new Date());
+  await getCollection(OL_SHEET).updateOne(
+    { key: found.key },
+    { $set: { [`row.${OL_PAYMENT_DONE_STATUS_COL}`]: 'Completed', [`row.${OL_PAYMENT_DONE_TIMESTAMP_COL}`]: stamp, [`row.${OL_PAYMENT_DONE_USER_COL}`]: userEmail || '', [`row.${OL_PAYMENT_DONE_REMARK_COL}`]: remark, updatedAt: new Date() } }
+  );
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('offlease.saveOffLeasePaymentDone', [containerNo, userEmail, resolvedRow, remark], { actor: userEmail });
 
   return 'OK';
 }
@@ -5692,12 +5938,13 @@ export async function getOffLeaseDashboardData(user) {
   const gate = await _offLeaseAccessGate(user);
   const gateFormIndex = getGateFormIndexSync();
   /* Cache/disk-only, same as the gate form index — cheap enough to always
-     resolve. Keyed on container alone (see getDeliveredKeys' own doc
-     comment for why client is not used there). Best-effort: an FMS read
-     failure degrades to the pre-delivery-bypass count, not a broken
-     dashboard. */
+     resolve. CHANGED 2026-11-20 — now client-matched, same as
+     getOffLeaseData's own fix (see that function's own BUG FOUND AND FIXED
+     comment next to its isDeliveredSinceForClient call). Best-effort: an
+     FMS read failure degrades to the pre-delivery-bypass count, not a
+     broken dashboard. */
   let deliveredKeys;
-  try { deliveredKeys = await getDeliveredKeys(); } catch (e) { deliveredKeys = undefined; }
+  try { deliveredKeys = await getDeliveredKeysWithClient(); } catch (e) { deliveredKeys = undefined; }
 
   /* GUARANTEED-CONSISTENT current-stage/KPI source, added 2026-08-28 after a
    * whole day of the Dashboard's own hand-approximated classifier
@@ -5776,7 +6023,7 @@ export async function getOffLeaseDashboardData(user) {
     // AND FIXED 2026-11-05, MOAU0749105).
     const rowDeployedAtMs = (() => { const d = parseDate(row[7]); return d ? d.getTime() : null; })();
     const gfRow = pickGateFormForClient(gateFormIndex.get(containerKey) || [], row[5], rowDeployedAtMs);
-    const delivered = deliveredKeys ? isDeliveredSince(deliveredKeys, containerKey, null) : false;
+    const delivered = deliveredKeys ? isDeliveredSinceForClient(deliveredKeys, containerKey, row[5], null) : false;
     const c = _classifyOffLeaseStages(headers, row, isGatedIn(gfRow), isRepairNotRequired(gfRow), delivered);
 
     // Override current-stage classification with the guaranteed-consistent
@@ -6363,6 +6610,26 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
   // stage was the actual jump TARGET (see the fields.push block below).
   const containerJumpTarget = _jumpTargetInternal(row);
 
+  /* BUG FOUND AND FIXED 2026-11-20 (explicit report, live on CICU3876539/
+   * OF0110 — "pending stage 2 but this show stage 3"): this function's own
+   * bypassDone (just below) never checked `delivered` (STAGE-10 site
+   * delivery) for Transportation (OL_STAGE2_INTERNAL) at all, only
+   * _classifyOffLeaseStages (the dashboard's own classifier) did — so a
+   * delivered container showed "Stage 2 · Transportation" (still pending)
+   * on ITS OWN record page while the dashboard correctly showed it past
+   * Transportation. FOLLOW-UP SAME DAY ("this is not fil stage 8 9 10"):
+   * this record's own container+client-matched STAGE-8/9/10 lookup (same
+   * getMatchedFmsForContainer call the FMS Movement/Transport/Site Delivery
+   * panel above already uses) decides `delivered` now, not a separate
+   * container-only getDeliveredKeys read — see that function's own doc
+   * comment for why container-only was the original design, and
+   * getDeliveredKeysWithClient's doc comment (stage8.service.js) for why
+   * this record needed its own client checked instead. */
+  const stage1Done = safeStr(row[OL_STAGE_INFO[1].statusCol]).trim() !== '';
+  let deliveryFms;
+  try { deliveryFms = await getMatchedFmsForContainer(containerNo, res.clientName); } catch (e) { deliveryFms = null; }
+  const delivered = !!deliveryFms?.delivery;
+
   for (const s of [...OL_ACTIVE_STAGE_NUMS, ...retiredWithData]) {
     const info = OL_STAGE_INFO[s];
     // Stage 4's columns were deleted from the sheet, so it has no entry at all
@@ -6373,7 +6640,10 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
     // as getOffLeaseData/_classifyOffLeaseStages (see _isMovedOut/_jumpSkipsStage).
     // Inspection (internal 3) no longer bypasses on repairSkip — CHANGED
     // 2026-09-04, see getOffLeaseData's own queue-gating change.
-    const bypassDone = (s === OL_STAGE2_INTERNAL && _isMovedOut(row))
+    // Same formula as _classifyOffLeaseStages' own bypassDone — see this
+    // block's own BUG FOUND AND FIXED comment above for why `delivered` is
+    // now included here too.
+    const bypassDone = (s === OL_STAGE2_INTERNAL && (delivered || _isMovedOut(row)) && stage1Done)
       || (s === OL_STAGE3_INTERNAL && gatedIn)
       || _jumpSkipsStage(containerJumpTarget, s);
 
@@ -6626,6 +6896,10 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
       displayStage: displayStageNum(s),
       label: OL_STAGE_LABELS[s],
       done: st !== '' || bypassDone,
+      // Genuinely filled in (not just bypass-inferred) — same distinction
+      // _classifyOffLeaseStages' own `real` draws, used below for the same
+      // "implied done" backward pass that function already has.
+      real: st !== '',
       /* Inspection Checklist no longer has a "skipped" case at all — CHANGED
          2026-09-04, it now always waits for a real completion regardless of
          Repair Required Yes/No. Only a Move-To-Stage jump can still mark a
@@ -6697,9 +6971,22 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
        present (historical data) must not count as "still pending" either. */
     /* Workflow order, skipping the first entry and any retired stage that only
        appears here because it holds historical data. */
+    /* "Implied done" backward pass — same fix, same reasoning, as
+       _classifyOffLeaseStages' own (see that function's 2026-08-28 doc
+       comment): a stage with a REAL (non-bypass) status implies every stage
+       before it must have been satisfied at some point, even when this
+       function can't reconstruct exactly how. Missing this here (while the
+       dashboard's own classifier already had it) is what caused this
+       function to disagree with the dashboard — see this block's own BUG
+       FOUND AND FIXED comment further up, next to `delivered`. */
+    const activeStagesInOrder = OL_ACTIVE_STAGE_NUMS.map((n) => stages.find((s) => s.stage === n)).filter(Boolean);
+    let lastRealIdx = -1;
+    activeStagesInOrder.forEach((s, i) => { if (s.real) lastRealIdx = i; });
+    activeStagesInOrder.forEach((s, i) => { s.impliedDone = i <= lastRealIdx; });
+
     const next = OL_ACTIVE_STAGE_NUMS.slice(1)
       .map((n) => stages.find((s) => s.stage === n))
-      .find((s) => s && !s.done);
+      .find((s) => s && !s.done && !s.impliedDone);
     if (!next) { res.currentStage = 'Completed — container released'; res.stageClass = 'done'; }
     else { res.currentStage = stageCaption(next.stage); res.stageClass = 'stage'; }
   }

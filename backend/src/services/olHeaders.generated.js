@@ -288,4 +288,23 @@ export const OL_HEADERS = [
      Keep this entry if this file is ever regenerated from the live header
      row. */
   "Email Confirmation",
+  /* Index 399 — same deliberate, hand-added exception as above: added
+     2026-11-19 for Stage 7's own "Voucher Number" (col_399,
+     OL_VR_NUMBER_COL in offlease.service.js) — NOT 359, which this file's
+     own 359-397 Cabin block above already claims (Fan's own Condition
+     column); confirmed free before picking 399, right after Email
+     Confirmation (398). Keep this entry if this file is ever regenerated
+     from the live header row. */
+  "VR No.",
+  /* Indices 400-403 — same deliberate, hand-added exception as above: added
+     2026-11-19 for the new Stage 8 (Payment Done, internal 12 — see
+     OL_STAGE_INFO[12] in offlease.service.js), explicit request "add the
+     one stage add stage 8 paymnet done". Same Remark/Timestamp/User/Status
+     column ORDER as every other real stage block (e.g. Stage 1's own
+     14-17) — this exact order is what lets getOffLeaseDashboardData's own
+     generic `remarkCol = info.statusCol - 3` + header-text guard correctly
+     find this stage's remark too, not just OL_STAGE_INFO[12]'s own
+     startCol..endCol read. Keep these 4 entries if this file is ever
+     regenerated from the live header row. */
+  "Payment Done Remark", "Payment Done Timestamp", "Payment Done User", "Payment Done Status",
 ];

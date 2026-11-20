@@ -1,6 +1,6 @@
 import {
   getStageData, getStageDetail, getCardEnrichment, getAgreementPoPdf, saveStage, getNextLeaseId, saveMoveToStage, saveMoveToStageClientToClientPending, saveSendBack, getMoveHistory,
-  saveHold, saveSendBackToStage1, saveSendRejectedToStage1, saveSendBackFromBilling, getSdRefundsForContainer, saveVoucherRaised
+  saveHold, saveSendBackToStage1, saveSendRejectedToStage1, saveSendBackFromBilling, getSdRefundsForContainer, saveVoucherRaised, savePaymentDone
 } from '../api/stage.api.js';
 import { invalidate } from '../shared/dataBus.js';
 
@@ -73,8 +73,13 @@ export async function submitSendBackFromBilling(containerNo, remarks, rowNum) {
   invalidate('off-lease');
   return res;
 }
-export async function submitVoucherRaised(containerNo, rowNum) {
-  const res = await saveVoucherRaised(containerNo, rowNum);
+export async function submitVoucherRaised(containerNo, rowNum, voucherNumber) {
+  const res = await saveVoucherRaised(containerNo, rowNum, voucherNumber);
+  invalidate('off-lease');
+  return res;
+}
+export async function submitPaymentDone(containerNo, rowNum, remarks) {
+  const res = await savePaymentDone(containerNo, rowNum, remarks);
   invalidate('off-lease');
   return res;
 }

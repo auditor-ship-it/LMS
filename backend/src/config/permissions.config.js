@@ -122,7 +122,18 @@ export const PERMISSION_KEYS = [
    * baseline" rule as rolesAdmin/apiAdmin above — so this key must be
    * explicitly granted via Roles & Access after this ships, or the button
    * stays hidden for everyone including whoever requested the feature. */
-  { key: 'whatsappReportAdmin', label: 'Daily WhatsApp Report Admin' }
+  { key: 'whatsappReportAdmin', label: 'Daily WhatsApp Report Admin' },
+  /* Appended (not inserted) — same positional rule as offlease9 above.
+   * Stage 8 (Payment Done), explicit request 2026-11-19 ("add the one stage
+   * add stage 8 paymnet done"), confirmed via AskUserQuestion — internal
+   * stage 12 (NOT 9, which is already a different, unrelated feature — see
+   * offlease9's own entry above), appended to OL_ACTIVE_STAGE_NUMS after 8
+   * so it displays as the new "Stage 8". Accounts/Finance's own confirmation
+   * that the bank transfer actually cleared, after Stage 7 (Payment Status)
+   * is fully complete. Defaults to false for everyone — no hardcoded
+   * fallback, same "no baseline" rule as every other key here — must be
+   * explicitly granted to whoever holds that role via Roles & Access. */
+  { key: 'offlease12', label: 'Off-Lease Stage 8: Payment Done (Accounts/Finance)' }
   /* offlease10 (Off-Lease Stage 3: LR & Return Transportation) — added
      2026-09-18, REMOVED 2026-09-22 (explicit request: Stage 3 itself was
      removed from the pipeline entirely, LR & Return Transportation + its
