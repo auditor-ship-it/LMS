@@ -18,7 +18,7 @@ import { AppError } from '../utils/AppError.js';
 import { getApproveData } from './approve.service.js';
 import { getExpiryDataByFilter } from './expiry.service.js';
 import { getVerifyData } from './verify.service.js';
-import { getOffLeaseStageCounts, getOffLeaseData } from './offlease.service.js';
+import { getOffLeaseStageCounts, getOffLeaseData, getOffLeaseDashboardData } from './offlease.service.js';
 import { getRefundStageCounts } from './refunds.service.js';
 import { countNewLeaseQueuePending } from './newLeaseQueue.service.js';
 import { getSheetDataFromMongo } from './mongoSheetData.service.js';
@@ -75,7 +75,10 @@ const MY_TASK_KEY_META = {
   olStage11: ['Off-Lease Stage 6: SD Refunds', 'olStage11'],
   sdRefundsHod: ['Off-Lease Stage 6A: HOD Approval', 'sdRefundsHod'],
   sdRefundsAccounts: ['Off-Lease Stage 6B: Accounts Approval', 'sdRefundsAccounts'],
-  sdRefundsCeo: ['Off-Lease Stage 6C: CEO Approval', 'sdRefundsCeo']
+  sdRefundsCeo: ['Off-Lease Stage 6C: CEO Approval', 'sdRefundsCeo'],
+  // Added 2026-11-20 — "Stage 4.5 · Billing Send Back" (see
+  // out.billingSendBackPending's own doc comment above).
+  billingSendBackPending: ['Off-Lease Stage 4.5: Billing Send Back', 'billingSendBackPending']
 };
 
 /**
@@ -113,6 +116,16 @@ export async function getMyTasks(user, force) {
       expiring7: 0, expired: 0, renewPending: 0, renewApprovalPending: 0, newLeasePending: 0,
       olStage1: 0, olStage1Hold: 0, olStage2: 0, olStage3: 0, olStage4: 0, olStage5: 0, olStage6: 0, olStage7: 0, olStage8: 0,
       olStage11: 0, sdRefundsHod: 0, sdRefundsAccounts: 0, sdRefundsCeo: 0,
+      // "Stage 4.5 · Billing Send Back" — explicit request 2026-11-20 ("add
+      // the stage 4.5 offlease"), for the Daily WhatsApp Report's own
+      // pipeline table (dailyWhatsappReportService.js). Not an
+      // OL_ACTIVE_STAGE_NUMS entry (see PipelineDashboard.jsx's own doc
+      // comment on this StatCard — it's a relabeled view of Stage 1 data,
+      // not a real new stage), so it can't come from getOffLeaseStageCounts
+      // above like the others; sourced straight from
+      // getOffLeaseDashboardData's own kpis.billingSendBackPending below
+      // instead, so this can never disagree with the live dashboard card.
+      billingSendBackPending: 0,
       /* Which cards the caller should see, or null for "show everything" (the
        * pre-existing, still-default behaviour for anyone not in this map).
        *
@@ -170,6 +183,27 @@ export async function getMyTasks(user, force) {
     /* Stage 1's own Hold sub-queue — explicit request 2026-09-29, same
        source OffLeasePage.jsx's own Hold tab reads. */
     try { out.olStage1Hold = ((await getOffLeaseData(1, { filter: 'hold' }, user)).data || []).length; } catch (e) { /* noop */ }
+
+    /* "Stage 4.5 · Billing Send Back" — see out.billingSendBackPending's own
+       doc comment above for why this goes through getOffLeaseDashboardData
+       instead of getOffLeaseStageCounts. Cached 20s on that function's own
+       side (OL_DASHBOARD_CACHE_KEY), so this rarely costs a fresh read on
+       top of whatever else on the page just triggered one.
+       BUG FOUND AND FIXED 2026-11-20 (explicit report, "stage 1 mai pending
+       galt hai" — the WhatsApp report's own Stage 1 row read 37, the live
+       dashboard's own Stage 1 card reads 17): olStage1 just above is
+       getOffLeaseStageCounts' own RAW Stage 1 queue length, which still
+       INCLUDES every billing-send-back record (currentStageNum===1 with a
+       billingSendBackNote) — PipelineDashboard.jsx's own Stage 1 StatCard
+       already subtracts billingSendBackPending from this exact same raw
+       number client-side (`kpis.byStage[1] - kpis.billingSendBackPending`,
+       see that card's own doc comment, "stage 1 mai fir stage 5 ke send
+       back nahi dikhne chahiye hai") — but nothing on THIS backend side
+       ever applied that same subtraction, so My Task's own Stage 1 card and
+       this report both still showed the undercount-inclusive 37 = 17 + 20.
+       Subtracting here fixes it at the source for both. */
+    try { out.billingSendBackPending = (await getOffLeaseDashboardData(user)).kpis?.billingSendBackPending ?? 0; } catch (e) { /* noop */ }
+    out.olStage1 = Math.max(0, out.olStage1 - out.billingSendBackPending);
 
     /* Stage 6A/6B/6C — SD Refunds is a separate backend system (own sheet,
        own currentStage field, see refunds.service.js), so its own fetch

@@ -14,7 +14,7 @@ import {
 } from '../services/offlease.service.js';
 import { saveExpiryAction, completeDocumentStage, saveExpiryRemark, sendExpiryToPending, saveRenewalDraft, completeDocStage, decideRenewalApproval } from '../services/expiry.service.js';
 import { writeHistoryRowToSheet } from '../services/poAgreementHistory.service.js';
-import { addOffLeaseRemarkSheetWrite } from '../services/offleaseRemarks.service.js';
+import { addOffLeaseRemarkSheetWrite, updateOffLeaseRemarkSheetWrite, deleteOffLeaseRemarkSheetWrite } from '../services/offleaseRemarks.service.js';
 import { decideRefundApproval, decideRefundSendBack } from '../services/refunds.service.js';
 
 export const OUTBOX_REGISTRY = {
@@ -38,6 +38,8 @@ export const OUTBOX_REGISTRY = {
   'expiry.decideRenewalApproval': decideRenewalApproval,
   'poAgreementHistory.writeRowToSheet': writeHistoryRowToSheet,
   'offleaseRemarks.addOffLeaseRemarkSheetWrite': addOffLeaseRemarkSheetWrite,
+  'offleaseRemarks.updateOffLeaseRemarkSheetWrite': updateOffLeaseRemarkSheetWrite,
+  'offleaseRemarks.deleteOffLeaseRemarkSheetWrite': deleteOffLeaseRemarkSheetWrite,
   'refunds.decideRefundApproval': decideRefundApproval,
   'refunds.decideRefundSendBack': decideRefundSendBack
 };

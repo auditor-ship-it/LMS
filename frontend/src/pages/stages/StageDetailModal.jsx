@@ -240,41 +240,50 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
      and the exact same backend guards (Stage 6 CEO-approved, etc.) manual
      entry does — nothing about the validation path is skipped, only the
      button clicks are.
-     autoCompleteRef (a ref, not state) stops this from re-firing on every
-     render while an attempt is in flight or has already run for this
-     record; only a genuine containerNo change resets it. */
-  const autoCompleteRef = useRef(null);
+     autoCompleteBusyRef (a ref, not state) only stops a SECOND, concurrent
+     attempt from firing while one is already in flight — it is NOT a
+     per-container "already ran once" latch. BUG FOUND AND FIXED 2026-11-21
+     (explicit report, live on SZLU2011901/OF0029 — VR genuinely completed
+     on its own, but UTR never followed even after reload): the original
+     version set a ref keyed to `containerNo` on the VR branch and never
+     cleared it on SUCCESS, only on error — so the very next render (after
+     VR's own reload() brought back data.col_348 === 'Completed') hit the
+     top-level guard and returned immediately, before ever reaching the UTR
+     branch below it. Always reset in `finally` now, so each render is free
+     to advance to whichever step is still outstanding. */
+  const autoCompleteBusyRef = useRef(false);
   useEffect(() => {
     if (stageNumber !== PAYMENT_STATUS_STAGE || !data) return;
-    if (autoCompleteRef.current === containerNo) return;
+    if (autoCompleteBusyRef.current) return;
     const fetchedVr = String(data._acFmsVoucher?.vrNumber ?? '').trim();
     const fetchedUtr = String(data._acFmsVoucher?.utr ?? '').trim();
     if (!fetchedVr || !fetchedUtr) return; // need BOTH known before auto-completing
 
     if (data.col_348 !== 'Completed') {
-      autoCompleteRef.current = containerNo;
+      autoCompleteBusyRef.current = true;
       (async () => {
         try {
           await submitVoucherRaised(containerNo, rowNum, fetchedVr);
           await reload();
         } catch (err) {
           setVrError(apiErrorMessage(err));
-          autoCompleteRef.current = null; // allow a retry once the error is addressed
+        } finally {
+          autoCompleteBusyRef.current = false;
         }
       })();
       return;
     }
 
     if (!String(data.col_351 ?? '').trim()) {
-      autoCompleteRef.current = containerNo;
+      autoCompleteBusyRef.current = true;
       (async () => {
         try {
-          const message = await submitStage(containerNo, stageNumber, { col_351: fetchedUtr }, rowNum);
-          if (message === 'ALREADY_PROCESSED') autoCompleteRef.current = null;
+          await submitStage(containerNo, stageNumber, { col_351: fetchedUtr }, rowNum);
           await reload();
         } catch (err) {
           setSaveError(apiErrorMessage(err));
-          autoCompleteRef.current = null;
+        } finally {
+          autoCompleteBusyRef.current = false;
         }
       })();
     }
@@ -836,7 +845,18 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                         </span>
                         <span className={styles.pipelineStep}>
                           <span className={styles.pipelineLabel}>VR</span>
-                          <StatusBadge status={data?.col_348 === 'Completed' ? 'Completed' : 'Pending'} />
+                          {/* Same fallback as UTR's own badge just below —
+                              explicit follow-up 2026-11-21 ("vr fethc ho gya
+                              hai tho yaha pe dikhe completed vr"): a VR
+                              Number already fetched from A/C FMS reads as
+                              Completed here too, not just after the
+                              Mark Voucher Raised action actually runs. Still
+                              the real saved col_348 first — never a false
+                              "Completed" once this stage genuinely has no
+                              number at all, only while it's merely pending
+                              that action (or the auto-complete effect,
+                              which still needs UTR too before it fires). */}
+                          <StatusBadge status={data?.col_348 === 'Completed' || data?._acFmsVoucher?.vrNumber ? 'Completed' : 'Pending'} />
                           {/* VR Number — added 2026-11-19 ("vr no show hone
                               chhaiye hai"), right beside the chip, same place
                               UTR's own number is implied by its own field
@@ -852,7 +872,7 @@ export function StageDetailModal({ stageNumber, containerNo, rowNum, readOnly, i
                               back to the fetched value, same number the
                               Voucher Number input above pre-fills from when
                               VR isn't done yet. */}
-                          {data?.col_348 === 'Completed' && (
+                          {(data?.col_348 === 'Completed' || data?._acFmsVoucher?.vrNumber) && (
                             <span className={styles.approvalMeta}>
                               {data?.col_399 || data?._acFmsVoucher?.vrNumber ? `#${data.col_399 || data._acFmsVoucher.vrNumber}` : '(no number on file)'}
                             </span>

@@ -197,7 +197,21 @@ function _mapRow(r, rowNum) {
    * _isCeoRequired's blank-defaults-to-required fallback silently force
    * every bill through CEO review regardless of amount — BUG FOUND AND FIXED
    * 2026-10-07 while verifying a live submission above the threshold. */
-  const ceoRequired = _isCeoRequired(r[8]);
+  /* BUG FOUND AND FIXED 2026-11-21 (explicit report, live on TRIU6617353/
+   * OF0090 — "1 lakh le nichhe hai amt tho yah pending kyu dikh raha hai",
+   * record page shows 100% complete/SD Refunds Completed, but the dashboard
+   * still filtered it under "Stage 6C · CEO approval pending"): this row's
+   * own "Amount to Pay" (col 8) has since been corrupted into a date-like
+   * string ("02/09/2101 00:00:00" — Invoice Amount, col 7, the same), so
+   * _isCeoRequired(r[8]) now reads NaN and falls back to "required" on
+   * every read, even though CEO was legitimately, durably decided "Skipped"
+   * back when the real amount was readable (this row's own CEO Approval
+   * Remarks literally says so: "CEO approval automatically skipped because
+   * Amount to Pay is ₹1,00,000 or below."). A later, unrelated corruption of
+   * the amount cell must never retroactively un-skip an already-made,
+   * durable decision — once ceoStatus is genuinely 'Skipped', trust that
+   * over recomputing from whatever the amount cell currently holds. */
+  const ceoRequired = ceoStatus.trim() === 'Skipped' ? false : _isCeoRequired(r[8]);
 
   /* Which stage (if any) is actionable right now — the frontend uses this to
    * decide whose Approve/Reject buttons to show on a given row, alongside
@@ -290,10 +304,32 @@ async function _assertCanViewRefunds(email) {
 export async function getRefundEntries(userEmail) {
   await _assertCanViewRefunds(userEmail);
   const { rows } = await getSheetDataFromMongo(REFUNDS_SHEET);
-  return rows
+  const entries = rows
     .map((r, i) => _mapRow(r, i + 2))
-    .filter((r) => r.invoiceNumber || r.vendorName)
-    .reverse();
+    .filter((r) => r.invoiceNumber || r.vendorName);
+
+  /* Self-heal, explicit follow-up 2026-11-21 ("yah hu hi nahi... iska kyu
+   * nahi ho raha hai" — SZLU2011901/SZLU9446439 still showed "Released" on
+   * the dashboard, not yet opened): getRefundEntriesForContainer's own
+   * self-heal (see its doc comment) only fires once someone opens THAT one
+   * container's Stage 6/7 — too narrow when the dashboard itself is what
+   * surfaces the stuck "Released" state in the first place. This is the
+   * function the dashboard's own refund-rows fetch (GET /api/refunds,
+   * every PipelineDashboard.jsx load) actually calls, so hooking the same
+   * self-heal in here catches every stuck bill the moment the dashboard is
+   * simply opened — no need to drill into any one container first. Still
+   * fire-and-forget/best-effort, still a no-op once genuinely Completed. */
+  for (const entry of entries) {
+    if (entry.currentStage !== 'done' || !entry.containerNo) continue;
+    const containers = splitContainers(entry.containerNo).map((c) => c.trim()).filter(Boolean);
+    const leaseIds = splitContainers(entry.offLeaseId).map((l) => l.trim());
+    containers.forEach((container, idx) => {
+      markOffLeaseSdRefundApproved(container, 'SD Refund approved (auto-healed on dashboard read)', leaseIds[idx] || '')
+        .catch((e) => console.error('[REFUND-SELF-HEAL]', container, e?.message || e));
+    });
+  }
+
+  return entries.reverse();
 }
 
 /** Whole-desk HOD/CEO pending counts, no permission gate — same "desk total
@@ -365,6 +401,28 @@ export async function getRefundEntriesForContainer(containerNo) {
       allContainerNos: mapped.containerNo, allOffLeaseIds: mapped.offLeaseId
     });
   });
+
+  /* Self-heal, explicit request 2026-11-21 ("manually mujhe complete kyu
+   * likhna padh raha hai... auto complete aa jaye samjhe" — why do I have
+   * to manually mark this, it should auto-complete): a bill that's already
+   * fully HOD/Accounts/CEO approved (currentStage === 'done') but whose
+   * Off-Lease Tracking Stage 6 never flipped to "Completed" — the exact
+   * backlog state the 2026-11-21 bulk-containerNo bug left behind on
+   * several bills approved before that fix — gets corrected automatically
+   * the next time anyone simply OPENS this container's Stage 6/7 (which
+   * calls this function). No manual script needed going forward.
+   * Fire-and-forget, not awaited — this read must never slow down (or
+   * fail because of) that write. markOffLeaseSdRefundApproved is already a
+   * no-op once Stage 6 genuinely is "Completed" (checked inside it, after
+   * its own live sheet read), so this is safe to call every time, just not
+   * free — acceptable here since this only runs when a person actually
+   * opens one container's own Stage 6/7, not on a dashboard-wide poll. */
+  for (const entry of out) {
+    if (entry.currentStage !== 'done') continue;
+    markOffLeaseSdRefundApproved(entry.containerNo, 'SD Refund approved (auto-healed on read)', entry.offLeaseId)
+      .catch((e) => console.error('[REFUND-SELF-HEAL]', entry.containerNo, e?.message || e));
+  }
+
   return out.reverse();
 }
 
@@ -471,7 +529,31 @@ export async function addRefundEntry(payload, userEmail) {
     // offLeaseId threaded through 2026-11-04 (see that function's own doc
     // comment) — a container number alone can match more than one Off-Lease
     // Tracking row (payload.offLeaseId is already captured into the row above).
-    if (containerNo) await markOffLeaseSdRefundSubmitted(containerNo, safeStr(payload.offLeaseId).trim());
+    // BUG FOUND AND FIXED 2026-11-21 (explicit report, live on TRIU6681671/
+    // MYRU4519115/GESU9563904/SZLU9915829 — "yah stage 7 mai pending dikhega
+    // samjhe", confirmed root cause: HOD+Accounts+CEO all genuinely Approved
+    // already, but this bill's 4 containers stayed stuck at Stage 6
+    // "Submitted" forever): a bulk "Fill one SD Refund form for all"
+    // submission (BulkRefundModal) writes ONE joined containerNo/offLeaseId
+    // cell covering SEVERAL containers — passing that whole joined string
+    // straight to markOffLeaseSdRefundSubmitted (which matches by exact
+    // normKey equality against a single OL_SHEET row's own container number)
+    // matched NOTHING, so a bulk bill's containers never even got the
+    // "Submitted" stamp this way (they got it from somewhere else, or stayed
+    // blank) — and the SAME bug in decideRefundApproval below is the one
+    // that actually blocked these 4 forever, since nothing ever marks them
+    // "Completed" either. Split here the same way every other multi-
+    // container cell in this app is split (splitContainers) and call once
+    // per container, position-matched to its own lease ID — a single-
+    // container bill is unaffected (splitting a string with no separator
+    // just returns that same string, at index 0).
+    const submittedContainers = splitContainers(containerNo).map((c) => c.trim()).filter(Boolean);
+    const submittedLeaseIds = splitContainers(payload.offLeaseId).map((l) => l.trim());
+    for (let i = 0; i < submittedContainers.length; i++) {
+      try {
+        await markOffLeaseSdRefundSubmitted(submittedContainers[i], submittedLeaseIds[i] || '');
+      } catch (e) { console.error('[REFUND-SUBMIT-OL-MARK]', submittedContainers[i], e?.message || e); }
+    }
 
     return { message: 'SAVED', entry: _mapRow(row, rowNum ?? null) };
   });
@@ -612,7 +694,23 @@ export async function decideRefundApproval(rowNum, stage, decision, remarks, cal
       // offLeaseId threaded through 2026-11-04 (see markOffLeaseSdRefundApproved's
       // own doc comment) — a container number alone can match more than one
       // Off-Lease Tracking row.
-      if (containerNo) await markOffLeaseSdRefundApproved(containerNo, `SD Refund approved by ${callerEmail || cfg.label}`, safeStr(updatedRow[OFFLEASE_ID_COL]).trim());
+      // BUG FOUND AND FIXED 2026-11-21 (explicit report, "yah stage 7 mai
+      // pending dikhega samjhe", confirmed root cause: a bulk bill's
+      // containerNo/offLeaseId are ONE joined cell — passing that whole
+      // string to markOffLeaseSdRefundApproved (exact single-row match)
+      // matched nothing, so EVERY container on a bulk-approved bill stayed
+      // stuck at Stage 6 "Submitted" forever, never flipping to "Completed"
+      // even once HOD+Accounts+CEO were all genuinely Approved — confirmed
+      // live on TRIU6681671/MYRU4519115/GESU9563904/SZLU9915829. Same
+      // splitContainers fix as markOffLeaseSdRefundSubmitted's own call
+      // site above; a single-container bill is unaffected.
+      const approvedContainers = splitContainers(containerNo).map((c) => c.trim()).filter(Boolean);
+      const approvedLeaseIds = splitContainers(updatedRow[OFFLEASE_ID_COL]).map((l) => l.trim());
+      for (let i = 0; i < approvedContainers.length; i++) {
+        try {
+          await markOffLeaseSdRefundApproved(approvedContainers[i], `SD Refund approved by ${callerEmail || cfg.label}`, approvedLeaseIds[i] || '');
+        } catch (e) { console.error('[REFUND-APPROVE-OL-MARK]', approvedContainers[i], e?.message || e); }
+      }
     }
 
     return 'OK';
@@ -739,8 +837,17 @@ export async function decideRefundSendBack(rowNum, stage, remarks, callerEmail, 
       await _sendRefundStageEmail('sentback', stage, updatedRow, rowNum, { remarks });
     } catch (e) { console.error('[REFUND-APPROVAL-EMAIL]', e.message); }
 
+    // Same splitContainers fix as the submitted/approved call sites above —
+    // see decideRefundApproval's own BUG FOUND AND FIXED comment for the
+    // full history; this is the same bug's third occurrence (Send Back).
     const containerNo = safeStr(updatedRow[CONTAINER_NO_COL]).trim();
-    if (containerNo) await markOffLeaseSdRefundRejected(containerNo, safeStr(updatedRow[OFFLEASE_ID_COL]).trim());
+    const sentBackContainers = splitContainers(containerNo).map((c) => c.trim()).filter(Boolean);
+    const sentBackLeaseIds = splitContainers(updatedRow[OFFLEASE_ID_COL]).map((l) => l.trim());
+    for (let i = 0; i < sentBackContainers.length; i++) {
+      try {
+        await markOffLeaseSdRefundRejected(sentBackContainers[i], sentBackLeaseIds[i] || '');
+      } catch (e) { console.error('[REFUND-SENDBACK-OL-MARK]', sentBackContainers[i], e?.message || e); }
+    }
 
     return 'OK';
   });

@@ -14,7 +14,9 @@ import {
 } from '../../services/whatsappReport.service.js';
 import styles from './DailyReportButton.module.css';
 
-const DEFAULT_NUMBER = '919321774772';
+// CHANGED 2026-11-20 (explicit request) — matches dailyWhatsappReportService.js's
+// own DEFAULT_TO_NUMBERS; only the fallback shown before settings load.
+const DEFAULT_NUMBER = '917738910553';
 
 function todayStr() {
   const d = new Date();
