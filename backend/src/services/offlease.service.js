@@ -3930,13 +3930,30 @@ export async function saveOffLeaseStage(containerNo, stage, data, userEmail, kno
        submission again (the ALREADY_PROCESSED guard in
        saveOffLeaseApprovalAction(Fast) needs this column blank to allow
        that). A no-op for a brand-new intimation, where these are already
-       blank. */
+       blank.
+       BUG FOUND AND FIXED 2026-11-23 (live report: a record sent back from
+       Stage 5/Final Billing to Stage 1 ("4.5 Billing Send Back") was
+       resubmitted via Stage 1's form and landed back in Stage 1A/Approval
+       Pending instead of continuing on to Stage 5 — "wapas approval stage
+       1a mai nahi jana chhaiye hai stage 5 mai move hona chaiye hai"): this
+       clear used to run on EVERY Stage 1 resubmission, not just one
+       addressing an actual approval send-back. Billing's own send-back
+       (saveOffLeaseSendBackFromBilling) never touches this column at all —
+       it leaves whatever approval decision the record already has (almost
+       always 'Approved', since reaching Stage 5 requires having passed
+       approval) — so blanking it here forced getOffLeaseApprovalData's
+       `apprStatus === ''` gate to re-admit an already-approved record into
+       the 1A queue purely because Stage 1 was resubmitted. Scoped to only
+       fire when the column currently reads 'Sent Back' — the one state this
+       clear is actually meant to resolve. */
     let apStatusCol = -1, apTimestampCol = -1, apUserCol = -1, apRemarkCol = -1;
     if (stageNum === 1) {
       apStatusCol = _findOlColumnMulti(headers, ['intimation approval status', 'intimation appt status', 'approval status']);
       apTimestampCol = _findOlColumnMulti(headers, ['intimation approval timestamp', 'intimation appt timestamp']);
       apUserCol = _findOlColumnMulti(headers, ['intimation approval user', 'intimation appt user']);
       apRemarkCol = _findOlColumnMulti(headers, ['intimation approval remark', 'intimation appt remark', 'approval remark']);
+      const wasSentBack = apStatusCol >= 0 && safeStr(row[apStatusCol]).trim() === 'Sent Back';
+      if (!wasSentBack) { apStatusCol = apTimestampCol = apUserCol = apRemarkCol = -1; }
       for (const c of [apStatusCol, apTimestampCol, apUserCol, apRemarkCol]) {
         if (c >= 0) cellUpdates.push({ range: `'${OL_SHEET}'!${colLetter(c)}${rn}`, values: [['']] });
       }
