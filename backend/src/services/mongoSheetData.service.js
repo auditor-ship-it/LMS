@@ -291,6 +291,31 @@ export async function upsertMongoMirrorRowByKey(sheetName, key, row) {
  * reconcile job or this immediate patch is what caught the removal.
  * Best-effort/non-fatal, same as the other mirror-patch helpers above.
  */
+/**
+ * Direct field patch for a position-keyed (row_N) mirror doc already known by
+ * its exact Mongo `key` — the append-only-sheet counterpart to
+ * patchMongoMirrorRow above (that one only works from a live-Sheets
+ * {range, values} array already sent to Sheets). Added 2026-11-23 for
+ * Off-Lease Remarks' edit path ("the user should not be able to see this
+ * error, they can submit and move ahead") — that path now patches Mongo
+ * first and queues the live-Sheets write via the outbox, instead of writing
+ * Sheets directly and surfacing a raw quota error.
+ *
+ * `fieldUpdates` is { colIndex: value } (0-based column index -> new value).
+ * UNLIKE the other helpers in this file, this is NOT best-effort/non-fatal —
+ * this IS the write itself (nothing has reached Sheets yet), so a failure
+ * here must propagate to the caller instead of being swallowed.
+ */
+export async function patchMongoMirrorRowByKey(sheetName, key, fieldUpdates) {
+  const col = getCollection(sheetName);
+  const doc = await col.findOne({ key });
+  if (!doc) throw new Error(`No mirror row found for ${sheetName} key ${key}`);
+  const row = [...(doc.row || [])];
+  for (const [idx, val] of Object.entries(fieldUpdates)) row[Number(idx)] = val;
+  await col.updateOne({ key }, { $set: { row, updatedAt: new Date() } });
+  cacheRemove(`mongo_raw_v1:${sheetName}`);
+}
+
 export async function softDeleteMongoMirrorByKey(sheetName, key) {
   try {
     const now = new Date();

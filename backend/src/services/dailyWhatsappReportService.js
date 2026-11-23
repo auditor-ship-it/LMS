@@ -34,7 +34,12 @@ import {
 import { logger } from '../utils/logger.js';
 
 const SETTINGS_COLLECTION = '_daily_whatsapp_report_settings';
-const DEFAULT_TO_NUMBERS = ['919321774772'];
+// CHANGED 2026-11-20 (explicit request: "pls phone no change 91 77389
+// 10553 add this no") — only the fresh-install/reset-settings fallback;
+// the live, already-saved setting (_daily_whatsapp_report_settings) was
+// separately confirmed to already have this number, a manual send to it
+// already succeeded.
+const DEFAULT_TO_NUMBERS = ['917738910553'];
 
 /** Fixed session identity for the report sender — never an agent's own WhatsApp. */
 export const REPORT_SENDER = Object.freeze({ username: 'daily-whatsapp-report-sender', agentName: 'Daily Report Sender' });
@@ -197,6 +202,14 @@ const OFFLEASE_STAGE_OWNERS = [
   { stage: 'Stage 2', label: 'Transportation', owner: 'Kshirod Khatua', taskKey: 'olStage6' },
   { stage: 'Stage 3', label: 'Gate In', owner: 'Nikhil', taskKey: 'olStage7' },
   { stage: 'Stage 4', label: 'Inspection Checklist', owner: 'Sitaram', taskKey: 'olStage3' },
+  /* ADDED 2026-11-20 (explicit request: "add the stage 4.5 offlease") —
+     same "relabeled view of Stage 1 data, not a real new stage" card as
+     PipelineDashboard.jsx's own "Stage 4.5 · Billing Send Back" StatCard
+     (see that card's own doc comment): a container Final Billing sent back
+     to Stage 1 for correction. Owner is Christopher, same as Stage 1 itself
+     — that's who resubmits it. taskKey sourced from getMyTasks' own
+     billingSendBackPending (see tasks.service.js's doc comment on it). */
+  { stage: 'Stage 4.5', label: 'Billing Send Back', owner: 'Christopher', taskKey: 'billingSendBackPending' },
   { stage: 'Stage 5', label: 'Final Billing', owner: 'Shivani', taskKey: 'olStage5' }
 ];
 

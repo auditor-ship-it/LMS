@@ -795,32 +795,13 @@ export function OrderBookView({ highlight, items, loading, error, onRetry, onOpe
     };
   }), [items, refundByContainer, itemsByContainerCount, tatByContainer]);
 
-  /* Explicit request 2026-11-19 ("maine sab ka form ek saath select kar ke
-     fill kiya hai tho yaha marge karo na... 4 entry nahi dikh ne chhaiye
-     hai"): a bulk "Fill one SD Refund form for all" submission
-     (BulkRefundModal) is ONE bill covering several containers — showing it
-     as N separate, near-identical cards (same bill, same HOD/Accounts/CEO
-     status) reads as N different bills. Rows that resolve to the exact same
-     refundEntry object (see refundByContainer above — one shared Offlease
-     Bills row) are grouped into one merged card; every other row (no refund
-     filed yet, or a refund covering just that one container) renders
-     exactly as before. Grouped at first-occurrence position, not by
-     re-sorting, so the list's own order (newest-first etc.) is unchanged. */
-  const cardGroups = useMemo(() => {
-    const groups = [];
-    const indexByRefund = new Map();
-    for (const row of rows) {
-      if (row.refundEntry) {
-        if (indexByRefund.has(row.refundEntry)) {
-          groups[indexByRefund.get(row.refundEntry)].push(row);
-          continue;
-        }
-        indexByRefund.set(row.refundEntry, groups.length);
-      }
-      groups.push([row]);
-    }
-    return groups;
-  }, [rows]);
+  /* REVERTED 2026-11-21 (explicit request, "container ek saath dikh rahe
+     hai na usko alag alag kardo samjhe" — the merged card actively confused
+     rather than helped): back to one card per container row, no merging by
+     shared refundEntry. See git history (2026-11-19) if this grouping is
+     ever wanted again — the logic was removed outright rather than kept
+     dormant, to avoid a half-wired feature sitting unused in the file. */
+  const cardGroups = useMemo(() => rows.map((row) => [row]), [rows]);
 
   if (loading) return <SkeletonCards count={6} />;
   if (error) return <ErrorState message={error} onRetry={onRetry} />;

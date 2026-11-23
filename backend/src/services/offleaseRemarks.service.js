@@ -14,7 +14,7 @@
  * two leases at once and their commentary must not merge.
  */
 import { getSheetData, appendRow, insertSheetIfMissing, updateRange, deleteRows } from './googleSheets.service.js';
-import { getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
+import { getSheetDataFromMongo, appendMongoMirrorRow, getMongoRowsWithKeys, patchMongoMirrorRowByKey, softDeleteMongoMirrorByKey } from './mongoSheetData.service.js';
 import { enqueueSheetReplay } from './outbox.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
@@ -306,33 +306,83 @@ async function findById(id) {
   return hit;
 }
 
+/** Finds a remark by id in the Mongo mirror, keeping the mirror `key`
+ *  alongside it (position-keyed row_N, never shifts even when a later row
+ *  is soft-deleted) — what the mongo-first edit/delete paths below patch
+ *  directly, instead of resolving a live-sheet row number up front. */
+async function findInMirrorById(id) {
+  const wanted = safeStr(id).trim().toUpperCase();
+  if (!wanted) throw new AppError('Remark ID is required');
+  const entries = await getMongoRowsWithKeys(R_SHEET);
+  const entry = entries.find((d) => safeStr(d.row[0]).trim().toUpperCase() === wanted);
+  if (!entry) throw new AppError(`Remark not found: ${id}`, 404);
+  return {
+    key: entry.key,
+    id: safeStr(entry.row[0]),
+    containerNo: safeStr(entry.row[1]),
+    leaseId: safeStr(entry.row[2]),
+    enteredBy: safeStr(entry.row[6])
+  };
+}
+
+/* MONGO-FIRST — explicit report 2026-11-23 (screenshot: a remark was saved
+   and shown fine, but editing an existing one surfaced a raw "Google Sheets
+   API rate limit was hit" error; "the user should not be able to see this
+   error, they can submit and move ahead... whenever sheets API is hit for
+   any other feature as well it should add the data afterwards"): add
+   already got this treatment on 2026-11-10 (see its own doc comment above),
+   but edit/delete were missed — they still wrote straight to live Sheets
+   with no outbox fallback. Same pattern as addOffLeaseRemark: patch the
+   Mongo mirror (what every reader already reads from) and return at once;
+   the live-Sheets write is queued for the outbox worker to replay once
+   quota allows. */
 export async function updateOffLeaseRemark(id, html, userEmail) {
   await assertCanRemark(userEmail);
   const { clean, text } = prepareBody(html);
 
+  const hit = await findInMirrorById(id);
+  await assertOwns(hit, userEmail);
+
+  const timestamp = dmyTime(new Date());
+  // Body columns (D:E, 0-based 3:4) plus the edited stamp (H, 0-based 7) —
+  // the original author and creation time are the record and never rewritten.
+  await patchMongoMirrorRowByKey(R_SHEET, hit.key, { 3: clean, 4: text, 7: timestamp });
+  invalidateIndex();
+  await enqueueSheetReplay('offleaseRemarks.updateOffLeaseRemarkSheetWrite', [id, clean, text, timestamp], { actor: userEmail });
+
+  return { message: 'UPDATED', remark: { ...hit, html: clean, text } };
+}
+
+/** The outbox replay target for updateOffLeaseRemark above — the real
+ *  live-Sheets write only; the Mongo mirror is already patched above. Resolves
+ *  the row fresh from a live read (findById), same reasoning
+ *  addOffLeaseRemarkSheetWrite's own siblings give elsewhere in this file. */
+export async function updateOffLeaseRemarkSheetWrite(id, clean, text, timestamp) {
   return withSheetLock(R_SHEET, async () => {
-    /* Re-read INSIDE the lock: the row number came from a read taken before
-       the lock, and a concurrent delete would have shifted every row after
-       it — writing to the stale number would overwrite a different remark. */
     const hit = await findById(id);
-    await assertOwns(hit, userEmail);
-    // Body columns only (D:E), plus the edited stamp — the original author and
-    // creation time are the record and are never rewritten.
     await updateRange(R_SHEET, `D${hit._rowNum}:E${hit._rowNum}`, [[clean, text]]);
-    await updateRange(R_SHEET, `H${hit._rowNum}:H${hit._rowNum}`, [[dmyTime(new Date())]]);
-    invalidateIndex();
-    return { message: 'UPDATED', remark: { ...hit, html: clean, text } };
+    await updateRange(R_SHEET, `H${hit._rowNum}:H${hit._rowNum}`, [[timestamp]]);
   });
 }
 
 export async function deleteOffLeaseRemark(id, userEmail) {
   await assertCanRemark(userEmail);
 
+  const hit = await findInMirrorById(id);
+  await assertOwns(hit, userEmail);
+
+  await softDeleteMongoMirrorByKey(R_SHEET, hit.key);
+  invalidateIndex();
+  await enqueueSheetReplay('offleaseRemarks.deleteOffLeaseRemarkSheetWrite', [id], { actor: userEmail });
+
+  return { message: 'DELETED', id: hit.id };
+}
+
+/** The outbox replay target for deleteOffLeaseRemark above — see
+ *  updateOffLeaseRemarkSheetWrite's own comment just above. */
+export async function deleteOffLeaseRemarkSheetWrite(id) {
   return withSheetLock(R_SHEET, async () => {
     const hit = await findById(id);
-    await assertOwns(hit, userEmail);
     await deleteRows(R_SHEET, [hit._rowNum]);
-    invalidateIndex();
-    return { message: 'DELETED', id: hit.id };
   });
 }

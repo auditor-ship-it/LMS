@@ -256,6 +256,15 @@ export function ReportsPage() {
     { stage: 'Stage 2', label: 'Transportation', owner: 'Kshirod Khatua', taskKey: 'olStage6' },
     { stage: 'Stage 3', label: 'Gate In', owner: 'Nikhil', taskKey: 'olStage7' },
     { stage: 'Stage 4', label: 'Inspection Checklist', owner: 'Sitaram', taskKey: 'olStage3' },
+    /* ADDED 2026-11-20 (explicit request: "add the stage 4.5 offlease...
+       yaha bhi dikh na chhaiye hai") — same row dailyWhatsappReportService.js's
+       own OFFLEASE_STAGE_OWNERS already got, mirrored here per this array's
+       own doc comment above ("mirrors ReportsPage.jsx's own
+       OFFLEASE_STAGE_OWNERS exactly"). taskKey sourced from getMyTasks' own
+       billingSendBackPending (tasks.service.js) — the same count
+       PipelineDashboard.jsx's live "Stage 4.5 · Billing Send Back" scorecard
+       shows, so this table can never disagree with it either. */
+    { stage: 'Stage 4.5', label: 'Billing Send Back', owner: 'Christopher', taskKey: 'billingSendBackPending' },
     { stage: 'Stage 5', label: 'Final Billing', owner: 'Shivani', taskKey: 'olStage5' }
   ];
   const offLeaseStagePending = useMemo(
