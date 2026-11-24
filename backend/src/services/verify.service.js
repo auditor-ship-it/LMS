@@ -40,10 +40,13 @@ import { safeStr, formatDateVal, buildDisplayRow } from '../utils/format.js';
 import { withSheetLock } from '../utils/sheetMutex.js';
 import { AppError } from '../utils/AppError.js';
 import { uploadToDrive, extractFileId, deleteFromDrive } from './googleDrive.service.js';
-import { patchMongoMirrorRow, getSheetDataFromMongo, appendMongoMirrorRow } from './mongoSheetData.service.js';
+import { patchMongoMirrorRow, getSheetDataFromMongo, appendMongoMirrorRow, getMongoRowsWithKeys } from './mongoSheetData.service.js';
 import { cacheGetOrLoad, cacheRemove, cacheRemoveByPrefix } from '../utils/memoryCache.js';
 import { sendMail } from './email.service.js';
 import { DEPLOYED_RAW_CACHE_KEY, DEPLOYED_EMAIL_ID_COL, _ensureDeployedEmailIdHeader } from './expiry.service.js';
+import { getCollection } from './mongo.service.js';
+import { isCentral } from './centralSheets.service.js';
+import { enqueueSheetReplay } from './outbox.service.js';
 
 /* getVerifyData cache — added 2026-08-26. Verify Lease was previously live
    on every call (an explicit, deliberate choice: manual spreadsheet edits
@@ -591,6 +594,70 @@ export async function saveVerifyAction(containerNo, timestamp, status, billingTy
     cacheRemove(VERIFY_CACHE_KEY); // this row just changed — next read must not serve the pre-save cache
     return 'OK';
   });
+}
+
+/** Mongo-doc counterpart of _resolveNewLeaseRow above, for saveVerifyActionFast
+ *  below — same loose-comparison / multi-row-guard semantics, just read off
+ *  `getMongoRowsWithKeys`'s {key, row} shape instead of a live-sheet rows
+ *  array, so a fast save never needs a live Sheets read to find its target. */
+function _resolveNewLeaseMongoDoc(containerNo, docs, knownRow) {
+  if (knownRow != null) {
+    const doc = docs.find((d) => d.key === `row_${knownRow - 2}`);
+    if (!doc || String(doc.row[0]) != containerNo) { // eslint-disable-line eqeqeq
+      throw new AppError(`New Lease row ${knownRow} no longer matches ${containerNo} — it may have changed. Refresh and try again.`);
+    }
+    return doc;
+  }
+  const matches = docs.filter((d) => String(d.row[0]) == containerNo); // eslint-disable-line eqeqeq
+  if (matches.length > 1) {
+    throw new AppError(`${containerNo} has ${matches.length} New Lease records — open it from its own list row (not by container number alone) so the exact one can be targeted.`);
+  }
+  return matches[0] || null;
+}
+
+/* MONGO-FIRST — explicit, repeated report 2026-11-24 ("again and again...
+   the user should not be able to see this error, they can submit and move
+   ahead... whenever sheets API is hit for any other feature as well it
+   should add the data afterwards"): Approve Lease Verification used to call
+   saveVerifyAction directly, which writes straight to live Sheets first —
+   a quota hit there surfaced the raw "Google Sheets API rate limit was
+   hit" error and the approval was lost outright. Same Mongo-first +
+   outbox-replay pattern this codebase already uses elsewhere
+   (offlease.service.js's saveOffLeaseStageFast is the exact template):
+   patches the Mongo mirror directly and returns at once; the real
+   live-Sheets write is queued for the outbox worker to replay once quota
+   allows, via the ORIGINAL saveVerifyAction above (registered in
+   jobs/outboxRegistry.js) — not a second, drift-prone implementation. */
+export async function saveVerifyActionFast(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail, knownRow) {
+  // DATA_SOURCE=central: no mirror/outbox split — run the authoritative write directly.
+  if (isCentral()) return saveVerifyAction(containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail, knownRow);
+  if (!containerNo || String(containerNo).trim() === '') throw new AppError('Container number is required');
+  const link = invoiceType === 'Link to Container' ? (linkContainer || '') : '';
+
+  const docs = await getMongoRowsWithKeys(SHEETS.NEW_LEASE);
+  const found = _resolveNewLeaseMongoDoc(containerNo, docs, knownRow);
+  if (!found) throw new AppError(`Not found: ${containerNo}`);
+
+  // Same columns as the live path above: Z/AA/AB/AH/AI/AJ (0-based 25/26/27/33/34/35).
+  const patch = {
+    'row.25': dmyTime(new Date(timestamp)),
+    'row.26': status || '',
+    'row.27': userEmail || '',
+    'row.33': billingType || '',
+    'row.34': invoiceType || '',
+    'row.35': link
+  };
+  await getCollection(SHEETS.NEW_LEASE).updateOne({ key: found.key }, { $set: { ...patch, updatedAt: new Date() } });
+  cacheRemove(VERIFY_CACHE_KEY);
+  cacheRemove(`mongo_raw_v1:${SHEETS.NEW_LEASE}`);
+
+  // knownRow, not the raw caller-supplied one: the replay's own live-Sheets
+  // resolution must target the SAME row this Mongo patch just did — see
+  // saveOffLeaseStageFast's identical note for why.
+  const resolvedRow = knownRow ?? (parseInt(found.key.replace('row_', ''), 10) + 2);
+  await enqueueSheetReplay('verify.saveVerifyAction', [containerNo, timestamp, status, billingType, invoiceType, linkContainer, userEmail, resolvedRow], { actor: userEmail });
+
+  return 'OK';
 }
 
 export async function saveVerifyFollowUp(containerNo, timestamp, remarks, userEmail, issue, knownRow) {
