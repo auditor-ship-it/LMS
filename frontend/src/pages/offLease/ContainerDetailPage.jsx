@@ -240,7 +240,7 @@ export function ContainerDetailPage({ isActive }) {
   const gateBlocking = stage1Done && approvalLower !== 'approved';
   const gatePending = gateBlocking && approvalLower !== 'rejected';
   const openStage = (s) => {
-    const isCurrent = !gateBlocking && s.stage === stages.find((x) => !x.done)?.stage;
+    const isCurrent = !gateBlocking && s.stage === stages.find((x) => !x.done && !x.impliedDone)?.stage;
     if (!s.done && !isCurrent) return;
     const readOnlyType = isReadOnlyStage(s.stage);
     const canEditNow = !readOnlyType && isCurrent && canAct(`offlease${s.stage}`);
@@ -291,7 +291,17 @@ export function ContainerDetailPage({ isActive }) {
   };
   // The gate has no stage form; it opens the approval panel in the same place.
   const openGate = () => setStageForm({ gate: true, label: 'Intimation Approval', status: approvalLower === 'approved' ? 'Approved' : approvalLower === 'rejected' ? 'Rejected' : 'Pending approval' });
-  const currentNum = (approvalCurrent || gateBlocking) ? null : stages.find((x) => !x.done)?.stage;
+  /* BUG FOUND AND FIXED 2026-11-24 (live report: Inspection Checklist shown
+     Completed with real data, but Gate In right before it still showed "In
+     progress" and stayed the highlighted/current card): this used to only
+     check `!x.done`, ignoring `impliedDone` — the backward-pass signal the
+     backend already computes (getOffLeaseContainerDetail) meaning "a LATER
+     stage has real data, so this one must have been satisfied somehow even
+     though its own status column was never filled (e.g. a Move To Stage
+     jump bypassed it)". The backend's own `next`/currentStageNum already
+     skip impliedDone stages — this local recomputation didn't, so the two
+     disagreed about which stage was "current". */
+  const currentNum = (approvalCurrent || gateBlocking) ? null : stages.find((x) => !x.done && !x.impliedDone)?.stage;
   /* Derived from the same stage list the cards and rail draw, not from the
      API's own `currentStage` string: that one is computed separately and could
      name a stage (e.g. Transportation) the cards already show as completed. */
@@ -334,11 +344,14 @@ export function ContainerDetailPage({ isActive }) {
     }
     const s = stages.find((x) => x.stage === key);
     const isCurrent = key === currentNum;
-    const tone = s?.done ? 'done' : isCurrent ? 'current' : 'future';
+    // See OverviewCard's own effectivelyDone comment — same impliedDone fix,
+    // for the progress-dot sidebar's version of this same "is it done" check.
+    const effectivelyDone = s?.done || s?.impliedDone;
+    const tone = effectivelyDone ? 'done' : isCurrent ? 'current' : 'future';
     return {
       short: s?.displayStage || String(key), name: s?.label || '', tone,
       caption: tone === 'done' ? 'Completed' : tone === 'current' ? 'In progress' : 'Pending',
-      date: tone === 'done' ? s.timestamp : null
+      date: s?.done ? s.timestamp : null
     };
   };
 
@@ -368,7 +381,9 @@ export function ContainerDetailPage({ isActive }) {
     const s = stages.find((x) => x.stage === key);
     if (!s) return [];
     const isCurrent = key === currentNum;
-    if (!s.done && !isCurrent) return [];
+    // See the COLUMNS layout's identical guard above — impliedDone stages
+    // stay visible (shown Completed by OverviewCard) rather than vanishing.
+    if (!s.done && !s.impliedDone && !isCurrent) return [];
     return [<OverviewCard key={key} stage={s} isCurrent={isCurrent} onOpen={openStage} />];
   };
 
@@ -547,7 +562,11 @@ export function ContainerDetailPage({ isActive }) {
                 {COLUMNS.map((col) => {
                   const colStages = stages.filter((s) => (STAGE_COLUMN[s.stage] || 'ops') === col.key);
                   if (!colStages.length && col.key !== 'intimation') return null;
-                  const done = colStages.filter((s) => s.done).length;
+                  // impliedDone counts toward "done" here too — see
+                  // OverviewCard's own effectivelyDone comment; otherwise this
+                  // header count (e.g. "2/3 done") disagreed with the card
+                  // right below it showing that same stage as Completed.
+                  const done = colStages.filter((s) => s.done || s.impliedDone).length;
                   return (
                     <div key={col.key} className={`${styles.column} ${styles[col.tone]}`}>
                       <div className={styles.columnHead}>
@@ -567,8 +586,12 @@ export function ContainerDetailPage({ isActive }) {
                            not the current one — is left off the board
                            entirely now, for every stage, not shown as a
                            grayed placeholder. Only completed stages and the
-                           single current one ever render. */
-                        if (!s.done && !isCurrent) return [];
+                           single current one ever render. impliedDone stages
+                           stay visible too (see OverviewCard's own
+                           effectivelyDone comment) — hiding them would make
+                           an already-satisfied stage vanish instead of
+                           showing Completed. */
+                        if (!s.done && !s.impliedDone && !isCurrent) return [];
                         const card = <OverviewCard key={s.stage} stage={s} isCurrent={isCurrent} onOpen={openStage} />;
                         if (s.stage !== SD_REFUNDS_INTERNAL) return [card];
                         // Same reasoning — 6A/6B/6C have nothing to approve
@@ -794,8 +817,17 @@ function Cell({ label, value, sub, tone }) {
 
 /** One checklist-style card per stage: status, who/when, and a short field preview. */
 function OverviewCard({ stage: s, isCurrent, onOpen }) {
+  /* impliedDone (backend's getOffLeaseContainerDetail) — a LATER stage
+     already has real data, so this one must have happened too even though
+     its own status column was never filled (e.g. a Move To Stage jump
+     bypassed it). Shown as Completed, same as a genuinely `done` stage —
+     see currentNum's own doc comment above for the matching "current stage"
+     fix this pairs with. Not made clickable/editable: there's no real
+     per-stage data to show or edit here, only the inference that it must
+     be done. */
+  const effectivelyDone = s.done || s.impliedDone;
   const clickable = s.done || isCurrent;
-  const tone = s.done ? styles.cDone : isCurrent ? styles.cCurrent : styles.cLocked;
+  const tone = effectivelyDone ? styles.cDone : isCurrent ? styles.cCurrent : styles.cLocked;
   const preview = (s.fields || []).slice(0, 4);
   return (
     <div
@@ -809,7 +841,7 @@ function OverviewCard({ stage: s, isCurrent, onOpen }) {
       <div className={styles.cardHead}>
         <span className={styles.cardNum}>{s.displayStage ? `Stage ${s.displayStage}` : 'Retired'}</span>
         <span className={styles.cardTitle}>{s.label}</span>
-        <span className={styles.cardStatus}>{s.skipped ? 'Skipped' : s.done ? 'Completed' : isCurrent ? 'In progress' : 'Pending'}</span>
+        <span className={styles.cardStatus}>{s.skipped ? 'Skipped' : effectivelyDone ? 'Completed' : isCurrent ? 'In progress' : 'Pending'}</span>
       </div>
       {s.done && (
         <div className={styles.meta}>{formatActionTimestamp(s.timestamp)}{s.user ? ` · ${s.user}` : ''}</div>

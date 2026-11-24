@@ -15,6 +15,7 @@ import { trackContainer } from '../../services/offLease.service.js';
 import { submitDocumentCompletion, saveDocumentDraft } from '../../services/renewDocument.service.js';
 import { uploadStageFile } from '../../services/upload.service.js';
 import { OffLeaseModal } from './OffLeaseModal.jsx';
+import { NewLeasePage } from './NewLeasePage.jsx';
 import { RenewalHandoffModal } from './RenewalHandoffModal.jsx';
 import { CompleteDocumentModal } from '../renewDocument/CompleteDocumentModal.jsx';
 import { isRateOrAmountHeader } from '../../utils/isRateOrAmountHeader.js';
@@ -130,6 +131,11 @@ export function LeaseExpiryPage() {
   const { canAct } = usePermission();
   const canActExpiry = canAct('expiry');
   const { user } = useAuth();
+
+  // "New Lease" moved here from its own sidebar page — explicit request
+  // 2026-11-24 ("yah mujhe hai na lease expiry ke yaha tab de do"). Same
+  // tab-bar pattern OffLeasePage.jsx already uses.
+  const [tab, setTab] = useState('expiry');
 
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, 250);
@@ -726,6 +732,19 @@ export function LeaseExpiryPage() {
 
   return (
     <>
+      <div className={styles.tabRow}>
+        <button type="button" className={`${styles.tab} ${tab === 'expiry' ? styles.tabActive : ''}`} onClick={() => setTab('expiry')}>
+          Lease Expiry
+        </button>
+        <button type="button" className={`${styles.tab} ${tab === 'newLease' ? styles.tabActive : ''}`} onClick={() => setTab('newLease')}>
+          New Lease
+        </button>
+      </div>
+
+      {tab === 'newLease' && <NewLeasePage embedded />}
+
+      {tab === 'expiry' && (
+        <>
       <PageHeader
         title="Lease Expiry"
         subtitle="Deployed containers approaching or past their lease expiry date"
@@ -916,6 +935,8 @@ export function LeaseExpiryPage() {
         onSubmit={handleRenewBulkSubmit}
         onSave={handleRenewBulkSave}
       />
+        </>
+      )}
     </>
   );
 }

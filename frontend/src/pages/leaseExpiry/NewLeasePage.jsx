@@ -16,7 +16,13 @@ import formStyles from './OffLeaseModal.module.css';
  * Deployed sheet for the new deployment; the old (now off-leased) row is
  * never touched.
  */
-export function NewLeasePage() {
+/** `embedded` — explicit request 2026-11-24 ("yah mujhe hai na lease
+ *  expiry ke yaha tab de do"): New Lease moved from its own sidebar entry to
+ *  a tab inside Lease Expiry (LeaseExpiryPage.jsx) — same convention
+ *  StagePageBase's own `embedded` prop already uses to suppress its page's
+ *  own title/subtitle when shown as a tab inside a parent page instead of
+ *  standing alone. */
+export function NewLeasePage({ embedded } = {}) {
   const { data, loading, error, reload } = useAsync(fetchNewLeaseQueue, []);
   const [target, setTarget] = useState(null);
   const [submitError, setSubmitError] = useState('');
@@ -38,7 +44,7 @@ export function NewLeasePage() {
 
   return (
     <>
-      <PageHeader title="New Lease" subtitle="Containers pending redeployment at a new location" />
+      {!embedded && <PageHeader title="New Lease" subtitle="Containers pending redeployment at a new location" />}
       <Card>
         {loading && <SkeletonTable columns={4} rows={6} />}
         {!loading && error && <ErrorState message={apiErrorMessage(error)} onRetry={reload} />}

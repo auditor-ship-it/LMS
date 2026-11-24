@@ -1,3 +1,31 @@
+/* New Lease tab bar — explicit request 2026-11-24, same shape as
+   OffLeasePage.module.css's own .tabRow/.tab/.tabActive. */
+.tabRow {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1.5px solid var(--line);
+  margin-bottom: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.tab {
+  padding: 8px 0;
+  margin-bottom: -1.5px;
+  border: none;
+  border-bottom: 2.5px solid transparent;
+  background: none;
+  color: var(--text-2);
+  font-family: var(--f-display);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.tab:hover { color: var(--text); }
+.tabActive { color: var(--accent); border-color: var(--accent); }
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

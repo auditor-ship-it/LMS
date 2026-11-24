@@ -62,11 +62,13 @@ export const NAV_TREE = {
     // Pending" tile reads, see tasks.service.js.
     { key: 'approvalPending', label: 'Renew Approval Pending', path: ROUTES.APPROVAL_PENDING, icon: 'clock', section: 'Agreements', sidebarKey: 'approvalPending', taskKey: 'renewApprovalPending' },
     { key: 'leaseExpiry', label: 'Lease Expiry', path: ROUTES.LEASE_EXPIRY, icon: 'clock', sidebarKey: 'expiry', section: 'Lease', taskKey: 'expired' },
-    // Added 2026-11-16, explicit request ("location change click check
-    // box... new lease navigatio add karo... pending dikhega"): containers
-    // queued via the Off-Lease Container modal's Location Change checkbox
-    // (NewLeasePage.jsx) — see newLeaseQueue.service.js on the backend.
-    { key: 'newLease', label: 'New Lease', path: ROUTES.NEW_LEASE, icon: 'package', sidebarKey: 'newLease', section: 'Lease', taskKey: 'newLeasePending' },
+    // MOVED 2026-11-24 (explicit request, "yah mujhe hai na lease expiry ke
+    // yaha tab de do"): "New Lease" (added 2026-11-16 — containers queued
+    // via the Off-Lease Container modal's Location Change checkbox, see
+    // newLeaseQueue.service.js on the backend) no longer has its own sidebar
+    // entry — it's now a tab inside Lease Expiry (LeaseExpiryPage.jsx). The
+    // route itself (ROUTES.NEW_LEASE, routes.jsx) is left registered so
+    // nothing already pointing at the URL breaks.
     { key: 'deployedSummary', label: 'Deployed Summary', path: ROUTES.DEPLOYED_SUMMARY, icon: 'grid', sidebarKey: 'deployedSummary', section: 'Lease' },
     { key: 'poAgreementTracker', label: 'PO & Agreement Tracker', path: ROUTES.PO_AGREEMENT_TRACKER, icon: 'clock', sidebarKey: 'poAgreementTracker', section: 'Lease' },
     { key: 'offLease', label: 'Off-Lease', path: ROUTES.OFF_LEASE, icon: 'package', sidebarKey: 'offLease', section: 'Returns', taskKey: 'offleaseApproval' },
