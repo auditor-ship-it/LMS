@@ -250,11 +250,27 @@ export async function buildDeployedSummaryExcel({ now, user } = {}) {
  * would be misleading (those categories specifically track containers
  * still in or moving through the deployed pool).
  */
-export async function buildMonthAllCategoriesExcel(monthLabel, { typeVal, sizeVal, user } = {}) {
+export async function buildMonthAllCategoriesExcel(monthLabel, { typeVal, sizeVal, user, now } = {}) {
   const results = await Promise.all(
     SUMMARY_GROUPS.map(([key]) => getDeployedDetailData(monthLabel, key, typeVal || null, sizeVal || null, user))
   );
   const { containers: finalBillingContainers } = await getOffLeasedWithFinalBillingDue(monthLabel, user);
+
+  /* BUG FOUND AND FIXED 2026-11-24 (live report: the web page's own detail
+     table shows cell-level "changed since last month" highlighting —
+     getDeployedDetailData's changedFields/recentlyUpdated — but this
+     "All Categories" per-month export never carried it at all: unlike
+     buildWorkbookBuffer's main export just above, this function never
+     computed a diff or passed `changedFields` through to addContainersSheet,
+     so Opening/Closing Deployed here always fell back to flat/no highlight
+     regardless of what actually changed). Same diff this file's main export
+     already uses — saves today's snapshot if needed (idempotent per month,
+     see saveDeployedSheetSnapshotIfNeeded) and diffs against last month's. */
+  const today = now ? new Date(now) : new Date();
+  await saveDeployedSheetSnapshotIfNeeded(today);
+  const currentMonthKey = monthKeyOf(today);
+  const diff = await diffDeployedSnapshots(previousMonthKey(currentMonthKey), currentMonthKey);
+  const changedFields = changedFieldsByContainer(diff);
 
   // Explicit request 2026-10-27 ("offlease red col karo and jo new lease
   // green col row hona chahiye hai"): Addition is flat green (every row
@@ -273,7 +289,7 @@ export async function buildMonthAllCategoriesExcel(monthLabel, { typeVal, sizeVa
   SUMMARY_GROUPS.forEach(([key, label], i) => {
     const containers = results[i]?.containers || [];
     const withExtras = key === 'closing' ? [...containers, ...finalBillingContainers] : containers;
-    addContainersSheet(wb, safeSheetName(label), withExtras, FILL_BY_CATEGORY[key]);
+    addContainersSheet(wb, safeSheetName(label), withExtras, FILL_BY_CATEGORY[key], changedFields);
   });
 
   const buffer = await wb.xlsx.writeBuffer();
