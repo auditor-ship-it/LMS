@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal, Button, FileUpload } from '../../components/ui/index.js';
 import styles from './OffLeaseModal.module.css';
 
@@ -44,9 +44,21 @@ export function OffLeaseModal({ open, item, items, submitting, error, onClose, o
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const bulk = Array.isArray(items);
+  /* BUG FOUND AND FIXED 2026-11-24 (live report — "Could not upload the
+     email confirmation" shown even though the upload succeeded): the Submit
+     button is only disabled once `uploading` state is set, and React state
+     updates are not synchronous — a quick double-click on a slow network
+     could fire handleSubmit twice before the first render re-disables the
+     button, sending the SAME file to Drive twice at once. The second of the
+     two concurrent submits then raced the first one's record creation
+     (onSubmit), and its own failure was reported as an upload failure even
+     though the Drive upload itself had gone through fine. A plain ref (not
+     state) blocks re-entry the instant the first click starts, with no
+     render delay to race. */
+  const submittingRef = useRef(false);
 
   useEffect(() => {
-    if (open) { setPersonName(''); setRemarks(''); setEmailConfirmationFile(null); setLocationChange(false); setUploadError(''); }
+    if (open) { setPersonName(''); setRemarks(''); setEmailConfirmationFile(null); setLocationChange(false); setUploadError(''); submittingRef.current = false; }
   }, [open, item, items]);
 
   if (!bulk && !item) return null;
@@ -54,8 +66,10 @@ export function OffLeaseModal({ open, item, items, submitting, error, onClose, o
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     if (!personName.trim()) return;
     if (!emailConfirmationFile) { setUploadError('Email confirmation is required.'); return; }
+    submittingRef.current = true;
     setUploadError('');
     setUploading(true);
     try {
@@ -63,6 +77,7 @@ export function OffLeaseModal({ open, item, items, submitting, error, onClose, o
       onSubmit({ personName: personName.trim(), remarks: remarks.trim(), emailConfirmationUrl, locationChange });
     } catch (e2) {
       setUploadError('Could not upload the email confirmation — try again.');
+      submittingRef.current = false;
     } finally {
       setUploading(false);
     }

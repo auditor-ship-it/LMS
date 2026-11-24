@@ -6,7 +6,7 @@ export async function getData(req, res) {
 
 export async function saveAction(req, res) {
   const { timestamp, status, billingType, invoiceType, linkContainer, rowNum } = req.body;
-  const message = await verifyService.saveVerifyAction(
+  const message = await verifyService.saveVerifyActionFast(
     req.params.containerNo, timestamp, status, billingType, invoiceType, linkContainer, req.user.email, rowNum
   );
   res.json({ message });
