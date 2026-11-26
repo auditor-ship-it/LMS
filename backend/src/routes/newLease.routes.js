@@ -12,5 +12,6 @@ router.use(requireAuth);
 
 router.get('/', asyncHandler(newLeaseController.list));
 router.post('/:id/complete', asyncHandler(newLeaseController.complete));
+router.post('/:id/cancel', asyncHandler(newLeaseController.cancel));
 
 export default router;

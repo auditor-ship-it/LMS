@@ -3,7 +3,7 @@ import { PageHeader, Card, Button, EmptyState, ErrorState } from '../../componen
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchNewLeaseQueue, submitNewLeaseEntry } from '../../services/newLease.service.js';
+import { fetchNewLeaseQueue, submitNewLeaseEntry, removeNewLeaseEntry } from '../../services/newLease.service.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { NewLeaseFormModal } from './NewLeaseFormModal.jsx';
 import styles from '../offLease/PipelineDashboard.module.css';
@@ -26,6 +26,7 @@ export function NewLeasePage({ embedded } = {}) {
   const { data, loading, error, reload } = useAsync(fetchNewLeaseQueue, []);
   const [target, setTarget] = useState(null);
   const [submitError, setSubmitError] = useState('');
+  const [removingId, setRemovingId] = useState(null);
 
   const rows = data || [];
 
@@ -40,6 +41,23 @@ export function NewLeasePage({ embedded } = {}) {
     setTarget(null);
     setSubmitError('');
     await reload();
+  };
+
+  /* Explicit request 2026-11-25 ("yah new lease se hathana hai kaise hathau
+     bato") — a queued entry (e.g. a mistaken Location Change tick on the
+     Off-Lease modal) can be removed without filling its form. Soft-marked
+     'cancelled' on the backend, never deleted outright. */
+  const handleRemove = async (id) => {
+    if (!window.confirm('Remove this container from the New Lease queue? This cannot be undone.')) return;
+    setRemovingId(id);
+    try {
+      const result = await removeNewLeaseEntry(id);
+      if (result === 'ALREADY_PROCESSED') setSubmitError('This one was already completed.');
+      else setSubmitError('');
+      await reload();
+    } finally {
+      setRemovingId(null);
+    }
   };
 
   return (
@@ -71,7 +89,8 @@ export function NewLeasePage({ embedded } = {}) {
                     <td>{r.oldSnapshot?.location || '—'}</td>
                     <td>{formatActionTimestamp(r.createdAt)}</td>
                     <td>
-                      <Button size="sm" variant="primary" onClick={() => { setSubmitError(''); setTarget(r); }}>Fill New Lease</Button>
+                      <Button size="sm" variant="primary" onClick={() => { setSubmitError(''); setTarget(r); }}>Fill New Lease</Button>{' '}
+                      <Button size="sm" variant="danger" loading={removingId === r.id} onClick={() => handleRemove(r.id)}>Remove</Button>
                     </td>
                   </tr>
                 ))}

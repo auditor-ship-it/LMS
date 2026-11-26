@@ -1,4 +1,4 @@
-import { getNewLeaseQueue, completeNewLeaseEntry } from '../api/newLease.api.js';
+import { getNewLeaseQueue, completeNewLeaseEntry, cancelNewLeaseEntry } from '../api/newLease.api.js';
 import { invalidate } from '../shared/dataBus.js';
 
 export async function fetchNewLeaseQueue() {
@@ -9,4 +9,8 @@ export async function submitNewLeaseEntry(id, payload) {
   const result = await completeNewLeaseEntry(id, payload);
   invalidate('deployed-sheet');
   return result;
+}
+
+export async function removeNewLeaseEntry(id) {
+  return cancelNewLeaseEntry(id);
 }

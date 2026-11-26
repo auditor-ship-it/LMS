@@ -20,6 +20,9 @@ import { appendMongoMirrorRow } from './mongoSheetData.service.js';
 import { SHEETS } from '../config/sheets.config.js';
 import { safeStr } from '../utils/format.js';
 import { AppError, notFound } from '../utils/AppError.js';
+import { sendMail } from './email.service.js';
+import { notificationEmailForSalePerson } from './salePersonAccess.service.js';
+import { enqueueSheetReplay } from './outbox.service.js';
 
 const COLLECTION = '_new_lease_queue';
 
@@ -88,6 +91,31 @@ export async function countNewLeaseQueuePending() {
   }
 }
 
+/** Explicit request 2026-11-25 ("yah new lease se hathana hai kaise hathau
+ *  bato" — a queued entry that shouldn't have been queued, e.g. a mistaken
+ *  Location Change tick on the Off-Lease modal). Soft-marked 'cancelled',
+ *  same "never hard-delete, keep an audit trail" convention the rest of
+ *  this app's own soft-delete paths already use — the Deployed/New Lease
+ *  Request sheets are never touched either way, since nothing was ever
+ *  written to them for a still-pending entry. */
+export async function cancelNewLeaseEntry(id, userEmail) {
+  const col = getCollection(COLLECTION);
+  let doc;
+  try {
+    doc = await col.findOne({ _id: new ObjectId(id) });
+  } catch (e) {
+    throw new AppError('Invalid New Lease queue entry id.');
+  }
+  if (!doc) throw notFound('New Lease queue entry');
+  if (doc.status !== 'pending') return 'ALREADY_PROCESSED';
+
+  await col.updateOne(
+    { _id: doc._id },
+    { $set: { status: 'cancelled', cancelledAt: new Date(), cancelledBy: userEmail || '' } }
+  );
+  return 'OK';
+}
+
 /* Deployed sheet's own column order (SHEETS.DEPLOYED, confirmed live
  * 2026-11-16) — a brand-new row only ever fills these 18 identity/lease
  * columns, its OWN native schema, nothing more; everything past col 18
@@ -119,12 +147,61 @@ function buildDeployedRow(payload, fallbackContainerNo) {
   return newRow;
 }
 
-/** Appends the new deployment to TWO places: the Deployed sheet gets only
- *  its own native 18 columns (see buildDeployedRow); the fuller record —
- *  every field this form captures, including GST/Cancelled Cheque/
- *  Transportation — goes to its own sheet, SHEETS.NEW_LEASE_REQUEST. The
- *  queue entry's old snapshot/row is never touched. Marks the queue entry
- *  'done' only after both appends actually succeed. */
+/** Fixed recipients every New Lease submission notifies — same 3 desks
+ *  (Pushpa, Shivani, Mansi) the other Off-Lease/Lease digests already copy
+ *  (see e.g. offlease.service.js's OL_STAGE3_EMAIL_CC,
+ *  deployedSummaryDigest.service.js's REPORT_RECIPIENTS). The 4th recipient,
+ *  the Sale Executive, is resolved per-submission from the form's own Sale
+ *  Person field below — not fixed, since it's a different person every time. */
+const NEW_LEASE_FIXED_RECIPIENTS = [
+  'pushpa.shetty@crystalgroup.in', 'shivani.dhall@crystalgroup.in', 'mansi.agarwal@crystalgroup.in'
+];
+
+/** Explicit request 2026-11-25 ("jaise hi yah new lease form fill hoga woh
+ *  uska full data... mail jana chahiye pushpa shivani sale exctuive and
+ *  mansi pc ko") — every field this form captured (the same full record
+ *  NEW_LEASE_REQUEST_HEADERS/requestRow already hold, nothing summarized or
+ *  left out) goes out the moment a submission completes. Best-effort: a
+ *  mail failure must never undo or fail the submission itself, same
+ *  "additive, never blocking" posture _buildContainerStageTatMap/
+ *  computeContainerSla already use elsewhere in Off-Lease for their own
+ *  non-critical enrichments. */
+async function _sendNewLeaseSubmittedEmail(containerNo, requestRow, payload) {
+  try {
+    const salePersonEmail = notificationEmailForSalePerson(payload.salePerson);
+    const to = [...NEW_LEASE_FIXED_RECIPIENTS, salePersonEmail].filter(Boolean).join(',');
+
+    const th = (s) => `<th style="padding:6px 10px;border:1px solid #ddd;background:#f4f4f4;font-size:12.5px;text-align:left;white-space:nowrap;">${s}</th>`;
+    const td = (s) => `<td style="padding:6px 10px;border:1px solid #ddd;font-size:12.5px;">${s || '-'}</td>`;
+    const rows = NEW_LEASE_REQUEST_HEADERS.map((label, i) => `<tr>${th(label)}${td(safeStr(requestRow[i]))}</tr>`).join('');
+
+    const subject = `New Lease Submitted – ${containerNo}`;
+    const html = `<p>A New Lease form has been filled for <strong>${containerNo}</strong>.</p>`
+      + `<table style="border-collapse:collapse;">${rows}</table>`;
+    const body = NEW_LEASE_REQUEST_HEADERS.map((label, i) => `${label}: ${safeStr(requestRow[i]) || '-'}`).join('\n');
+
+    await sendMail({ to, subject, body, html });
+  } catch (e) {
+    console.error(`[NEW-LEASE-EMAIL] send failed for ${containerNo} (non-fatal):`, e?.message || e);
+  }
+}
+
+/** MONGO-FIRST — explicit, repeated request 2026-11-25 ("as soon as they
+ *  give us the form it should... submit the form within a second or two and
+ *  after submitting the form it should get stored in the mongo DB and if
+ *  the sheet API limit is hit then there should be a sync which will fill
+ *  the sheet afterwards... the user should not be able to see this error"),
+ *  live-confirmed on THIS exact form ("Google Sheets API rate limit was hit"
+ *  on New Lease's own Submit). Both live Sheets appends (Deployed +
+ *  NEW_LEASE_REQUEST, including the insertSheetIfMissing check ahead of the
+ *  second one) are the slow, rate-limit-exposed part — moved entirely into
+ *  completeNewLeaseEntrySheetWrite below, replayed later by the outbox
+ *  worker. Everything the caller actually needs (both Mongo mirrors
+ *  written, the queue entry marked done, the notification email sent) still
+ *  happens synchronously, so the page reflects the new deployment
+ *  immediately — only the live-Sheets round trip is deferred. Same
+ *  Mongo-first/outbox-replay pattern as offlease.service.js's
+ *  addToOffLeaseTrackingFast/addToOffLeaseTrackingSheetWrite pair. */
 export async function completeNewLeaseEntry(id, payload, userEmail) {
   const col = getCollection(COLLECTION);
   let doc;
@@ -137,9 +214,6 @@ export async function completeNewLeaseEntry(id, payload, userEmail) {
   if (doc.status !== 'pending') return 'ALREADY_PROCESSED';
 
   const deployedRow = buildDeployedRow(payload, doc.containerNo);
-  await appendRow(SHEETS.DEPLOYED, deployedRow);
-  // Mirror immediately — same "don't make the caller wait for the next
-  // reconcile cycle" reasoning addToOffLeaseTracking's own mirror block uses.
   await appendMongoMirrorRow(SHEETS.DEPLOYED, deployedRow);
 
   const old = doc.oldSnapshot || {};
@@ -155,13 +229,25 @@ export async function completeNewLeaseEntry(id, payload, userEmail) {
     safeStr(old.clientName), safeStr(old.location), safeStr(old.validUpto),
     userEmail || '', new Date().toISOString()
   ];
-  await _ensureNewLeaseRequestSheet();
-  await appendRow(SHEETS.NEW_LEASE_REQUEST, requestRow);
   await appendMongoMirrorRow(SHEETS.NEW_LEASE_REQUEST, requestRow);
 
   await col.updateOne(
     { _id: doc._id },
     { $set: { status: 'done', completedAt: new Date(), completedBy: userEmail || '' } }
   );
+
+  await enqueueSheetReplay('newLeaseQueue.completeNewLeaseEntrySheetWrite', [deployedRow, requestRow], { actor: userEmail });
+
+  await _sendNewLeaseSubmittedEmail(doc.containerNo, requestRow, payload);
+
   return 'OK';
+}
+
+/** The outbox replay target for completeNewLeaseEntry above (registered in
+ *  jobs/outboxRegistry.js) — the real live-Sheets writes only, both rows
+ *  already saved to their Mongo mirrors by the fast path above. */
+export async function completeNewLeaseEntrySheetWrite(deployedRow, requestRow) {
+  await appendRow(SHEETS.DEPLOYED, deployedRow);
+  await _ensureNewLeaseRequestSheet();
+  await appendRow(SHEETS.NEW_LEASE_REQUEST, requestRow);
 }

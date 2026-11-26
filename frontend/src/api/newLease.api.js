@@ -9,3 +9,6 @@ export const getNewLeaseQueue = () => apiClient.get('/new-lease').then((r) => r.
 
 export const completeNewLeaseEntry = (id, payload) =>
   apiClient.post(`/new-lease/${id}/complete`, payload).then((r) => r.data.result);
+
+export const cancelNewLeaseEntry = (id) =>
+  apiClient.post(`/new-lease/${id}/cancel`).then((r) => r.data.result);

@@ -314,7 +314,7 @@ export function ContainerDetailPage({ isActive }) {
         : approvalCurrent === '6b' ? 'Stage 6B · Accounts approval'
           : 'Stage 6C · CEO approval';
     }
-    const next = stages.find((x) => !x.done && x.displayStage);
+    const next = stages.find((x) => !x.done && !x.impliedDone && x.displayStage);
     return next ? `Stage ${next.displayStage} · ${next.label}` : 'Completed — container released';
   })();
   const latest = history.filter((r) => r.on).slice(-4).reverse();
@@ -350,7 +350,10 @@ export function ContainerDetailPage({ isActive }) {
     const tone = effectivelyDone ? 'done' : isCurrent ? 'current' : 'future';
     return {
       short: s?.displayStage || String(key), name: s?.label || '', tone,
-      caption: tone === 'done' ? 'Completed' : tone === 'current' ? 'In progress' : 'Pending',
+      // See OverviewCard's own `s.skipped` doc comment — a jump-landing
+      // stage with no real data of its own is "Skipped" here too, not
+      // "Completed".
+      caption: s?.skipped ? 'Skipped' : tone === 'done' ? 'Completed' : tone === 'current' ? 'In progress' : 'Pending',
       date: s?.done ? s.timestamp : null
     };
   };
@@ -846,7 +849,7 @@ function OverviewCard({ stage: s, isCurrent, onOpen }) {
       {s.done && (
         <div className={styles.meta}>{formatActionTimestamp(s.timestamp)}{s.user ? ` · ${s.user}` : ''}</div>
       )}
-      {!s.skipped && preview.map((f) => (
+      {preview.map((f) => (
         <div key={f.label} className={styles.row}>
           <span className={styles.rowLabel}>{f.label}</span>
           <span className={styles.rowValue}>{renderCellValue(f.value)}</span>

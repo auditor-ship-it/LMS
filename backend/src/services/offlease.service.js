@@ -2585,6 +2585,39 @@ export async function getOffLeaseData(stage, opts = {}, user) {
        genuinely pending here, it jumped straight to its chosen destination
        stage instead. */
     if (_jumpSkipsStage(jumpTarget, stage)) continue;
+    /* BUG FOUND AND FIXED 2026-11-25 (live report, Site Cabin 56/OF0030 —
+       "move to stage hua hai tho stage 3 mai kyu dikh raha hai... woh
+       stage 5 mai dikhna chahiye"): a jump can land a row exactly ON
+       `stage` (jumpLanded below exists for this, forcing it INTO that
+       stage's queue) with that stage's own status column never filled —
+       by design, since the whole point of a Client Scope/Other-type jump
+       is that Crystal never does that stage's own work. That's fine the
+       MOMENT it lands. But once some LATER stage in the workflow already
+       has real (non-bypass) data — i.e. the record has visibly moved on
+       again, same "implied done" backward-pass signal
+       getOffLeaseContainerDetail/_classifyOffLeaseStages already use for
+       display — this row is no longer genuinely pending here either.
+       SCOPED STRICTLY to `stage` being THIS row's own active jump
+       destination (not every stage, for every row): a first attempt at
+       this fix checked "any later stage has real data" unconditionally
+       and broke Stage 1's own queue — 19 genuinely-pending-at-Stage-1
+       rows (BMOU9729398/OF0014 and others) still carry a stale
+       "Completed" in Inspection Checklist's status column (28) left over
+       from an EARLIER off-lease cycle on the same recycled container/box
+       (see pickGateFormForClient's own doc comment for this exact reuse
+       pattern), which this check wrongly read as "already past Stage 1"
+       for a brand new cycle that never touched Inspection at all.
+       Limiting it to the jump-landing case keeps it from ever looking at
+       a row with no active jump in the first place. */
+    if (jumpTarget === Number(stage)) {
+      const stageIdx = OL_ACTIVE_STAGE_NUMS.indexOf(Number(stage));
+      const laterStageHasRealData = stageIdx >= 0 && OL_ACTIVE_STAGE_NUMS.slice(stageIdx + 1)
+        .some((laterStage) => {
+          const laterInfo = OL_STAGE_INFO[laterStage];
+          return laterInfo && safeStr(row[laterInfo.statusCol]).trim() !== '';
+        });
+      if (laterStageHasRealData) continue;
+    }
     /* Stage 1's Hold / Reject sub-tabs — same row, three queues:
        opts.filter selects which ONE shows; the default (no filter) view
        shows everything else (a held or rejected record disappears from the
@@ -5859,7 +5892,13 @@ export function _classifyOffLeaseStages(headers, row, gatedIn = false, repairSki
       label: OL_STAGE_LABELS[s],
       done: st !== '' || bypassDone,
       real: st !== '', // genuinely filled in (not just bypass-inferred) — see the backward pass below
-      skipped: jumpSkipped,
+      // See getOffLeaseContainerDetail's identical 2026-11-25 fix — a jump's
+      // own landing stage (not just the ones strictly skipped between
+      // Transportation and it) is just as "Skipped" as those, when it has no
+      // real status of its own: the client (or no one) did that stage's
+      // actual work, so "Completed" (from the implied-done backward pass
+      // below) is the wrong label for it.
+      skipped: jumpSkipped || (jumpTarget === s && st === ''),
       movedToHere: jumpTarget != null && s === jumpTarget,
       timestamp: row[info.statusCol - 2],
       remark
@@ -6917,12 +6956,24 @@ export async function getOffLeaseContainerDetail(containerNo, leaseId, user, kno
       // _classifyOffLeaseStages' own `real` draws, used below for the same
       // "implied done" backward pass that function already has.
       real: st !== '',
-      /* Inspection Checklist no longer has a "skipped" case at all — CHANGED
-         2026-09-04, it now always waits for a real completion regardless of
-         Repair Required Yes/No. Only a Move-To-Stage jump can still mark a
-         stage as genuinely skipped (jumpSkipped, folded into bypassDone
-         above for stages other than Gate In). */
-      skipped: false,
+      /* BUG FOUND AND FIXED 2026-11-25 (live report, Site Cabin 56/OF0030 —
+         "yah gate in nahi hoga kyu ki yah client scope hai... yah nahi
+         dikhna chahiye"): this stage IS the Move To Stage jump's own
+         destination (containerJumpTarget) with its own status column still
+         blank — the container landed here via a Client Scope/Client to
+         Client/Other/Purchased move, meaning this specific stage's work was
+         never actually done by Crystal (the client handled it, or it never
+         applied). The "implied done" backward pass below still correctly
+         treats it as passed for workflow-routing purposes (a later stage has
+         real data), but display-wise it was never "Completed" — it was
+         skipped, same as the stages _jumpSkipsStage already marks skipped
+         for sitting strictly between Transportation and this target. Before
+         this fix every jump-landing stage with no real data of its own
+         showed "Completed" once impliedDone kicked in, which is wrong for
+         exactly this case. Inspection Checklist (internal 3) keeps no
+         "skipped" case of its own otherwise — see the comment this one
+         replaces — only a jump can still produce one. */
+      skipped: _jumpSkipsStage(containerJumpTarget, s) || (s === containerJumpTarget && st === ''),
       status: st,
       timestamp: gateFormTimestamp,
       user: gateFormUser,

@@ -17,6 +17,7 @@ import { writeHistoryRowToSheet } from '../services/poAgreementHistory.service.j
 import { addOffLeaseRemarkSheetWrite, updateOffLeaseRemarkSheetWrite, deleteOffLeaseRemarkSheetWrite } from '../services/offleaseRemarks.service.js';
 import { decideRefundApproval, decideRefundSendBack } from '../services/refunds.service.js';
 import { saveVerifyAction } from '../services/verify.service.js';
+import { completeNewLeaseEntrySheetWrite } from '../services/newLeaseQueue.service.js';
 
 export const OUTBOX_REGISTRY = {
   'offlease.saveOffLeaseStage': saveOffLeaseStage,
@@ -43,7 +44,8 @@ export const OUTBOX_REGISTRY = {
   'offleaseRemarks.deleteOffLeaseRemarkSheetWrite': deleteOffLeaseRemarkSheetWrite,
   'refunds.decideRefundApproval': decideRefundApproval,
   'refunds.decideRefundSendBack': decideRefundSendBack,
-  'verify.saveVerifyAction': saveVerifyAction
+  'verify.saveVerifyAction': saveVerifyAction,
+  'newLeaseQueue.completeNewLeaseEntrySheetWrite': completeNewLeaseEntrySheetWrite
 };
 
 export function resolveReplay(kind) {
