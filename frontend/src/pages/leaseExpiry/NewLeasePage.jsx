@@ -3,7 +3,7 @@ import { PageHeader, Card, Button, EmptyState, ErrorState } from '../../componen
 import { SkeletonTable } from '../../components/ui/Skeleton.jsx';
 import { useAsync } from '../../hooks/useAsync.js';
 import { apiErrorMessage } from '../../shared/auth/index.js';
-import { fetchNewLeaseQueue, submitNewLeaseEntry } from '../../services/newLease.service.js';
+import { fetchNewLeaseQueue, submitNewLeaseEntry, removeNewLeaseEntry } from '../../services/newLease.service.js';
 import { formatActionTimestamp } from '../../utils/formatDateTime.js';
 import { NewLeaseFormModal } from './NewLeaseFormModal.jsx';
 import styles from '../offLease/PipelineDashboard.module.css';
@@ -16,10 +16,17 @@ import formStyles from './OffLeaseModal.module.css';
  * Deployed sheet for the new deployment; the old (now off-leased) row is
  * never touched.
  */
-export function NewLeasePage() {
+/** `embedded` — explicit request 2026-11-24 ("yah mujhe hai na lease
+ *  expiry ke yaha tab de do"): New Lease moved from its own sidebar entry to
+ *  a tab inside Lease Expiry (LeaseExpiryPage.jsx) — same convention
+ *  StagePageBase's own `embedded` prop already uses to suppress its page's
+ *  own title/subtitle when shown as a tab inside a parent page instead of
+ *  standing alone. */
+export function NewLeasePage({ embedded } = {}) {
   const { data, loading, error, reload } = useAsync(fetchNewLeaseQueue, []);
   const [target, setTarget] = useState(null);
   const [submitError, setSubmitError] = useState('');
+  const [removingId, setRemovingId] = useState(null);
 
   const rows = data || [];
 
@@ -36,9 +43,26 @@ export function NewLeasePage() {
     await reload();
   };
 
+  /* Explicit request 2026-11-25 ("yah new lease se hathana hai kaise hathau
+     bato") — a queued entry (e.g. a mistaken Location Change tick on the
+     Off-Lease modal) can be removed without filling its form. Soft-marked
+     'cancelled' on the backend, never deleted outright. */
+  const handleRemove = async (id) => {
+    if (!window.confirm('Remove this container from the New Lease queue? This cannot be undone.')) return;
+    setRemovingId(id);
+    try {
+      const result = await removeNewLeaseEntry(id);
+      if (result === 'ALREADY_PROCESSED') setSubmitError('This one was already completed.');
+      else setSubmitError('');
+      await reload();
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
   return (
     <>
-      <PageHeader title="New Lease" subtitle="Containers pending redeployment at a new location" />
+      {!embedded && <PageHeader title="New Lease" subtitle="Containers pending redeployment at a new location" />}
       <Card>
         {loading && <SkeletonTable columns={4} rows={6} />}
         {!loading && error && <ErrorState message={apiErrorMessage(error)} onRetry={reload} />}
@@ -65,7 +89,8 @@ export function NewLeasePage() {
                     <td>{r.oldSnapshot?.location || '—'}</td>
                     <td>{formatActionTimestamp(r.createdAt)}</td>
                     <td>
-                      <Button size="sm" variant="primary" onClick={() => { setSubmitError(''); setTarget(r); }}>Fill New Lease</Button>
+                      <Button size="sm" variant="primary" onClick={() => { setSubmitError(''); setTarget(r); }}>Fill New Lease</Button>{' '}
+                      <Button size="sm" variant="danger" loading={removingId === r.id} onClick={() => handleRemove(r.id)}>Remove</Button>
                     </td>
                   </tr>
                 ))}
